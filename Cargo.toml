@@ -1,0 +1,33 @@
+[package]
+name = "mela"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "GPL-3.0-only"
+description = "Mela — app marketplace for AGNOS"
+homepage = "https://github.com/MacCracken/mela"
+repository = "https://github.com/MacCracken/mela"
+readme = "README.md"
+keywords = ["marketplace", "app-store", "package", "agent"]
+categories = ["os"]
+exclude = [".claude/", ".github/", "docs/", "scripts/"]
+
+[dependencies]
+agnos-common = { path = "../agnosticos/userland/agnos-common" }
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+flate2 = "1"
+rand = "0.8"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tar = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["test-util", "rt-multi-thread"] }
