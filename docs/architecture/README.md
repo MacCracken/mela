@@ -1,19 +1,9 @@
-# Architecture Notes
+# Architecture notes
 
-Invariants, constraints, and quirks a reader **cannot derive from the code alone** — *how the
-world is*, not *what we chose* (that's an [ADR](../adr/)) and not *how to do X* (that's a
-[guide](../guides/)).
+Non-obvious constraints, quirks, and invariants that a reader cannot derive from the code alone. Numbered chronologically — never renumber.
 
-## Conventions
+Not decisions (those live in [`../adr/`](../adr/)) and not guides (those live in [`../guides/`](../guides/)). An item here describes *how the world is*, not *what we chose* or *how to do something*.
 
-- **Filename**: `NNN-kebab-case-title.md`, zero-padded to three digits, numbered in order of
-  discovery. **Never renumber.**
-- Index each note below with a one-line hook **and what it affects**, so a reader skimming can
-  tell if it touches their work.
+## Items
 
-## Index
-
-- [`overview.md`](overview.md) — system-level module map, intended data flow, trust gates, and
-  the planned `mudra`/`vinimaya` boundary. *Affects: anyone working anywhere in mela.*
-
-_No numbered architecture notes yet — add `NNN-*.md` as non-obvious invariants surface._
+_Empty. Add a numbered entry (`001-kebab-case-title.md`) the first time the code has a non-obvious invariant a reader can't derive. Do not write entries for decisions — those are ADRs._

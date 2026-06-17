@@ -1,0 +1,19 @@
+# mela — Cyrius port
+# Ported from 6208 lines of Rust (preserved at rust-old/ as the parity oracle).
+# Stdlib auto-included via cyrius.cyml.
+
+include "src/category.cyr"   # MarketplaceCategory (first ported module)
+
+fn main() {
+    alloc_init();
+    println("mela ready");
+    # Smoke the first ported slice: parse (case-insensitive + alias) → display.
+    var c = cat_parse("Dev-Tool");
+    var nm = cat_name(c);
+    print(nm, strlen(nm));      # -> "devtool" (dynamic cstring: print + strlen)
+    println("");
+    return 0;
+}
+
+var r = main();
+syscall(SYS_EXIT, r);

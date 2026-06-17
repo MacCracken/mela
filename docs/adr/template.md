@@ -1,28 +1,24 @@
-# NNNN — Title
+# NNNN — Title in sentence case
 
-- **Status**: Proposed
-- **Date**: YYYY-MM-DD
+**Status**: Proposed | Accepted | Superseded by NNNN | Deprecated
+**Date**: YYYY-MM-DD
 
 ## Context
 
-What forces a decision here? The reader wasn't in the room — give them the constraints, the
-pressures, and what's at stake. Plain prose; no solution yet.
+What's the situation that forces a decision? What constraints are in play? What makes this a real choice rather than a default? Keep it factual — the reader wasn't in the room.
 
 ## Decision
 
-One-sentence headline of what we decided. Then scope: what's in, what's explicitly out.
+The one-sentence version of what we're doing, then any elaboration. Be specific about scope — what's in, what's out.
 
 ## Consequences
 
+Both directions:
+
 - **Positive** — what this buys us.
-- **Negative** — what it costs us, and what we accept.
-- **Neutral** — follow-ons that are neither win nor loss but worth recording.
+- **Negative** — what we give up, what gets harder, what we now own that we didn't before.
+- **Neutral** — follow-on work this creates that isn't clearly a win or loss.
 
 ## Alternatives considered
 
-- **Alternative A** — what it was, and why it lost.
-- **Alternative B** — what it was, and why it lost.
-
-> Write the ADR when the decision could credibly have gone the other way: competing approaches
-> with real trade-offs, adopting/rejecting a dependency, a breaking API change, or accepting a
-> performance/portability trade-off.
+The paths we didn't take, and why each lost. Even a brief note is better than silence — "considered and rejected X because Y" is a valuable signal to a future reader asking the same question.

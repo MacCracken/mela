@@ -7,15 +7,18 @@ for desktop applications *and* AI agents. The design goal — every artifact it 
 Ed25519-signed, SHA-256-integrity-checked, and recorded in an append-only transparency log:
 a package manager's convenience with a supply-chain auditor's guarantees.
 
-- **Type**: binary + library (Rust today; Cyrius port planned — see [roadmap](docs/development/roadmap.md))
+- **Type**: binary + library — **mid-port from Rust to Cyrius** (Rust oracle at `rust-old/`;
+  Cyrius port under `src/`)
 - **License**: GPL-3.0-only
 - **Genesis repo**: [agnosticos](https://github.com/MacCracken/agnosticos)
 - **Status**: pre-1.0 (**v0.1.0**) — see [`docs/development/state.md`](docs/development/state.md)
 
-> ⚠️ **Early scaffolding.** The module surfaces below are scaffolded — types, structure, and
-> the trust / transparency / sandbox boundaries are laid out, but the end-to-end marketplace
-> is not yet wired and the trust properties are *design targets*, not shipped guarantees.
-> [`docs/development/state.md`](docs/development/state.md) tracks what's real today.
+> ⚠️ **Port in progress — early scaffolding.** mela is mid-port from Rust to Cyrius. The
+> 6208-line Rust implementation is frozen at [`rust-old/`](rust-old/) as the **parity oracle**;
+> the Cyrius port grows under `src/`, one module at a time (first landed:
+> `MarketplaceCategory`). The trust properties below are the **design targets** the port carries
+> forward, not yet shipped guarantees. [`docs/development/state.md`](docs/development/state.md)
+> tracks what's ported today.
 
 ## Why Mela
 
@@ -35,16 +38,20 @@ A sovereign OS still needs a front door for software. Mela is that front door, b
 
 ## What's inside
 
-| Module | Role |
-|--------|------|
-| `lib.rs` | Marketplace core — `MarketplaceManifest`, `MarketplaceCategory`, `PublisherInfo`, the `DependencyGraph` resolver |
-| `local_registry` | The on-device registry — installed/cached artifacts, local index, query |
-| `remote_client` | Remote marketplace HTTP client (reqwest + **rustls only**, no OpenSSL) — search / fetch / download |
-| `trust` | Ed25519 signature verification, publisher trust, SHA-256 integrity gating |
-| `transparency` | Append-only, verifiable transparency log of published artifacts |
-| `ratings` | Ratings & reviews |
-| `sandbox_profiles` | Per-app capability/sandbox profiles surfaced before install |
-| `flutter_packaging` / `flutter_agpkg` | Flutter app → `.agpkg` (AGNOS package) build + archive format |
+The marketplace surface — Rust source preserved at `rust-old/src/`, ported module-by-module to
+Cyrius under `src/`:
+
+| Module / type | Role | Cyrius port |
+|---------------|------|-------------|
+| `MarketplaceCategory` (from `lib.rs`) | Discovery category enum (Display + FromStr) | ✅ `src/category.cyr` — 19 parity tests |
+| `lib.rs` (rest) | `MarketplaceManifest`, `PublisherInfo`, the `DependencyGraph` resolver | ⏳ |
+| `local_registry` | On-device registry — installed/cached artifacts, local index, query | ⏳ |
+| `remote_client` | Remote marketplace HTTP client (TLS via the stdlib `tls` surface) — search / fetch / download | ⏳ |
+| `trust` | Ed25519 signature verification, publisher trust, SHA-256 integrity gating | ⏳ |
+| `transparency` | Append-only, verifiable transparency log of published artifacts | ⏳ |
+| `ratings` | Ratings & reviews | ⏳ |
+| `sandbox_profiles` | Per-app capability/sandbox profiles surfaced before install | ⏳ |
+| `flutter_packaging` / `flutter_agpkg` | Flutter app → `.agpkg` (AGNOS package) build + archive format | ⏳ |
 
 ## Where it sits
 
@@ -63,14 +70,13 @@ See [`docs/architecture/overview.md`](docs/architecture/overview.md) for the mod
 ## Quick start
 
 ```sh
-# Build + test (Rust)
-cargo build --all-features
-cargo test --all-features
+# Build + test the Cyrius port
+cyrius deps                              # resolve [deps.*] into lib/
+cyrius build src/main.cyr build/mela     # build
+cyrius test                              # parity tests (tests/mela.tcyr)
 
-# Cleanliness gate (the work-loop bar — see CLAUDE.md)
-cargo fmt --check
-cargo clippy --all-features --all-targets -- -D warnings
-cargo audit && cargo deny check
+# The Rust oracle (reference only — frozen at rust-old/)
+( cd rust-old && cargo test )            # the behavior the port targets
 ```
 
 A guided walkthrough lives in [`docs/guides/getting-started.md`](docs/guides/getting-started.md).

@@ -1,0 +1,62 @@
+# category.cyr — MarketplaceCategory codec.
+#
+# First parity-verified slice of the Rust→Cyrius port. Ports the
+# `MarketplaceCategory` enum from rust-old/src/lib.rs: a 6-variant category for
+# marketplace discovery, with a Display (id -> name) and a FromStr (name -> id,
+# case-insensitive, with the devtool/dev-tool and desktop-app/desktopapp
+# aliases). Pure code, no deps — the foundation the manifest model builds on.
+
+var CAT_UTILITY      = 0;
+var CAT_PRODUCTIVITY = 1;
+var CAT_SECURITY     = 2;
+var CAT_DEVTOOL      = 3;
+var CAT_DESKTOP_APP  = 4;
+var CAT_SYSTEM       = 5;
+var CAT_COUNT        = 6;
+var CAT_PARSE_FAIL   = 0 - 1;   # i64 sentinel; a valid category is 0..CAT_COUNT.
+
+# Display: category id -> canonical lowercase name (cstring pointer).
+# Returns "" for an out-of-range id. Mirrors Rust's `impl Display`.
+fn cat_name(cat): i64 {
+    if (cat == CAT_UTILITY)      { return "utility"; }
+    if (cat == CAT_PRODUCTIVITY) { return "productivity"; }
+    if (cat == CAT_SECURITY)     { return "security"; }
+    if (cat == CAT_DEVTOOL)      { return "devtool"; }
+    if (cat == CAT_DESKTOP_APP)  { return "desktop-app"; }
+    if (cat == CAT_SYSTEM)       { return "system"; }
+    return "";
+}
+
+# ASCII-lowercase cstring `s` into `out` (NUL-terminated). `out` must hold
+# strlen(s)+1 bytes. Returns `out`. (Rust used `s.to_lowercase()`.)
+fn cat_lower(s, out): i64 {
+    var i = 0;
+    var c = load8(s + i);
+    while (c != 0) {
+        if (c >= 65) {
+            if (c <= 90) { c = c + 32; }   # 'A'..'Z' -> 'a'..'z'
+        }
+        store8(out + i, c);
+        i = i + 1;
+        c = load8(s + i);
+    }
+    store8(out + i, 0);
+    return out;
+}
+
+# FromStr: parse a cstring -> category id, or CAT_PARSE_FAIL on an unknown name.
+# Case-insensitive; accepts the dev-tool / desktopapp aliases (Rust parity).
+fn cat_parse(s): i64 {
+    if (s == 0) { return CAT_PARSE_FAIL; }
+    var lower[64];
+    cat_lower(s, &lower);
+    if (streq(&lower, "utility"))      { return CAT_UTILITY; }
+    if (streq(&lower, "productivity")) { return CAT_PRODUCTIVITY; }
+    if (streq(&lower, "security"))     { return CAT_SECURITY; }
+    if (streq(&lower, "devtool"))      { return CAT_DEVTOOL; }
+    if (streq(&lower, "dev-tool"))     { return CAT_DEVTOOL; }
+    if (streq(&lower, "desktop-app"))  { return CAT_DESKTOP_APP; }
+    if (streq(&lower, "desktopapp"))   { return CAT_DESKTOP_APP; }
+    if (streq(&lower, "system"))       { return CAT_SYSTEM; }
+    return CAT_PARSE_FAIL;
+}

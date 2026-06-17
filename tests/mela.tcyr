@@ -1,0 +1,50 @@
+# mela test suite
+#
+# Parity tests for the Cyrius port — each ported module asserts its behavior
+# matches the Rust oracle at rust-old/src/.
+
+include "src/category.cyr"
+
+# MarketplaceCategory — parity with rust-old/src/lib.rs (Display + FromStr).
+fn test_category() {
+    test_group("category");
+
+    # Display: id -> canonical name.
+    assert_eq(streq(cat_name(CAT_UTILITY),      "utility"),      1, "name utility");
+    assert_eq(streq(cat_name(CAT_PRODUCTIVITY), "productivity"), 1, "name productivity");
+    assert_eq(streq(cat_name(CAT_SECURITY),     "security"),     1, "name security");
+    assert_eq(streq(cat_name(CAT_DEVTOOL),      "devtool"),      1, "name devtool");
+    assert_eq(streq(cat_name(CAT_DESKTOP_APP),  "desktop-app"),  1, "name desktop-app");
+    assert_eq(streq(cat_name(CAT_SYSTEM),       "system"),       1, "name system");
+
+    # FromStr: canonical names round-trip.
+    assert_eq(cat_parse("utility"),      CAT_UTILITY,      "parse utility");
+    assert_eq(cat_parse("productivity"), CAT_PRODUCTIVITY, "parse productivity");
+    assert_eq(cat_parse("security"),     CAT_SECURITY,     "parse security");
+    assert_eq(cat_parse("devtool"),      CAT_DEVTOOL,      "parse devtool");
+    assert_eq(cat_parse("desktop-app"),  CAT_DESKTOP_APP,  "parse desktop-app");
+    assert_eq(cat_parse("system"),       CAT_SYSTEM,       "parse system");
+
+    # FromStr: case-insensitive (Rust did s.to_lowercase()).
+    assert_eq(cat_parse("Utility"),  CAT_UTILITY, "parse Utility (case)");
+    assert_eq(cat_parse("SECURITY"), CAT_SECURITY, "parse SECURITY (case)");
+
+    # FromStr: aliases (Rust accepted both spellings).
+    assert_eq(cat_parse("dev-tool"),    CAT_DEVTOOL,     "parse dev-tool alias");
+    assert_eq(cat_parse("desktopapp"),  CAT_DESKTOP_APP, "parse desktopapp alias");
+    assert_eq(cat_parse("Dev-Tool"),    CAT_DEVTOOL,     "parse Dev-Tool (case+alias)");
+
+    # FromStr: unknown -> fail sentinel.
+    assert_eq(cat_parse("nope"), CAT_PARSE_FAIL, "parse unknown fails");
+    assert_eq(cat_parse(""),     CAT_PARSE_FAIL, "parse empty fails");
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_category();
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

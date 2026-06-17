@@ -1,48 +1,25 @@
-# Getting Started
+# Getting started with mela
 
-> **Last Updated**: 2026-06-17 · Mela is **early scaffolding** — this covers building and
-> working in the repo, not operating a live marketplace (which isn't wired yet; see
-> [`../development/state.md`](../development/state.md)).
-
-## Prerequisites
-
-- Rust toolchain (edition 2024, **MSRV 1.89** — see `rust-toolchain.toml`).
-- The sibling `agnosticos` checkout (mela depends on `agnos-common` via a path dep:
-  `../agnosticos/userland/agnos-common`).
-
-## Build & test
+## Build
 
 ```sh
-cargo build --all-features
-cargo test --all-features      # includes serde-roundtrip tests on public types
+cyrius deps                              # resolve dependencies
+cyrius build src/main.cyr build/mela    # compile
+cyrius test                              # run tests/*.tcyr
 ```
 
-## Cleanliness gate
+## Layout
 
-The work-loop bar (every cycle must pass — see [`CLAUDE.md`](../../CLAUDE.md)):
+- `src/main.cyr` — entry point. Top-level `var r = main(); syscall(SYS_EXIT, r);`.
+- `tests/` — test suite (`.tcyr` files, auto-discovered by `cyrius test`).
+- `rust-old/` — original Rust source preserved for parity checks. Do not modify; it's the reference oracle.
 
-```sh
-cargo fmt --check
-cargo clippy --all-features --all-targets -- -D warnings
-cargo audit
-cargo deny check
-RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
-```
+## Adding a feature
 
-## Where to look
+1. Edit `src/main.cyr` (or add a new module and `include` it).
+2. Cross-check parity against `rust-old/`.
+3. Add a test case to `tests/mela.tcyr`.
+4. Run `cyrius test`.
+5. Bump `VERSION` and add a CHANGELOG entry before tagging.
 
-| You want to… | Start at |
-|--------------|----------|
-| Understand the system | [`../architecture/overview.md`](../architecture/overview.md) |
-| See what's real vs scaffolded | [`../development/state.md`](../development/state.md) |
-| Know what's next | [`../development/roadmap.md`](../development/roadmap.md) |
-| Read marketplace core types | `src/lib.rs` |
-| See the trust gates | `src/trust.rs`, `src/transparency.rs` |
-
-## Conventions (from CLAUDE.md)
-
-- Every public type is serde `Serialize` + `Deserialize`, with a roundtrip test.
-- Public enums are `#[non_exhaustive]`; pure functions are `#[must_use]`.
-- **Zero `unwrap`/`panic` in library code.**
-- TLS is **rustls only** — never introduce OpenSSL.
-- Never accept unsigned artifacts; never skip SHA-256 integrity.
+See [`../adr/template.md`](../adr/template.md) when a non-trivial design choice deserves an ADR.

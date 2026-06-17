@@ -1,0 +1,14 @@
+[package]
+name = "mela"
+version = "0.1.0"
+description = "mela — Cyrius port (from 6208 lines of Rust)"
+license = "GPL-3.0-only"
+language = "cyrius"
+cyrius = "6.2.19"
+
+[build]
+entry = "src/main.cyr"
+output = "mela"
+
+[deps]
+stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args", "assert"]

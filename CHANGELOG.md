@@ -6,10 +6,20 @@ include benchmark numbers; breaking changes get a **Breaking** section with a mi
 
 ## [Unreleased]
 
+### Changed
+- **Began the Rust → Cyrius port.** `cyrius port` scaffolded the Cyrius project: the 6208-line
+  Rust implementation is preserved at `rust-old/` as the parity oracle; `cyrius.cyml` (pin
+  **6.2.19**), `src/main.cyr`, the CI workflows, and `tests/mela.{tcyr,bcyr,fcyr}` are in place.
+  The build tooling is now Cyrius (`cyrius build`/`test`), not cargo.
+
 ### Added
-- First-party documentation set: `README.md`, `docs/architecture/overview.md`,
-  `docs/development/roadmap.md` + `state.md`, `docs/adr/` (index + template),
-  `docs/architecture/` index, `docs/guides/getting-started.md`, `SECURITY.md` — brought to the
+- **First ported module — `src/category.cyr` (`MarketplaceCategory`).** Ports the discovery
+  category enum from `rust-old/src/lib.rs`: id↔name (`cat_name`, the Rust `Display`) and a
+  case-insensitive `cat_parse` (the Rust `FromStr`, including the `dev-tool` / `desktopapp`
+  aliases). **19/19 parity tests** green (`tests/mela.tcyr`).
+- First-party documentation set: `README.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
+  `SECURITY.md`, `CHANGELOG.md`, and the `docs/` tree (the `cyrius port` scaffold's port-aware
+  templates, enriched) — to the
   [First-Party Documentation Standard](https://github.com/MacCracken/agnosticos/blob/main/docs/development/first-party/first-party-documentation.md).
 
 ## [0.1.0]
