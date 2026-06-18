@@ -10,9 +10,10 @@
 #            publisher key_id resolved against the keyring;
 #   gate 2 — SHA-256 content digest (download integrity).
 #
-# Included last, so it can reference every module. Transport stays a seam
-# (ADR-0006): "distribute" here is local (the signed bundle bytes + signature
-# move as values), which is sufficient to enforce and test both gates.
+# Included last, so it can reference every module. The end-to-end demonstration
+# moves the signed bundle + signature as values; the live network counterpart is
+# `remote_client` (rc_publish uploads, rc_download fetches+writes — both real over
+# sandhi). pipeline_install verifies both gates then extracts to disk.
 
 # package — build a gzipped-ustar `.agnos-agent` bundle (bytes Str) from a
 # manifest + sandbox profile. The publishable/distributable artifact.

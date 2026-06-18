@@ -144,11 +144,10 @@ fn kv_verifying_key(kv): i64 {
 # PublisherKeyring — trusted publisher keys, key_id -> [KeyVersion]
 # ---------------------------------------------------------------------------
 #
-# In-memory port (Str-keyed map of key_id -> Vec<KeyVersion>). The disk loader
-# (Rust `load()` — scans a directory of JSON key files) is deferred to the
-# fs-persistence milestone; everything else ports here. get_current_key takes
-# an explicit `now` (Rust used Utc::now() implicitly) for deterministic trust
-# decisions.
+# Str-keyed map of key_id -> Vec<KeyVersion>. The disk loader (Rust `load()` —
+# scans a directory of JSON key files) is `keyring_load_dir`, below.
+# get_current_key takes an explicit `now` (Rust used Utc::now() implicitly) for
+# deterministic trust decisions.
 
 fn mela_keyring_new(): i64 { return map_new_str(); }
 
@@ -192,3 +191,85 @@ fn mela_keyring_get_all_versions(kr, key_id): i64 {
 
 fn mela_keyring_len(kr): i64      { return map_size(kr); }
 fn mela_keyring_is_empty(kr): i64 { if (map_size(kr) == 0) { return 1; } return 0; }
+
+# ---------------------------------------------------------------------------
+# KeyVersion JSON + keyring disk loader (resolves the ADR-0003 deferral)
+# ---------------------------------------------------------------------------
+
+var KEYRING_MAXLEN = 1048576;     # 1 MiB read buffer per key file
+
+fn _kv_jstr(o, key): Str {
+    var v = json_v_obj_get(o, key);
+    if (v == 0) { return str_from(""); }
+    if (json_v_is_str(v) == 0) { return str_from(""); }
+    return json_v_str(v);
+}
+fn _kv_jint(o, key): i64 {
+    var v = json_v_obj_get(o, key);
+    if (v == 0) { return 0; }
+    if (json_v_is_int(v) == 0) { return 0; }
+    return json_v_int(v);
+}
+
+fn kv_to_jv(kv): i64 {
+    var o = json_v_obj_new();
+    json_v_obj_set(o, str_from("key_id"),         json_v_str_new(mela_kv_key_id(kv)));
+    json_v_obj_set(o, str_from("valid_from"),     json_v_int_new(mela_kv_valid_from(kv)));
+    json_v_obj_set(o, str_from("has_until"),      json_v_int_new(kv_has_until(kv)));
+    json_v_obj_set(o, str_from("valid_until"),    json_v_int_new(mela_kv_valid_until(kv)));
+    json_v_obj_set(o, str_from("public_key_hex"), json_v_str_new(mela_kv_public_key_hex(kv)));
+    return o;
+}
+fn kv_from_jv(o): i64 {
+    if (json_v_is_obj(o) == 0) { return 0; }
+    return kv_new(_kv_jstr(o, "key_id"), _kv_jint(o, "valid_from"), _kv_jint(o, "has_until"),
+                  _kv_jint(o, "valid_until"), _kv_jstr(o, "public_key_hex"));
+}
+fn kv_to_json(kv): Str { return json_v_build(kv_to_jv(kv)); }
+fn kv_from_json(json: Str): i64 {
+    var root = json_v_parse_str(str_data(json), str_len(json));
+    if (root == 0) { return 0; }
+    return kv_from_jv(root);
+}
+
+# True if the filename ends in ".json".
+fn _ends_dot_json(nm: Str): i64 {
+    var n = str_len(nm);
+    if (n < 5) { return 0; }
+    return str_eq_cstr(str_sub(nm, n - 5, 5), ".json");
+}
+
+# keyring_load_dir(kr, dir) — load every `*.json` key file in `dir`, each a JSON
+# ARRAY of KeyVersion objects, into the keyring. Returns the count added (0 if
+# the dir is absent). Mirrors Rust `PublisherKeyring::load` (resolves ADR-0003).
+fn keyring_load_dir(kr, dir: Str): i64 {
+    if (is_dir(dir) == 0) { return 0; }
+    var entries = dir_list(dir);
+    var n = vec_len(entries);
+    var i = 0;
+    var count = 0;
+    while (i < n) {
+        var nm = vec_get(entries, i);
+        if (_ends_dot_json(nm) == 1) {
+            var full = path_join(dir, nm);
+            var buf = alloc(KEYRING_MAXLEN);
+            var rn = file_read_all(str_data(full), buf, KEYRING_MAXLEN);
+            if (rn > 0) {
+                var root = json_v_parse_str(buf, rn);
+                if (root != 0) {
+                    if (json_v_is_arr(root) == 1) {
+                        var an = json_v_arr_len(root);
+                        var j = 0;
+                        while (j < an) {
+                            var kv = kv_from_jv(json_v_arr_get(root, j));
+                            if (kv != 0) { mela_keyring_add_key(kr, kv); count = count + 1; }
+                            j = j + 1;
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return count;
+}

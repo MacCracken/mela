@@ -5,13 +5,12 @@
 # to `index.json` under the registry root. Hashing + signature verification ride
 # the trust gate (v0.3.0); the manifest model (v0.2.0) is the record payload.
 #
-# Scope (ADR-0005): the gzip/tar tarball extraction (extract_manifest_from_tarball,
-# extract_tarball, the `.sig` sidecar read, count_files) is DEFERRED to the v0.8.0
-# packaging milestone (sankoch). install here operates on an already-extracted
-# manifest + content hash + size. The signature-verify gate is ported as a
-# content+signature check; full install-time enforcement is wired at v0.9.0.
-#
-# timestamps are i64 epochs supplied explicitly (ADR-0003/0004 precedent).
+# The registry holds the on-disk index; install records a (validated) manifest +
+# content hash + size and persists it. Tarball extraction (ADR-0005) is
+# IMPLEMENTED — `agpkg_extract_to_dir` unpacks the bundle to the install dir, run
+# by `pipeline_install` after both trust gates pass (signature via
+# `registry_verify_package` + SHA-256 digest). timestamps are i64 epochs supplied
+# explicitly (ADR-0003/0004 precedent).
 
 var REG_INDEX_FILENAME = "index.json";
 var REG_INDEX_MAXLEN   = 1048576;        # 1 MiB read buffer for the index
@@ -261,11 +260,32 @@ fn registry_install(r, manifest, package_hash: Str, installed_size, installed_at
     return res;
 }
 
-# uninstall(name) — remove from the index + persist. Returns 1 if removed, 0 if
-# not installed (Rust errors in that case). Mirrors Rust `uninstall_package`
-# (physical install-dir removal deferred with the tarball work, ADR-0005).
+# Recursively delete a directory tree (files via unlink, dirs via rmdir after
+# their contents). Returns the number of files removed. Mirrors Rust
+# count_files + remove_dir_all on uninstall.
+fn _rmtree(dir: Str): i64 {
+    var entries = dir_list(dir);
+    var n = vec_len(entries);
+    var i = 0;
+    var count = 0;
+    while (i < n) {
+        var full = path_join(dir, vec_get(entries, i));
+        if (is_dir(full) == 1) { count = count + _rmtree(full); }
+        else { sys_unlink(str_data(full)); count = count + 1; }
+        i = i + 1;
+    }
+    sys_rmdir(str_data(dir));
+    return count;
+}
+
+# uninstall(name) — remove the package's extracted files from disk, drop it from
+# the index, and persist. Returns 1 if removed, 0 if not installed (Rust errors
+# in that case). Mirrors Rust `uninstall_package` (now incl. remove_dir_all).
 fn registry_uninstall(r, name: Str): i64 {
-    if (map_get(registry_index(r), name) == 0) { return 0; }
+    var rec = map_get(registry_index(r), name);
+    if (rec == 0) { return 0; }
+    var dir = imp_install_dir(rec);
+    if (is_dir(dir) == 1) { _rmtree(dir); }     # remove the extracted files
     map_delete(registry_index(r), name);
     registry_save_index(r);
     return 1;

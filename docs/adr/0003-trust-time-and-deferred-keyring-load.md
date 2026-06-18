@@ -1,7 +1,16 @@
 # 0003 — Trust: epoch-i64 time, explicit `now`, deferred keyring load
 
-**Status**: Accepted
-**Date**: 2026-06-17
+**Status**: Accepted — keyring-load deferral **resolved in v0.9.4**
+**Date**: 2026-06-17 (load resolved 2026-06-18)
+
+> **Resolution (v0.9.4)**: decision 3's deferral is closed. `keyring_load_dir(kr, dir)`
+> (in `src/trust.cyr`) scans a directory of `*.json` files — each a JSON array of
+> `KeyVersion` — and loads them into the keyring, ignoring non-json files. The on-disk
+> `KeyVersion` shape is the manifest-style codec promised below: `kv_to_json` /
+> `kv_from_json` (+ the `kv_to_jv` / `kv_from_jv` value helpers), reusing the ADR-0001
+> JSON approach. Mirrors rust-old `PublisherKeyring::load`. Covered by the `keyring-load`
+> test (round-trip + on-disk load + absent-dir). Decisions 1 (epoch-i64 time) and 2
+> (explicit `now`) stand unchanged.
 
 ## Context
 

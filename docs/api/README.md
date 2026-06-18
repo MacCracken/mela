@@ -20,6 +20,12 @@
   parse error.
 - **Field accessors** follow `<type>_<field>(ptr)` and are not all listed individually below;
   the constructor's field order is the struct layout. Setters are `<type>_set_<field>`.
+- **Namespacing (v0.9.3):** 15 public symbols that collided with co-bundled deps (nous, sigil) are
+  **`mela_`-prefixed**: `mela_registry_new`, `mela_registry_search`, `mela_manifest_new`,
+  `mela_manifest_to_json`, `mela_update_to_json`, `mela_keyring_new`, `mela_keyring_add_key`,
+  `mela_keyring_get_all_versions`, `mela_keyring_is_empty`, `mela_keyring_len`, `mela_kv_key_id`,
+  `mela_kv_valid_from`, `mela_kv_valid_until`, `mela_kv_public_key_hex`, `mela_kv_is_valid_at`.
+  Everything else keeps its bare name (e.g. `kv_new`, `keyring_get_current_key`, `manifest_from_json`).
 
 Public modules (all under `src/`, wired by `src/main.cyr`):
 `category`, `manifest`, `depgraph`, `trust`, `transparency`, `local_registry`,
@@ -41,13 +47,13 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
 - `is_valid_semver(v: Str): i64` — `major.minor.patch` (+ optional `-prerelease`).
 - `publisher_new(name, key_id, homepage: Str): PublisherInfo*` — `pub_name` / `pub_key_id` /
   `pub_homepage`.
-- `manifest_new(agent, publisher, category, version: Str): MarketplaceManifest*` — `agent` is an
+- `mela_manifest_new(agent, publisher, category, version: Str): MarketplaceManifest*` — `agent` is an
   agnostik `AgentManifest`; accessors `man_name` / `man_version` / `man_description` /
   `man_publisher` / `man_category` / `man_runtime` / `man_screenshots` / `man_changelog` /
   `man_min_agnos_version` / `man_dependencies` / `man_tags`; setters for the optional fields.
 - `manifest_validate(m): Vec<Str>` — list of error messages; empty Vec ⇒ valid.
 - `manifest_qualified_name(m): Str` — `publisher/agent-name` (publisher lowercased, spaces→`-`).
-- Codec: `manifest_to_json(m): Str` / `manifest_from_json(Str): m|0`;
+- Codec: `mela_manifest_to_json(m): Str` / `manifest_from_json(Str): m|0`;
   `manifest_to_jv` / `manifest_from_jv` (json-value tree, for nesting);
   `publisher_to_json` / `publisher_from_json`; `cat_json_name(cat): Str` /
   `cat_json_parse(Str): cat` (PascalCase wire form).
@@ -72,9 +78,13 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   `trust_generate_keypair(sk_out, pk_out): key_id` (CSPRNG); `trust_key_id_from_pk(pk): Str`
   (hex of first 8 bytes).
 - `kv_new(key_id, valid_from, has_until, valid_until, public_key_hex): KeyVersion*`;
-  `kv_is_valid_at(kv, when): i64`; `kv_verifying_key(kv): pk|0` (hex→32 bytes, validated).
-- `keyring_new()`; `keyring_add_key(kr, kv)`; `keyring_get_current_key(kr, key_id, now): kv|0`;
-  `keyring_get_all_versions` / `keyring_len` / `keyring_is_empty`.
+  `mela_kv_is_valid_at(kv, when): i64`; `kv_verifying_key(kv): pk|0` (hex→32 bytes, validated).
+- `mela_keyring_new()`; `mela_keyring_add_key(kr, kv)`; `keyring_get_current_key(kr, key_id, now): kv|0`;
+  `mela_keyring_get_all_versions` / `mela_keyring_len` / `mela_keyring_is_empty`.
+- `keyring_load_dir(kr, dir: Str): count` — load every `*.json` key file in `dir` (each a JSON
+  array of `KeyVersion`) into the keyring; non-json files ignored, absent dir → 0 (parity with
+  rust-old `PublisherKeyring::load`). `KeyVersion` JSON codec: `kv_to_json(kv): Str` /
+  `kv_from_json(json: Str): kv|0`.
 
 ## transparency — `src/transparency.cyr`
 
@@ -92,13 +102,14 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
 
 ## local_registry — `src/local_registry.cyr`
 
-- `registry_new(root_dir: Str): reg` (loads `index.json` if present); `registry_in_memory(): reg`.
+- `mela_registry_new(root_dir: Str): reg` (loads `index.json` if present); `registry_in_memory(): reg`.
 - `registry_install(reg, manifest, package_hash: Str, installed_size, installed_at): InstallResult*|0`
   — quota check, manifest validation, upgrade detection, index insert + persist. Result:
   `instres_name` / `instres_version` / `instres_install_dir` / `instres_has_upgrade` /
   `instres_upgraded_from`.
-- `registry_uninstall(reg, name: Str): i64`; `registry_get_package(reg, name): record|0`;
-  `registry_list_installed(reg): Vec` (sorted); `registry_search(reg, query: Str): Vec`;
+- `registry_uninstall(reg, name: Str): i64` — removes the extracted files from disk (recursive)
+  **and** the index entry, then persists; `registry_get_package(reg, name): record|0`;
+  `registry_list_installed(reg): Vec` (sorted); `mela_registry_search(reg, query: Str): Vec`;
   `registry_len` / `registry_is_empty` / `registry_total_installed_size` /
   `registry_set_storage_quota(reg, q)` / `registry_packages_dir`.
 - Installed record: `imp_name` / `imp_version` / `imp_publisher` / `imp_manifest` /
@@ -121,13 +132,16 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
 - Response types + codec: `SearchResults` (`sresults_new` / `sresults_to_json` /
   `sresults_from_json`, with `SearchResult` `sresult_new`), `PublishResponse`
   (`presp_new` / `presp_to_json` / `presp_from_json`), `UpdateAvailable`
-  (`update_new` / `update_to_json` / `update_from_json`).
+  (`update_new` / `mela_update_to_json` / `update_from_json`).
 - `registry_client_new(base_url, cache_dir: Str): client` (trailing `/` trimmed);
   `client_base_url` / `client_cache_dir` / `client_is_offline` / `client_set_offline`.
 - Cache: `registry_cache_search` / `registry_cached_search`; `registry_cache_manifest` /
   `registry_cached_manifest`.
-- Flows (offline guards live; online builds URL + parses): `rc_search`, `rc_fetch_manifest`,
-  `rc_download_allowed`, `rc_publish_allowed`, `rc_check_updates`.
+- Flows (all real over sandhi): `rc_search` / `rc_fetch_manifest` (GET → parse → cache);
+  **`rc_download`** (GET → write `<cache>/downloads/<name>-<version>.agnos-agent`, returns the
+  path); **`rc_publish`** (POST bundle + Bearer auth → `PublishResponse`); `rc_check_updates`
+  (per-package latest diff → `UpdateAvailable[]`). Guards: `rc_download_allowed` /
+  `rc_publish_allowed`.
 - Constants: `DEFAULT_REGISTRY_URL`, `REQUEST_TIMEOUT_SECS`, `DOWNLOAD_TIMEOUT_SECS`.
 
 ## sandbox_profiles — `src/sandbox_profiles.cyr`

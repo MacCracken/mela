@@ -429,6 +429,46 @@ fn test_keyring() {
     return 0;
 }
 
+# KeyVersion JSON codec + on-disk keyring load — parity with rust-old
+# PublisherKeyring::load (scans a dir of *.json, each a Vec<KeyVersion>).
+fn test_keyring_load() {
+    test_group("keyring-load");
+    var ZHEX = str_from("0000000000000000000000000000000000000000000000000000000000000000");
+
+    # kv JSON round-trip
+    var kv  = kv_new(str_from("beta"), 100, 1, 9000, ZHEX);
+    var kv2 = kv_from_json(kv_to_json(kv));
+    assert_neq(kv2, 0, "kv_from_json parses");
+    assert_eq(str_eq_cstr(mela_kv_key_id(kv2), "beta"), 1, "kv roundtrip key_id");
+    assert_eq(mela_kv_valid_from(kv2),  100,  "kv roundtrip valid_from");
+    assert_eq(kv_has_until(kv2),        1,    "kv roundtrip has_until");
+    assert_eq(mela_kv_valid_until(kv2), 9000, "kv roundtrip valid_until");
+    assert_eq(str_len(mela_kv_public_key_hex(kv2)), 64, "kv roundtrip pubkey len");
+
+    # write a keys dir: one *.json = array of two KeyVersion, plus a non-json
+    # file that must be ignored.
+    var DIR = "/tmp/mela-test-keyring";
+    rclean(DIR);
+    sys_mkdir(str_data(str_from(DIR)), 493);
+    var arr = json_v_arr_new();
+    json_v_arr_push(arr, kv_to_jv(kv_new(str_from("gamma"), 0,    0, 0,    ZHEX)));
+    json_v_arr_push(arr, kv_to_jv(kv_new(str_from("gamma"), 1000, 1, 2000, ZHEX)));
+    var body = json_v_build(arr);
+    var fp = path_join(str_from(DIR), str_from("gamma.json"));
+    file_write_all(str_data(fp), str_data(body), str_len(body));
+    var skip = path_join(str_from(DIR), str_from("README.txt"));
+    file_write_all(str_data(skip), str_data(str_from("ignore me")), 9);
+
+    var kr = mela_keyring_new();
+    assert_eq(keyring_load_dir(kr, str_from(DIR)), 2, "loaded 2 key versions");
+    assert_eq(vec_len(mela_keyring_get_all_versions(kr, str_from("gamma"))), 2, "gamma has 2 versions");
+    assert_neq(keyring_get_current_key(kr, str_from("gamma"), 1500), 0, "current gamma key at t=1500");
+
+    # absent dir loads nothing (no crash)
+    assert_eq(keyring_load_dir(mela_keyring_new(), str_from("/tmp/mela-nope-xyz")), 0, "absent dir loads 0");
+    return 0;
+}
+
 # append with a fixed timestamp (tests pin time for determinism — ADR-0004).
 fn tlog_add(log, pkg, ver, kid, ch, sh) {
     return tlog_append(log, str_from(pkg), str_from(ver), str_from(kid),
@@ -637,6 +677,34 @@ fn test_registry_persistence() {
     registry_uninstall(r2, str_from("persist-pkg"));
     var r3 = mela_registry_new(str_from(DIR));
     assert_eq(registry_is_empty(r3), 1, "reopened empty after uninstall");
+    return 0;
+}
+
+# Uninstall removes the extracted files from disk (not just the index entry) —
+# parity with rust-old uninstall_package's remove_dir_all.
+fn test_registry_uninstall_fs() {
+    test_group("registry-uninstall-fs");
+    var DIR = "/tmp/mela-test-reg-rm";
+    rclean(DIR);
+
+    var reg = mela_registry_new(str_from(DIR));
+    var res = registry_install(reg, mk_pkg("rm-pkg", "1.0.0"), str_from("h"), 64, 1000);
+    assert_neq(res, 0, "install ok");
+    var dir = instres_install_dir(res);
+
+    # materialize the install dir + a nested file on disk, as extraction would
+    sys_mkdir(str_data(registry_packages_dir(reg)), 493);
+    sys_mkdir(str_data(dir), 493);
+    var sub = path_join(dir, str_from("bin"));
+    sys_mkdir(str_data(sub), 493);
+    var f = path_join(sub, str_from("agent.bin"));
+    file_write_all(str_data(f), str_data(str_from("XYZ")), 3);
+    assert_eq(is_dir(dir), 1, "install dir on disk before uninstall");
+
+    # uninstall removes the whole tree
+    assert_eq(registry_uninstall(reg, str_from("rm-pkg")), 1, "uninstall ok");
+    assert_eq(is_dir(dir),            0, "install dir removed after uninstall");
+    assert_eq(registry_is_empty(reg), 1, "registry empty after uninstall");
     return 0;
 }
 
@@ -1090,6 +1158,13 @@ fn test_hardening() {
 fn test_transport() {
     test_group("transport");
     assert_eq(_rc_http_get(str_from("")), 0, "empty url -> 0 (no socket)");
+    # download/publish no-network guards (return before any socket is opened)
+    var off = registry_client_new(str_from("http://127.0.0.1:1/"), str_from("/tmp/mela-dl-guard"));
+    client_set_offline(off, 1);
+    assert_eq(rc_download(off, str_from("p"), str_from("1.0.0")), 0, "offline download -> 0");
+    assert_eq(rc_publish(off, str_from("bytes"), str_from("p.agnos-agent"), str_from("tok")), 0, "offline publish -> 0");
+    var on = registry_client_new(str_from("http://127.0.0.1:1/"), str_from("/tmp/mela-dl-guard"));
+    assert_eq(rc_download(on, str_from("../evil"), str_from("1.0.0")), 0, "invalid-name download -> 0");
     return 0;
 }
 
@@ -1470,10 +1545,12 @@ fn main() {
     test_trust();
     test_keyversion();
     test_keyring();
+    test_keyring_load();
     test_transparency();
     test_transparency_json();
     test_registry();
     test_registry_persistence();
+    test_registry_uninstall_fs();
     test_registry_signature();
     test_remote();
     test_remote_codec();

@@ -1,6 +1,6 @@
 # 0005 — Registry on-disk index format + tarball-extraction deferral
 
-**Status**: Accepted · **tarball extraction implemented in v0.9.2**
+**Status**: Accepted · **tarball extraction implemented in v0.9.2 · uninstall file-removal in v0.9.4**
 **Date**: 2026-06-17
 
 > **Update (v0.9.2):** the deferral below is **resolved**. `agpkg_extract_to_dir`
@@ -10,6 +10,13 @@
 > Tested on disk (`extraction` group: files written, content re-parses, a
 > `../escaped.so` entry is **not** written). The text below is the original
 > rationale for the temporary deferral.
+>
+> **Update (v0.9.4):** the companion gap — `uninstall` removing only the index
+> entry, not the on-disk files (Consequences §Negative below) — is now **resolved**.
+> `registry_uninstall` calls `_rmtree(imp_install_dir(rec))` (recursive unlink +
+> rmdir) before dropping the index entry, parity with rust-old `remove_dir_all`.
+> Tested on disk (`registry-uninstall-fs`: a nested install dir is materialized,
+> then asserted gone after uninstall).
 
 ## Context
 

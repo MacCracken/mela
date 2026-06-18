@@ -1,6 +1,6 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-06-17 (v0.9.2) · Live status: [`state.md`](state.md) · Per-version history:
+> **Last Updated**: 2026-06-18 (v0.9.4) · Live status: [`state.md`](state.md) · Per-version history:
 > [`../../CHANGELOG.md`](../../CHANGELOG.md)
 >
 > The path from the **v0.1.0 port scaffold** to a **v1.0 release**. mela is mid-port from Rust
@@ -31,6 +31,22 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 ---
 
 ## Completed
+
+### v0.9.4 — Every load-bearing seam is real on disk ✅ (2026-06-18)
+- **Closed the ark finding** ("mela's own artifact fetch+write still deferred"): `rc_download`
+  fetches the package and writes it to the cache (proven live); `rc_publish` POSTs the bundle with
+  Bearer auth and parses the response (proven live); `rc_check_updates` diffs latest manifests.
+- **`uninstall` now removes the extracted files** (recursive `_rmtree`), not just the index entry
+  (ADR-0005 §Negative resolved) — parity with rust-old `remove_dir_all`.
+- **Keyring disk `load()` implemented** (`keyring_load_dir` + `KeyVersion` JSON codec) — closes the
+  ADR-0003 deferral.
+- **Cyrius pin `6.2.19` → `6.2.21`** (matches installed `cycc`, clears the drift warning); `lib/`
+  re-vendored.
+- Corrected the stale "deferred seam" file headers. **No deferred seams remain.** 490/490 tests.
+
+### v0.9.3 — Namespaced API ✅ (2026-06-18)
+- **Co-bundle-safe namespacing**: 15 colliding public symbols `mela_`-prefixed (vs nous/sigil) so
+  ark can bundle mela alongside them without last-def-wins hazards. Zero collisions now.
 
 ### v0.9.2 — Consumable library + the deferred work, done ✅ (2026-06-17)
 - **Library packaging (ADR-0010)**: `[lib]` + `cyrius distlib` → `dist/mela.cyr`. mela was

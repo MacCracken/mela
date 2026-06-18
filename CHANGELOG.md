@@ -6,6 +6,44 @@ include benchmark numbers; breaking changes get a **Breaking** section with a mi
 
 ## [Unreleased]
 
+## [0.9.4] — Every load-bearing seam is now real on disk
+
+The remaining "deferred" stubs are gone: artifact fetch+write, uninstall file
+removal, and keyring disk-load are all **implemented and proven by tests** (not
+ADRs). **490/490 parity tests** green (was 475; +`keyring-load`, +`registry-uninstall-fs`).
+
+### Added — the last deferred transport pieces are real now
+Addresses the ark-agent finding that *"mela's own artifact fetch+write is still
+deferred (ADR-0006)"*. It was: `rc_download` was a guard-only stub. No longer —
+all remote flows do real I/O over sandhi:
+- **`rc_download`** — actually **fetches** the package (`GET …/download`) and
+  **writes** it to `<cache_dir>/downloads/<name>-<version>.agnos-agent`, returning
+  the path. Proven live (server → bytes on disk, read back identical).
+- **`rc_publish`** — actually **uploads**: `POST …/publish` with a Bearer token +
+  `X-Package-SHA256`/`X-Package-Name` headers, then parses the `PublishResponse`.
+  Proven live against a POST server.
+- **`rc_check_updates`** — fetches each installed package's latest manifest and
+  emits `UpdateAvailable` for version diffs (was an empty-vec stub).
+- **`registry_uninstall` now removes the extracted files from disk** (recursive
+  `_rmtree` = unlink files + rmdir dirs), not just the index entry — parity with
+  rust-old `uninstall_package`'s `remove_dir_all`. New `registry-uninstall-fs`
+  test materializes a nested install dir and asserts it's gone after uninstall.
+- **`PublisherKeyring` disk `load()` is implemented** (`keyring_load_dir` + the
+  `KeyVersion` JSON codec `kv_to_json`/`kv_from_json`/`kv_to_jv`/`kv_from_jv`) —
+  scans a dir of `*.json`, each a `Vec<KeyVersion>` array, ignoring non-json
+  files. Parity with rust-old `PublisherKeyring::load`, closing the ADR-0003
+  deferral. New `keyring-load` test covers the round-trip + on-disk load.
+
+### Changed
+- **Cyrius toolchain pin `6.2.19` → `6.2.21`** in `cyrius.cyml` (matches the
+  installed `cycc`; clears the pin-drift warning). `lib/` re-vendored via
+  `cyrius lib sync`; build + 490 tests green on 6.2.21.
+
+### Fixed — stale "deferred" comments
+- Corrected now-false comments in `remote_client.cyr`, `local_registry.cyr`,
+  `pipeline.cyr`, and `flutter_agpkg.cyr` that still said transport/extraction
+  were deferred seams. **No deferred seams remain anywhere in the codebase.**
+
 ## [0.9.3] — Namespaced public API (co-bundle-safe with nous)
 
 ### Breaking

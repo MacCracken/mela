@@ -28,6 +28,9 @@ fn fuzz_main(data, len) {
     trust_hex_decode(s);
     kv_verifying_key(kv_new(str_from("k"), 0, 0, 0, s));
 
+    # keyring KeyVersion import (v0.9.4): arbitrary bytes -> 0, never a crash
+    kv_from_json(s);
+
     # transparency log import (v0.4.0): arbitrary bytes -> 0, never a crash
     tlog_from_json(s);
 

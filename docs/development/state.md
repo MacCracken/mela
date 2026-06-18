@@ -5,15 +5,18 @@
 
 ## Version
 
-**0.9.2** — Consumable library + deferred work done (2026-06-17). mela now ships `dist/mela.cyr`
-(consumable by ark); on-disk extraction and real HTTP-over-socket transport are **implemented and
-proven** (no longer stubbed). All 9 modules ported; both trust gates enforced; API frozen. 6208
-lines of Rust preserved at `rust-old/` (retired after v1.0, once coverage ≥ Rust suite).
+**0.9.4** — Every load-bearing seam is real on disk (2026-06-18). All four remote flows are real
+over sandhi: search/fetch (GET+parse+cache), **download** (GET+write to cache), **publish**
+(POST+auth+parse), check_updates (per-package diff) — the ark "fetch+write still deferred" finding
+is closed. **Uninstall removes the extracted files** (recursive `_rmtree`), and **keyring disk
+`load()` is implemented** (`keyring_load_dir` + `KeyVersion` JSON codec, closing ADR-0003). mela
+ships `dist/mela.cyr`; on-disk extraction + both trust gates enforced. **No deferred seams remain.**
+6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once coverage ≥ Rust suite).
 
 ## Toolchain
 
-- **Cyrius pin**: `6.2.19` (in `cyrius.cyml [package].cyrius`). Installed `cycc` is `6.2.21` —
-  pin-drift warning is expected and benign; `cyrius lib sync` keeps `lib/` vendored to the pin.
+- **Cyrius pin**: `6.2.21` (in `cyrius.cyml [package].cyrius`) — matches the installed `cycc`, so
+  the pin-drift warning is cleared. `lib/` re-vendored to the pin via `cyrius lib sync`.
 
 ## Source
 
@@ -25,13 +28,14 @@ lines of Rust preserved at `rust-old/` (retired after v1.0, once coverage ≥ Ru
   - `src/depgraph.cyr` — `DepNode`, `DependencyGraph` (`add` / `len` / `is_empty` /
     `check_missing` / `detect_cycle` / Kahn `resolve`).
   - `src/trust.cyr` — Ed25519 sign/verify + SHA-256 hashing (via `sigil`), hex codec,
-    `KeyVersion` (`is_valid_at` / `verifying_key`), in-memory `PublisherKeyring`. Disk
-    `load()` deferred to the fs milestone (ADR-0003).
+    `KeyVersion` (`is_valid_at` / `verifying_key`) + its JSON codec, `PublisherKeyring` with
+    on-disk `keyring_load_dir` (scans `*.json`, each a `Vec<KeyVersion>` — ADR-0003 resolved).
   - `src/transparency.cyr` — `LogEntry` + `TransparencyLog`: SHA-256 hash-chained append-only
     log (`compute_hash` / `verify_self` / `append` / `verify_chain` / `find` /
     `entries_for_package` / `latest`), JSON codec re-verifying the chain on import (ADR-0004).
   - `src/local_registry.cyr` — `InstalledMarketplacePackage` + `LocalRegistry`: install/record/
-    query/search/remove, `index.json` persisted via `fs` (ADR-0005), signature-verify gate.
+    query/search/remove (**uninstall recursively removes the extracted files via `_rmtree`**),
+    `index.json` persisted via `fs` (ADR-0005), signature-verify gate.
   - `src/remote_client.cyr` — `RegistryClient`: url_encode / sanitize / validate, URL builders,
     response types + JSON codec, offline guards, fs response cache, and **real HTTP+HTTPS
     transport via `sandhi`** (`_rc_http_get` → `sandhi_http_get_auto`: DNS + TLS + HTTP/1.1-or-H2;
@@ -56,8 +60,10 @@ lines of Rust preserved at `rust-old/` (retired after v1.0, once coverage ≥ Ru
 
 ## Tests
 
-**472/472** parity tests green (`tests/mela.tcyr` — groups across the 9 modules, plus `pipeline`
-(end-to-end), `hardening` (zip-slip), `transport` (HTTP logic), and `extraction` (on-disk unpack)). `trust` has SHA-256 + RFC 8032 Ed25519 KAT vectors; `registry-persist`
+**490/490** parity tests green (`tests/mela.tcyr` — groups across the 9 modules, plus `pipeline`
+(end-to-end), `hardening` (zip-slip), `transport` (HTTP logic), `extraction` (on-disk unpack),
+`keyring-load` (disk `load()` + `KeyVersion` JSON round-trip), and `registry-uninstall-fs` (files
+gone after uninstall)). `trust` has SHA-256 + RFC 8032 Ed25519 KAT vectors; `registry-persist`
 / `ratings-persist` do real on-disk round-trips; `agpkg-archive` packs + inspects a gzipped-ustar
 `.agnos-agent` (cross-validated against the system `tar` both directions); `pipeline` runs
 package→sign→log→verify→install and rejects tampered / digest-mismatch / untrusted / wrong-key.

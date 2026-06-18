@@ -561,8 +561,8 @@ fn _tar_entry_safe(buf, off): i64 {
 
 # agpkg_read_entry — gunzip + find the entry named `name`, returning its content
 # bytes as a Str (or 0 if absent / on a decompress error). Bounds-checked. Used
-# to pull manifest.json / sandbox.json back out of a packed bundle (unblocks the
-# local_registry tarball extraction deferred in ADR-0005).
+# to pull manifest.json / sandbox.json back out of a packed bundle (backs the
+# local_registry on-disk extraction, ADR-0005 — now implemented).
 fn agpkg_read_entry(data, len, name: Str): i64 {
     var dst = alloc(AGPKG_BUF_MAXLEN);
     var dlen = gzip_decompress(data, len, dst, AGPKG_BUF_MAXLEN);
