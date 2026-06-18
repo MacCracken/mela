@@ -1,0 +1,478 @@
+# remote_client.cyr — client for a remote marketplace registry.
+#
+# Ports rust-old/src/remote_client.rs: the request/response logic for the four
+# registry flows — search, fetch-manifest, download, publish (+ check-updates) —
+# plus URL building, percent-encoding, path-segment validation, the response
+# types, and the on-disk response cache.
+#
+# Scope (ADR-0006): the live HTTP/TLS transport (Rust `reqwest`) is a SEAM. The
+# Rust test suite exercises none of it — it tests URL/encode/validate logic,
+# response (de)serialization, offline-mode guards, and caching. This port mirrors
+# that: the four flows are testable against mock (canned) response bytes, the
+# parsers are fuzzed, and the actual `sandhi`/`tls` send is deferred to the
+# v0.9.0 end-to-end wiring. timestamps/quotas are not involved here.
+
+var DEFAULT_REGISTRY_URL = "https://registry.agnos.org";
+var REQUEST_TIMEOUT_SECS  = 30;
+var DOWNLOAD_TIMEOUT_SECS  = 300;
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+# Percent-encode a Str for a URL query parameter. Unreserved bytes
+# (A-Z a-z 0-9 - _ . ~) pass through; everything else becomes %XX (uppercase
+# hex), byte-wise — so multibyte UTF-8 encodes per-byte. Mirrors Rust `url_encode`.
+fn url_encode(s: Str): Str {
+    var n = str_len(s);
+    var src = str_data(s);
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < n) {
+        var c = load8(src + i) & 0xFF;
+        var unreserved = 0;
+        if (c >= 65) { if (c <= 90) { unreserved = 1; } }    # A-Z
+        if (c >= 97) { if (c <= 122) { unreserved = 1; } }   # a-z
+        if (c >= 48) { if (c <= 57) { unreserved = 1; } }    # 0-9
+        if (c == 45) { unreserved = 1; }                      # -
+        if (c == 95) { unreserved = 1; }                      # _
+        if (c == 46) { unreserved = 1; }                      # .
+        if (c == 126) { unreserved = 1; }                     # ~
+        if (unreserved == 1) {
+            var ch[2];
+            store8(&ch, c);
+            store8(&ch + 1, 0);
+            str_builder_add_cstr(sb, &ch);
+        } else {
+            var pct[4];
+            store8(&pct, 37);                                 # '%'
+            store8(&pct + 1, _hex_digit_upper(c >> 4));
+            store8(&pct + 2, _hex_digit_upper(c & 15));
+            store8(&pct + 3, 0);
+            str_builder_add_cstr(sb, &pct);
+        }
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}
+
+# Nibble (0..15) -> uppercase hex ASCII byte.
+fn _hex_digit_upper(v): i64 {
+    if (v < 10) { return 48 + v; }     # '0'..'9'
+    return 55 + v;                     # 'A'..'F'  (65 + v-10)
+}
+
+# Replace any byte that isn't ASCII-alphanumeric / '-' / '_' with '_'. Mirrors
+# Rust `sanitize_filename` (ASCII subset; no oracle case is non-ASCII).
+fn sanitize_filename(s: Str): Str {
+    var n = str_len(s);
+    var src = str_data(s);
+    var buf = alloc(n + 1);
+    var i = 0;
+    while (i < n) {
+        var c = load8(src + i) & 0xFF;
+        var keep = 0;
+        if (c >= 65) { if (c <= 90) { keep = 1; } }
+        if (c >= 97) { if (c <= 122) { keep = 1; } }
+        if (c >= 48) { if (c <= 57) { keep = 1; } }
+        if (c == 45) { keep = 1; }
+        if (c == 95) { keep = 1; }
+        if (keep == 1) { store8(buf + i, c); }
+        else { store8(buf + i, 95); }     # '_'
+        i = i + 1;
+    }
+    store8(buf + n, 0);
+    return str_new(buf, n);
+}
+
+# Validate a name/version path segment: 1 if safe, 0 if empty or it contains
+# '/', '\', "..", or NUL. Mirrors Rust `validate_path_segment`.
+fn validate_path_segment(value: Str): i64 {
+    var n = str_len(value);
+    if (n == 0) { return 0; }
+    var d = str_data(value);
+    var i = 0;
+    var bad = 0;
+    while (i < n) {
+        var c = load8(d + i) & 0xFF;
+        if (c == 47) { bad = 1; }     # '/'
+        if (c == 92) { bad = 1; }     # '\'
+        if (c == 0)  { bad = 1; }     # NUL
+        if (c == 46) {                # '.', check for ".."
+            if (i + 1 < n) {
+                if ((load8(d + i + 1) & 0xFF) == 46) { bad = 1; }
+            }
+        }
+        i = i + 1;
+    }
+    if (bad == 1) { return 0; }
+    return 1;
+}
+
+# ---------------------------------------------------------------------------
+# URL builders
+# ---------------------------------------------------------------------------
+
+# GET {base}/v1/packages/search?q={enc}[&category={enc}]&page={n}
+fn build_search_url(base: Str, query: Str, category: Str, has_category, page): Str {
+    var u = str_cat(str_cat(base, str_from("/v1/packages/search?q=")), url_encode(query));
+    if (has_category == 1) {
+        u = str_cat(str_cat(u, str_from("&category=")), url_encode(category));
+    }
+    return str_cat(str_cat(u, str_from("&page=")), str_from_int(page));
+}
+
+# {base}/v1/packages/{name}/{version}
+fn build_manifest_url(base: Str, name: Str, version: Str): Str {
+    var u = str_cat(base, str_from("/v1/packages/"));
+    u = str_cat(u, name);
+    u = str_cat(u, str_from("/"));
+    return str_cat(u, version);
+}
+
+# {base}/v1/packages/{name}/{version}/download
+fn build_download_url(base: Str, name: Str, version: Str): Str {
+    return str_cat(build_manifest_url(base, name, version), str_from("/download"));
+}
+
+# {base}/v1/packages/publish
+fn build_publish_url(base: Str): Str {
+    return str_cat(base, str_from("/v1/packages/publish"));
+}
+
+# {base}/v1/packages/{name}/latest
+fn build_latest_url(base: Str, name: Str): Str {
+    return str_cat(str_cat(base, str_from("/v1/packages/")), str_cat(name, str_from("/latest")));
+}
+
+# ---------------------------------------------------------------------------
+# Response types + JSON codec (response-parse parity; ADR-0001 wire style)
+# ---------------------------------------------------------------------------
+
+fn _rc_jstr(o, key): Str {
+    var v = json_v_obj_get(o, key);
+    if (v == 0) { return str_from(""); }
+    if (json_v_is_str(v) == 0) { return str_from(""); }
+    return json_v_str(v);
+}
+fn _rc_jint(o, key): i64 {
+    var v = json_v_obj_get(o, key);
+    if (v == 0) { return 0; }
+    if (json_v_is_int(v) == 0) { return 0; }
+    return json_v_int(v);
+}
+fn _rc_jbool(o, key): i64 {
+    var v = json_v_obj_get(o, key);
+    if (v == 0) { return 0; }
+    if (json_v_is_bool(v) == 0) { return 0; }
+    return json_v_bool(v);
+}
+
+# --- SearchResult { qualified_name, latest_version, description, downloads, category, publisher }
+fn sresult_new(qualified_name: Str, latest_version: Str, description: Str,
+               downloads, category: Str, publisher: Str): i64 {
+    var p = alloc(48);
+    store64(p,      qualified_name);
+    store64(p + 8,  latest_version);
+    store64(p + 16, description);
+    store64(p + 24, downloads);
+    store64(p + 32, category);
+    store64(p + 40, publisher);
+    return p;
+}
+fn sresult_qualified_name(p): Str { return load64(p); }
+fn sresult_latest_version(p): Str { return load64(p + 8); }
+fn sresult_description(p): Str    { return load64(p + 16); }
+fn sresult_downloads(p): i64      { return load64(p + 24); }
+fn sresult_category(p): Str       { return load64(p + 32); }
+fn sresult_publisher(p): Str      { return load64(p + 40); }
+
+fn _sresult_to_jv(p): i64 {
+    var o = json_v_obj_new();
+    json_v_obj_set(o, str_from("qualified_name"), json_v_str_new(sresult_qualified_name(p)));
+    json_v_obj_set(o, str_from("latest_version"), json_v_str_new(sresult_latest_version(p)));
+    json_v_obj_set(o, str_from("description"),    json_v_str_new(sresult_description(p)));
+    json_v_obj_set(o, str_from("downloads"),      json_v_int_new(sresult_downloads(p)));
+    json_v_obj_set(o, str_from("category"),       json_v_str_new(sresult_category(p)));
+    json_v_obj_set(o, str_from("publisher"),      json_v_str_new(sresult_publisher(p)));
+    return o;
+}
+fn _sresult_from_jv(o): i64 {
+    return sresult_new(_rc_jstr(o, "qualified_name"), _rc_jstr(o, "latest_version"),
+                       _rc_jstr(o, "description"), _rc_jint(o, "downloads"),
+                       _rc_jstr(o, "category"), _rc_jstr(o, "publisher"));
+}
+
+# --- SearchResults { packages: [SearchResult], total, page, per_page }
+fn sresults_new(packages, total, page, per_page): i64 {
+    var p = alloc(32);
+    store64(p,      packages);
+    store64(p + 8,  total);
+    store64(p + 16, page);
+    store64(p + 24, per_page);
+    return p;
+}
+fn sresults_packages(p)      { return load64(p); }
+fn sresults_total(p): i64    { return load64(p + 8); }
+fn sresults_page(p): i64     { return load64(p + 16); }
+fn sresults_per_page(p): i64 { return load64(p + 24); }
+
+fn sresults_to_json(p): Str {
+    var o = json_v_obj_new();
+    var arr = json_v_arr_new();
+    var pkgs = sresults_packages(p);
+    var n = vec_len(pkgs);
+    var i = 0;
+    while (i < n) {
+        json_v_arr_push(arr, _sresult_to_jv(vec_get(pkgs, i)));
+        i = i + 1;
+    }
+    json_v_obj_set(o, str_from("packages"), arr);
+    json_v_obj_set(o, str_from("total"),    json_v_int_new(sresults_total(p)));
+    json_v_obj_set(o, str_from("page"),     json_v_int_new(sresults_page(p)));
+    json_v_obj_set(o, str_from("per_page"), json_v_int_new(sresults_per_page(p)));
+    return json_v_build(o);
+}
+
+# Parse a SearchResults JSON document, or 0 on a parse error / non-object root.
+fn sresults_from_json(json: Str): i64 {
+    var root = json_v_parse_str(str_data(json), str_len(json));   # explicit buf+len (see trust.cyr)
+    if (root == 0) { return 0; }
+    if (json_v_is_obj(root) == 0) { return 0; }
+    var pkgs = vec_new();
+    var arr = json_v_obj_get(root, "packages");
+    if (json_v_is_arr(arr) == 1) {
+        var n = json_v_arr_len(arr);
+        var i = 0;
+        while (i < n) {
+            var el = json_v_arr_get(arr, i);
+            if (json_v_is_obj(el) == 1) { vec_push(pkgs, _sresult_from_jv(el)); }
+            i = i + 1;
+        }
+    }
+    return sresults_new(pkgs, _rc_jint(root, "total"), _rc_jint(root, "page"),
+                        _rc_jint(root, "per_page"));
+}
+
+# --- PublishResponse { name, version, download_url, replaced }
+fn presp_new(name: Str, version: Str, download_url: Str, replaced): i64 {
+    var p = alloc(32);
+    store64(p,      name);
+    store64(p + 8,  version);
+    store64(p + 16, download_url);
+    store64(p + 24, replaced);
+    return p;
+}
+fn presp_name(p): Str         { return load64(p); }
+fn presp_version(p): Str      { return load64(p + 8); }
+fn presp_download_url(p): Str { return load64(p + 16); }
+fn presp_replaced(p): i64     { return load64(p + 24); }
+
+fn presp_to_json(p): Str {
+    var o = json_v_obj_new();
+    json_v_obj_set(o, str_from("name"),         json_v_str_new(presp_name(p)));
+    json_v_obj_set(o, str_from("version"),      json_v_str_new(presp_version(p)));
+    json_v_obj_set(o, str_from("download_url"), json_v_str_new(presp_download_url(p)));
+    json_v_obj_set(o, str_from("replaced"),     json_v_bool_new(presp_replaced(p)));
+    return json_v_build(o);
+}
+fn presp_from_json(json: Str): i64 {
+    var root = json_v_parse_str(str_data(json), str_len(json));
+    if (root == 0) { return 0; }
+    if (json_v_is_obj(root) == 0) { return 0; }
+    return presp_new(_rc_jstr(root, "name"), _rc_jstr(root, "version"),
+                     _rc_jstr(root, "download_url"), _rc_jbool(root, "replaced"));
+}
+
+# --- UpdateAvailable { name, installed_version, available_version, changelog }
+fn update_new(name: Str, installed_version: Str, available_version: Str, changelog: Str): i64 {
+    var p = alloc(32);
+    store64(p,      name);
+    store64(p + 8,  installed_version);
+    store64(p + 16, available_version);
+    store64(p + 24, changelog);
+    return p;
+}
+fn update_name(p): Str              { return load64(p); }
+fn update_installed_version(p): Str { return load64(p + 8); }
+fn update_available_version(p): Str { return load64(p + 16); }
+fn update_changelog(p): Str         { return load64(p + 24); }
+
+fn update_to_json(p): Str {
+    var o = json_v_obj_new();
+    json_v_obj_set(o, str_from("name"),              json_v_str_new(update_name(p)));
+    json_v_obj_set(o, str_from("installed_version"), json_v_str_new(update_installed_version(p)));
+    json_v_obj_set(o, str_from("available_version"), json_v_str_new(update_available_version(p)));
+    json_v_obj_set(o, str_from("changelog"),         json_v_str_new(update_changelog(p)));
+    return json_v_build(o);
+}
+fn update_from_json(json: Str): i64 {
+    var root = json_v_parse_str(str_data(json), str_len(json));
+    if (root == 0) { return 0; }
+    if (json_v_is_obj(root) == 0) { return 0; }
+    return update_new(_rc_jstr(root, "name"), _rc_jstr(root, "installed_version"),
+                      _rc_jstr(root, "available_version"), _rc_jstr(root, "changelog"));
+}
+
+# ---------------------------------------------------------------------------
+# RegistryClient
+# ---------------------------------------------------------------------------
+#
+# Layout (8-byte fields):
+#   0  base_url   (Str; trailing slashes trimmed)
+#   8  cache_dir  (Str)
+#   16 offline    (i64; 0/1)
+
+var RC_BUF_MAXLEN = 1048576;     # 1 MiB read buffer for cached responses
+var RC_DIR_MODE   = 0x1FF;       # 0o777
+
+# Trim all trailing '/' from a Str (Rust `trim_end_matches('/')`).
+fn _rc_trim_trailing_slash(s: Str): Str {
+    var n = str_len(s);
+    var d = str_data(s);
+    var go = 1;
+    while (go == 1) {
+        if (n == 0) { go = 0; }
+        else {
+            if (load8(d + n - 1) == 47) { n = n - 1; }
+            else { go = 0; }
+        }
+    }
+    return str_sub(s, 0, n);
+}
+
+fn registry_client_new(base_url: Str, cache_dir: Str): i64 {
+    var c = alloc(24);
+    store64(c,      _rc_trim_trailing_slash(base_url));
+    store64(c + 8,  cache_dir);
+    store64(c + 16, 0);
+    return c;
+}
+
+fn client_base_url(c): Str  { return load64(c); }
+fn client_cache_dir(c): Str { return load64(c + 8); }
+fn client_is_offline(c): i64 { return load64(c + 16); }
+fn client_set_offline(c, v) { store64(c + 16, v); return 0; }
+
+# create_dir_all: mkdir every ancestor of `path` (EEXIST is harmless).
+fn _rc_mkdir_p(path: Str): i64 {
+    var n = str_len(path);
+    var d = str_data(path);
+    var i = 1;                       # skip a leading '/'
+    while (i <= n) {
+        var atsep = 0;
+        if (i == n) { atsep = 1; }
+        else { if (load8(d + i) == 47) { atsep = 1; } }
+        if (atsep == 1) {
+            var pre = str_clone(str_sub(path, 0, i));   # NUL-terminated prefix
+            sys_mkdir(str_data(pre), RC_DIR_MODE);
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ---------------------------------------------------------------------------
+# Response cache (fs)
+# ---------------------------------------------------------------------------
+
+fn _rc_search_cache_path(c, query: Str): Str {
+    var dir = path_join(client_cache_dir(c), str_from("search"));
+    return path_join(dir, str_cat(sanitize_filename(query), str_from(".json")));
+}
+
+# cache_search_results — persist SearchResults JSON under the query key. Mirrors Rust.
+fn registry_cache_search(c, query: Str, results): i64 {
+    _rc_mkdir_p(path_join(client_cache_dir(c), str_from("search")));
+    var path = _rc_search_cache_path(c, query);
+    var js = sresults_to_json(results);
+    return file_write_all(str_data(path), str_data(js), str_len(js));
+}
+
+# cached_search — load cached SearchResults, or 0 if none. Mirrors Rust.
+fn registry_cached_search(c, query: Str): i64 {
+    var path = _rc_search_cache_path(c, query);
+    if (file_exists(str_data(path)) == 0) { return 0; }
+    var buf = alloc(RC_BUF_MAXLEN);
+    var n = file_read_all(str_data(path), buf, RC_BUF_MAXLEN);
+    if (n <= 0) { return 0; }
+    return sresults_from_json(str_new(buf, n));
+}
+
+fn _rc_manifest_cache_path(c, name: Str, version: Str): Str {
+    var dir = path_join(path_join(client_cache_dir(c), str_from("manifests")), name);
+    return path_join(dir, str_cat(version, str_from(".json")));
+}
+
+# cache_manifest — persist a manifest under manifests/<name>/<version>.json. Mirrors Rust.
+fn registry_cache_manifest(c, name: Str, version: Str, manifest): i64 {
+    _rc_mkdir_p(path_join(path_join(client_cache_dir(c), str_from("manifests")), name));
+    var path = _rc_manifest_cache_path(c, name, version);
+    var js = manifest_to_json(manifest);
+    return file_write_all(str_data(path), str_data(js), str_len(js));
+}
+
+# cached_manifest — load a cached manifest, or 0 if none. Mirrors Rust.
+fn registry_cached_manifest(c, name: Str, version: Str): i64 {
+    var path = _rc_manifest_cache_path(c, name, version);
+    if (file_exists(str_data(path)) == 0) { return 0; }
+    var buf = alloc(RC_BUF_MAXLEN);
+    var n = file_read_all(str_data(path), buf, RC_BUF_MAXLEN);
+    if (n <= 0) { return 0; }
+    return manifest_from_json(str_new(buf, n));
+}
+
+# ---------------------------------------------------------------------------
+# Flows (transport seam deferred — ADR-0006)
+# ---------------------------------------------------------------------------
+#
+# The live HTTP GET/POST over sandhi/tls is wired at v0.9.0 end-to-end. Until
+# then `_rc_http_get` returns 0 ("no response"). Each flow's offline branch,
+# URL building, and response parsing are fully ported and tested here; the
+# online branch builds the URL, would transport, and parses (sresults_from_json
+# etc.) — exercised in tests by parsing canned/mock response bytes directly.
+fn _rc_http_get(url: Str): i64 { return 0; }
+
+# search — offline: cached results (0 if none). online: GET + parse (transport
+# deferred). Mirrors Rust `search`.
+fn rc_search(c, query: Str, category: Str, has_category, page): i64 {
+    if (client_is_offline(c) == 1) { return registry_cached_search(c, query); }
+    var url = build_search_url(client_base_url(c), query, category, has_category, page);
+    var resp = _rc_http_get(url);
+    if (resp == 0) { return 0; }
+    return sresults_from_json(str_new(resp, strlen(resp)));
+}
+
+# fetch_manifest — validate segments, then offline: cached (0 if none); online:
+# GET + parse. Returns 0 on an invalid name/version. Mirrors Rust `fetch_manifest`.
+fn rc_fetch_manifest(c, name: Str, version: Str): i64 {
+    if (validate_path_segment(name) == 0) { return 0; }
+    if (validate_path_segment(version) == 0) { return 0; }
+    if (client_is_offline(c) == 1) { return registry_cached_manifest(c, name, version); }
+    var resp = _rc_http_get(build_manifest_url(client_base_url(c), name, version));
+    if (resp == 0) { return 0; }
+    return manifest_from_json(str_new(resp, strlen(resp)));
+}
+
+# download — returns 1 if a download would proceed (online + valid segments),
+# 0 if blocked (offline) or the name/version is invalid. Mirrors the Rust
+# `download_package` guards (the actual fetch+write is deferred — ADR-0006).
+fn rc_download_allowed(c, name: Str, version: Str): i64 {
+    if (validate_path_segment(name) == 0) { return 0; }
+    if (validate_path_segment(version) == 0) { return 0; }
+    if (client_is_offline(c) == 1) { return 0; }    # "Cannot download in offline mode"
+    return 1;
+}
+
+# publish — returns 1 if a publish would proceed (online), 0 if blocked
+# (offline). Mirrors the Rust `publish` offline guard (upload deferred — ADR-0006).
+fn rc_publish_allowed(c): i64 {
+    if (client_is_offline(c) == 1) { return 0; }    # "Cannot publish in offline mode"
+    return 1;
+}
+
+# check_updates — offline returns an empty Vec (Rust `check_updates` early-return).
+# The online per-package latest-version diff is deferred (ADR-0006).
+fn rc_check_updates(c, installed): i64 {
+    return vec_new();
+}

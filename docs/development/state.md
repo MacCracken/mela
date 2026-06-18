@@ -5,9 +5,9 @@
 
 ## Version
 
-**0.5.0** — Local registry (2026-06-17). `lib.rs` + `trust.rs` + `transparency.rs` +
-`local_registry.rs` (index/lifecycle/persistence) ported. 6208 lines of Rust preserved at
-`rust-old/` for parity reference.
+**0.6.0** — Remote client (2026-06-17). `lib.rs` + `trust.rs` + `transparency.rs` +
+`local_registry.rs` + `remote_client.rs` (logic; transport seam) ported. 6208 lines of Rust
+preserved at `rust-old/` for parity reference.
 
 ## Toolchain
 
@@ -17,8 +17,8 @@
 ## Source
 
 - Rust reference: 6208 lines at `rust-old/` (frozen, do not edit).
-- Cyrius port: **`lib.rs` + `trust.rs` + `transparency.rs` + `local_registry.rs`* complete
-  (4 of 9 modules)** —
+- Cyrius port: **`lib.rs` + `trust.rs` + `transparency.rs` + `local_registry.rs`* +
+  `remote_client.rs`† complete (5 of 9 modules)** —
   - `src/category.cyr` — `MarketplaceCategory` (`cat_name` / `cat_parse`, Rust `Display`/`FromStr`).
   - `src/manifest.cyr` — `PublisherInfo`, `MarketplaceManifest` (`validate` / `qualified_name`),
     `is_valid_semver`, and the JSON codec (`*_to_json` / `*_from_json`, wire format = ADR-0001).
@@ -32,21 +32,25 @@
     `entries_for_package` / `latest`), JSON codec re-verifying the chain on import (ADR-0004).
   - `src/local_registry.cyr` — `InstalledMarketplacePackage` + `LocalRegistry`: install/record/
     query/search/remove, `index.json` persisted via `fs` (ADR-0005), signature-verify gate.
-  - `src/main.cyr` wires all six.
-- Remaining (5): `remote_client`, `ratings`, `sandbox_profiles`, `flutter_packaging`/
-  `flutter_agpkg`. **\*** `local_registry` gzip/tar tarball extraction (`extract_*_tarball`,
-  `.sig` sidecar, `count_files`) deferred to **v0.8.0** (`sankoch`) — ADR-0005.
-  Next milestone: **v0.6.0 remote_client**.
+  - `src/remote_client.cyr` — `RegistryClient`: url_encode / sanitize / validate, URL builders,
+    response types + JSON codec, offline guards, fs response cache. Live HTTP/TLS transport is a
+    seam deferred to v0.9.0 (ADR-0006).
+  - `src/main.cyr` wires all seven.
+- Remaining (4): `ratings`, `sandbox_profiles`, `flutter_packaging`/`flutter_agpkg`. Deferred
+  pieces: **\*** `local_registry` tarball extraction → **v0.8.0** (`sankoch`, ADR-0005); **†**
+  `remote_client` live `sandhi`/`tls` transport → **v0.9.0** end-to-end (ADR-0006).
+  Next milestone: **v0.7.0 sandbox_profiles + ratings**.
 
 ## Tests
 
-**184/184** parity tests green (`tests/mela.tcyr` — groups `category`, `semver`, `publisher`,
+**240/240** parity tests green (`tests/mela.tcyr` — groups `category`, `semver`, `publisher`,
 `manifest`, `depgraph-base`, `depgraph-resolve`, `json`, `trust`, `keyversion`, `keyring`,
-`transparency`, `transparency-json`, `registry`, `registry-persist`, `registry-signature`).
-`trust` includes SHA-256 + RFC 8032 Ed25519 known-answer vectors; `registry-persist` does a real
-on-disk install→reopen round-trip. Fuzz harness at `tests/mela.fcyr` covers the manifest JSON,
-trust hex/key/signature, transparency-log, and registry-index parsers (survive arbitrary bytes).
-`cyrius test` is the gate; each ported module adds its parity group.
+`transparency`, `transparency-json`, `registry`, `registry-persist`, `registry-signature`,
+`remote`, `remote-codec`, `remote-client`). `trust` includes SHA-256 + RFC 8032 Ed25519
+known-answer vectors; `registry-persist` does a real on-disk install→reopen round-trip;
+`remote-codec` parses a canned mock registry response. Fuzz harness at `tests/mela.fcyr` covers
+the manifest JSON, trust hex/key/signature, transparency-log, registry-index, and remote response
+parsers (survive arbitrary bytes). `cyrius test` is the gate; each ported module adds its group.
 
 ## Dependencies
 
@@ -67,6 +71,6 @@ _None yet._
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). Next milestone: **v0.6.0 — Remote client** (`remote_client.rs`,
-4 pub fns, 751 lines; dep gate stdlib `tls`/`tls_native` + `sandhi` HTTP client): search / fetch
-/ download / publish over TLS (no OpenSSL).
+See [`roadmap.md`](roadmap.md). Next milestone: **v0.7.0 — Sandbox profiles + ratings**
+(`sandbox_profiles.rs` 740 lines + `ratings.rs` 897 lines; dep gate the manifest model +
+`agnostik` security types): capability disclosure before install, and ratings/reviews.

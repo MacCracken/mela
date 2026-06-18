@@ -10,6 +10,7 @@ include "src/manifest.cyr"
 include "src/trust.cyr"
 include "src/transparency.cyr"
 include "src/local_registry.cyr"
+include "src/remote_client.cyr"
 
 fn fuzz_main(data, len) {
     if (len == 0) { return 0; }
@@ -28,6 +29,11 @@ fn fuzz_main(data, len) {
 
     # registry index import (v0.5.0): arbitrary bytes into a fresh index
     registry_index_from_json_into(s, map_new_str());
+
+    # remote response parsers (v0.6.0): arbitrary bytes -> 0, never a crash
+    sresults_from_json(s);
+    presp_from_json(s);
+    update_from_json(s);
 
     # verify with arbitrary bytes as the public key + a signature derived from
     # the input — must reject (0), never fault.

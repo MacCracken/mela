@@ -1,6 +1,6 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-06-17 (v0.5.0) · Live status: [`state.md`](state.md) · Per-version history:
+> **Last Updated**: 2026-06-17 (v0.6.0) · Live status: [`state.md`](state.md) · Per-version history:
 > [`../../CHANGELOG.md`](../../CHANGELOG.md)
 >
 > The path from the **v0.1.0 port scaffold** to a **v1.0 release**. mela is mid-port from Rust
@@ -31,6 +31,15 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 ---
 
 ## Completed
+
+### v0.6.0 — Remote client ✅ (2026-06-17)
+- **`remote_client.rs` logic ported** → `src/remote_client.cyr`: url_encode / sanitize /
+  validate_path_segment, URL builders, response types + JSON codec, `RegistryClient` (base-url
+  trim + offline), offline guards, fs response cache.
+- The four flows demonstrated against **canned mock responses** (response-parse parity); response
+  parsers fuzzed; offline + cache round-trips tested on disk. **240/240 tests**.
+- Live HTTP/TLS transport (`sandhi`/`tls`) is a seam deferred to **v0.9.0** end-to-end (ADR-0006) —
+  the Rust test suite is itself socket-free, so no live path is exercised yet.
 
 ### v0.5.0 — Local registry ✅ (2026-06-17)
 - **`local_registry.rs` index/lifecycle ported** → `src/local_registry.cyr`:

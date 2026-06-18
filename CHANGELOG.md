@@ -6,6 +6,38 @@ include benchmark numbers; breaking changes get a **Breaking** section with a mi
 
 ## [Unreleased]
 
+## [0.6.0] — Remote client (`remote_client.rs`)
+
+Talk to a marketplace registry: search / fetch-manifest / download / publish
+(+ check-updates). Ports the request/response/cache/offline logic of
+`remote_client.rs`; the live HTTP/TLS transport is a seam wired at v0.9.0
+(ADR-0006). **240/240 parity tests** green (was 184).
+
+### Added
+- **`src/remote_client.cyr`** — `url_encode` (percent-encoding),
+  `sanitize_filename`, `validate_path_segment` (rejects traversal / NUL); URL
+  builders for all five endpoints; `RegistryClient` (base-url trailing-slash
+  trim, cache dir, offline flag).
+- **Response types** `SearchResults` / `SearchResult` / `PublishResponse` /
+  `UpdateAvailable` with JSON encode + decode — round-trip and **canned
+  mock-endpoint** parse tested (response-parse parity).
+- **Offline-mode guards** — search/fetch fall back to the cache, download/publish
+  are blocked, check_updates returns empty.
+- **On-disk response cache** — `cache_search` / `cached_search`,
+  `cache_manifest` / `cached_manifest` over stdlib `fs` (`create_dir_all`-style
+  `_rc_mkdir_p`), round-tripped on disk.
+- **Fuzz** (`tests/mela.fcyr`) extended: the search-results / publish-response /
+  update response parsers survive arbitrary bytes.
+- **ADR**: [0006](docs/adr/0006-remote-client-transport-seam.md) — the live
+  `sandhi`/`tls` HTTP transport (`_rc_http_get`) is a deferred seam; the Rust
+  test suite is itself socket-free, so v0.6.0 ports the full testable surface
+  and defers transport to the v0.9.0 end-to-end wiring.
+
+### Notes
+- No new dependency: caching uses already-vendored stdlib `fs`; the JSON codec
+  reuses `bayan`. `sandhi` / `tls` are added when the transport seam is wired
+  (v0.9.0).
+
 ## [0.5.0] — Local registry (`local_registry.rs`)
 
 The on-device store: install / record / query / search / remove, persisted to

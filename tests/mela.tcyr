@@ -9,6 +9,7 @@ include "src/depgraph.cyr"
 include "src/trust.cyr"
 include "src/transparency.cyr"
 include "src/local_registry.cyr"
+include "src/remote_client.cyr"
 
 # MarketplaceCategory — parity with rust-old/src/lib.rs (Display + FromStr).
 fn test_category() {
@@ -659,6 +660,140 @@ fn test_registry_signature() {
     return 0;
 }
 
+# remote_client helpers + URL builders — parity with rust-old/src/remote_client.rs.
+fn test_remote() {
+    test_group("remote");
+
+    # url_encode
+    assert_eq(str_eq_cstr(url_encode(str_from("hello")),       "hello"),       1, "url_encode plain");
+    assert_eq(str_eq_cstr(url_encode(str_from("hello world")), "hello%20world"), 1, "url_encode space");
+    assert_eq(str_eq_cstr(url_encode(str_from("&")), "%26"), 1, "url_encode &");
+    assert_eq(str_eq_cstr(url_encode(str_from("=")), "%3D"), 1, "url_encode =");
+    assert_eq(str_eq_cstr(url_encode(str_from("?")), "%3F"), 1, "url_encode ?");
+    assert_eq(str_eq_cstr(url_encode(str_from("key=value&foo=bar")), "key%3Dvalue%26foo%3Dbar"), 1, "url_encode mixed");
+    # "café" as raw UTF-8 bytes (é = 0xC3 0xA9) -> per-byte percent-encoding
+    var cafe[6];
+    store8(&cafe, 99); store8(&cafe + 1, 97); store8(&cafe + 2, 102);
+    store8(&cafe + 3, 0xC3); store8(&cafe + 4, 0xA9); store8(&cafe + 5, 0);
+    assert_eq(str_eq_cstr(url_encode(str_new(&cafe, 5)), "caf%C3%A9"), 1, "url_encode unicode");
+
+    # sanitize_filename
+    assert_eq(str_eq_cstr(sanitize_filename(str_from("hello world")), "hello_world"), 1, "sanitize space");
+    assert_eq(str_eq_cstr(sanitize_filename(str_from("test@1.0")),    "test_1_0"),    1, "sanitize special");
+    assert_eq(str_eq_cstr(sanitize_filename(str_from("a-b_c")),       "a-b_c"),       1, "sanitize keeps -_");
+    assert_eq(str_eq_cstr(sanitize_filename(str_from("")),            ""),            1, "sanitize empty");
+
+    # validate_path_segment
+    assert_eq(validate_path_segment(str_from("../etc/passwd")), 0, "reject traversal");
+    assert_eq(validate_path_segment(str_from("foo/bar")),       0, "reject slash");
+    assert_eq(validate_path_segment(str_from("foo\\bar")),      0, "reject backslash");
+    assert_eq(validate_path_segment(str_from("")),              0, "reject empty");
+    var nul[8];
+    store8(&nul, 102); store8(&nul + 1, 111); store8(&nul + 2, 111);
+    store8(&nul + 3, 0); store8(&nul + 4, 98); store8(&nul + 5, 97); store8(&nul + 6, 114);
+    assert_eq(validate_path_segment(str_new(&nul, 7)), 0, "reject NUL");
+    assert_eq(validate_path_segment(str_from("my-app")), 1, "accept my-app");
+    assert_eq(validate_path_segment(str_from("1.0.0")),  1, "accept 1.0.0");
+
+    # URL builders
+    var B = str_from("https://r");
+    assert_eq(str_eq_cstr(build_search_url(B, str_from("a b"), str_from(""), 0, 1),
+        "https://r/v1/packages/search?q=a%20b&page=1"), 1, "search url no category");
+    assert_eq(str_eq_cstr(build_search_url(B, str_from("x"), str_from("sec"), 1, 2),
+        "https://r/v1/packages/search?q=x&category=sec&page=2"), 1, "search url with category");
+    assert_eq(str_eq_cstr(build_manifest_url(B, str_from("pkg"), str_from("1.0.0")),
+        "https://r/v1/packages/pkg/1.0.0"), 1, "manifest url");
+    assert_eq(str_eq_cstr(build_download_url(B, str_from("pkg"), str_from("1.0.0")),
+        "https://r/v1/packages/pkg/1.0.0/download"), 1, "download url");
+    assert_eq(str_eq_cstr(build_publish_url(B), "https://r/v1/packages/publish"), 1, "publish url");
+    assert_eq(str_eq_cstr(build_latest_url(B, str_from("pkg")), "https://r/v1/packages/pkg/latest"), 1, "latest url");
+    return 0;
+}
+
+# Response types JSON (de)serialization + a canned mock-endpoint parse.
+fn test_remote_codec() {
+    test_group("remote-codec");
+
+    # SearchResults roundtrip
+    var pkgs = vec_new();
+    vec_push(pkgs, sresult_new(str_from("acme/scanner"), str_from("1.0.0"), str_from("A scanner"),
+                               1000, str_from("security"), str_from("Acme Corp")));
+    var rec = sresults_from_json(sresults_to_json(sresults_new(pkgs, 1, 1, 20)));
+    assert_neq(rec, 0, "search results parse");
+    assert_eq(vec_len(sresults_packages(rec)), 1, "results packages len 1");
+    assert_eq(str_eq_cstr(sresult_qualified_name(vec_get(sresults_packages(rec), 0)), "acme/scanner"), 1, "result qualified_name");
+    assert_eq(sresults_total(rec), 1, "results total 1");
+
+    # canned mock-endpoint response (response-parse parity)
+    var mock = sresults_from_json(str_from("{\"packages\":[{\"qualified_name\":\"acme/scanner\",\"latest_version\":\"1.0.0\",\"description\":\"A scanner\",\"downloads\":1000,\"category\":\"security\",\"publisher\":\"Acme Corp\"}],\"total\":1,\"page\":1,\"per_page\":20}"));
+    assert_neq(mock, 0, "mock response parses");
+    assert_eq(vec_len(sresults_packages(mock)), 1, "mock packages len 1");
+    var m0 = vec_get(sresults_packages(mock), 0);
+    assert_eq(sresult_downloads(m0), 1000, "mock downloads 1000");
+    assert_eq(str_eq_cstr(sresult_publisher(m0), "Acme Corp"), 1, "mock publisher");
+    assert_eq(sresults_per_page(mock), 20, "mock per_page 20");
+
+    # PublishResponse roundtrip
+    var pr = presp_from_json(presp_to_json(presp_new(str_from("test-app"), str_from("1.0.0"),
+                            str_from("https://r/v1/packages/test-app/1.0.0/download"), 0)));
+    assert_neq(pr, 0, "publish response parse");
+    assert_eq(str_eq_cstr(presp_name(pr), "test-app"), 1, "publish resp name");
+    assert_eq(presp_replaced(pr), 0, "publish resp not replaced");
+
+    # UpdateAvailable roundtrip
+    var up = update_from_json(update_to_json(update_new(str_from("test-pkg"), str_from("1.0.0"),
+                             str_from("2.0.0"), str_from("New features"))));
+    assert_neq(up, 0, "update parse");
+    assert_eq(str_eq_cstr(update_name(up), "test-pkg"), 1, "update name");
+    assert_eq(str_eq_cstr(update_available_version(up), "2.0.0"), 1, "update available version");
+    return 0;
+}
+
+# RegistryClient: base-url trim, offline guards, fs response cache.
+fn test_remote_client() {
+    test_group("remote-client");
+    var CACHE = "/tmp/mela-test-rc";
+
+    # base_url trailing-slash trim
+    var c1 = registry_client_new(str_from("https://registry.agnos.org/"), str_from(CACHE));
+    assert_eq(str_eq_cstr(client_base_url(c1), "https://registry.agnos.org"), 1, "base_url trimmed");
+    var c2 = registry_client_new(str_from("https://registry.agnos.org"), str_from(CACHE));
+    assert_eq(str_eq_cstr(client_base_url(c2), "https://registry.agnos.org"), 1, "base_url unchanged");
+
+    # offline flag
+    assert_eq(client_is_offline(c2), 0, "default online");
+    client_set_offline(c2, 1);
+    assert_eq(client_is_offline(c2), 1, "set offline");
+
+    # offline guards
+    assert_eq(rc_search(c2, str_from("never-cached-q"), str_from(""), 0, 1), 0, "offline search no cache -> 0");
+    assert_eq(rc_fetch_manifest(c2, str_from("nope"), str_from("1.0.0")), 0, "offline manifest no cache -> 0");
+    assert_eq(rc_download_allowed(c2, str_from("pkg"), str_from("1.0.0")), 0, "offline download blocked");
+    assert_eq(rc_publish_allowed(c2), 0, "offline publish blocked");
+    assert_eq(vec_len(rc_check_updates(c2, vec_new())), 0, "offline updates empty");
+
+    # online guards (c1 is online)
+    assert_eq(rc_download_allowed(c1, str_from("pkg"), str_from("1.0.0")), 1, "online valid download allowed");
+    assert_eq(rc_download_allowed(c1, str_from(".."), str_from("1.0.0")),  0, "online invalid name blocked");
+    assert_eq(rc_publish_allowed(c1), 1, "online publish allowed");
+
+    # fs cache round-trip: write then read back (same query is deterministic)
+    registry_cache_search(c1, str_from("test query"), sresults_new(vec_new(), 0, 1, 20));
+    var cached = registry_cached_search(c1, str_from("test query"));
+    assert_neq(cached, 0, "cached search found");
+    assert_eq(sresults_total(cached), 0, "cached search total 0");
+    assert_eq(registry_cached_search(c1, str_from("never-written-query")), 0, "uncached search -> 0");
+
+    # manifest cache round-trip
+    var m = mk_manifest(str_from("cached-pkg"), str_from("A cached pkg"), str_from("1.0.0"),
+                        str_from("Pub"), str_from("kid12345"));
+    registry_cache_manifest(c1, str_from("cached-pkg"), str_from("1.0.0"), m);
+    var cm = registry_cached_manifest(c1, str_from("cached-pkg"), str_from("1.0.0"));
+    assert_neq(cm, 0, "cached manifest found");
+    assert_eq(str_eq_cstr(man_name(cm), "cached-pkg"), 1, "cached manifest name");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_category();
@@ -676,6 +811,9 @@ fn main() {
     test_registry();
     test_registry_persistence();
     test_registry_signature();
+    test_remote();
+    test_remote_codec();
+    test_remote_client();
     return assert_summary();
 }
 

@@ -35,3 +35,6 @@ Decisions about mela — what we chose, the context, and the consequences we acc
   *Accepted* · `index.json` is a name→record JSON object (manifest nested via the ADR-0001 codec);
   install operates on an already-extracted manifest, with gzip/tar extraction deferred to v0.8.0
   (`sankoch`).
+- [0006 — Remote client HTTP/TLS transport is a deferred seam](0006-remote-client-transport-seam.md) —
+  *Accepted* · URL building, response-type JSON codec, offline guards, and response cache port now;
+  the live `sandhi`/`tls` transport (`_rc_http_get`) defers to the v0.9.0 end-to-end wiring.
