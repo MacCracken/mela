@@ -1,6 +1,6 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-06-17 (v0.4.0) · Live status: [`state.md`](state.md) · Per-version history:
+> **Last Updated**: 2026-06-17 (v0.5.0) · Live status: [`state.md`](state.md) · Per-version history:
 > [`../../CHANGELOG.md`](../../CHANGELOG.md)
 >
 > The path from the **v0.1.0 port scaffold** to a **v1.0 release**. mela is mid-port from Rust
@@ -31,6 +31,14 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 ---
 
 ## Completed
+
+### v0.5.0 — Local registry ✅ (2026-06-17)
+- **`local_registry.rs` index/lifecycle ported** → `src/local_registry.cyr`:
+  `InstalledMarketplacePackage` + `LocalRegistry` (install/uninstall/get/list/search/quota/
+  total-size), `index.json` persisted via stdlib `fs` (ADR-0005), signature-verify gate.
+- install→query→remove round-trips **on disk**; the index survives a reopen (parity-tested);
+  signature valid/wrong-key/unknown-key paths covered; index importer fuzzed. **184/184 tests**.
+- Deferred to v0.8.0 (`sankoch`): gzip/tar tarball extraction + `.sig` sidecar + `count_files`.
 
 ### v0.4.0 — Transparency log ✅ (2026-06-17)
 - **`transparency.rs` ported** → `src/transparency.cyr`: `LogEntry` (`compute_hash` /

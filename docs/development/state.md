@@ -5,8 +5,9 @@
 
 ## Version
 
-**0.4.0** — Transparency log (2026-06-17). `lib.rs` + `trust.rs` + `transparency.rs` ported.
-6208 lines of Rust preserved at `rust-old/` for parity reference.
+**0.5.0** — Local registry (2026-06-17). `lib.rs` + `trust.rs` + `transparency.rs` +
+`local_registry.rs` (index/lifecycle/persistence) ported. 6208 lines of Rust preserved at
+`rust-old/` for parity reference.
 
 ## Toolchain
 
@@ -16,7 +17,8 @@
 ## Source
 
 - Rust reference: 6208 lines at `rust-old/` (frozen, do not edit).
-- Cyrius port: **`lib.rs` + `trust.rs` + `transparency.rs` complete (3 of 9 modules)** —
+- Cyrius port: **`lib.rs` + `trust.rs` + `transparency.rs` + `local_registry.rs`* complete
+  (4 of 9 modules)** —
   - `src/category.cyr` — `MarketplaceCategory` (`cat_name` / `cat_parse`, Rust `Display`/`FromStr`).
   - `src/manifest.cyr` — `PublisherInfo`, `MarketplaceManifest` (`validate` / `qualified_name`),
     `is_valid_semver`, and the JSON codec (`*_to_json` / `*_from_json`, wire format = ADR-0001).
@@ -28,18 +30,23 @@
   - `src/transparency.cyr` — `LogEntry` + `TransparencyLog`: SHA-256 hash-chained append-only
     log (`compute_hash` / `verify_self` / `append` / `verify_chain` / `find` /
     `entries_for_package` / `latest`), JSON codec re-verifying the chain on import (ADR-0004).
-  - `src/main.cyr` wires all five.
-- Remaining (6): `local_registry`, `remote_client`, `ratings`, `sandbox_profiles`,
-  `flutter_packaging`/`flutter_agpkg`. Next milestone: **v0.5.0 local_registry**.
+  - `src/local_registry.cyr` — `InstalledMarketplacePackage` + `LocalRegistry`: install/record/
+    query/search/remove, `index.json` persisted via `fs` (ADR-0005), signature-verify gate.
+  - `src/main.cyr` wires all six.
+- Remaining (5): `remote_client`, `ratings`, `sandbox_profiles`, `flutter_packaging`/
+  `flutter_agpkg`. **\*** `local_registry` gzip/tar tarball extraction (`extract_*_tarball`,
+  `.sig` sidecar, `count_files`) deferred to **v0.8.0** (`sankoch`) — ADR-0005.
+  Next milestone: **v0.6.0 remote_client**.
 
 ## Tests
 
-**147/147** parity tests green (`tests/mela.tcyr` — groups `category`, `semver`, `publisher`,
+**184/184** parity tests green (`tests/mela.tcyr` — groups `category`, `semver`, `publisher`,
 `manifest`, `depgraph-base`, `depgraph-resolve`, `json`, `trust`, `keyversion`, `keyring`,
-`transparency`, `transparency-json`). `trust` includes SHA-256 + RFC 8032 Ed25519 known-answer
-vectors. Fuzz harness at `tests/mela.fcyr` covers the manifest JSON, trust hex/key/signature,
-and transparency-log parsers (survive arbitrary bytes). `cyrius test` is the gate; each ported
-module adds its parity group.
+`transparency`, `transparency-json`, `registry`, `registry-persist`, `registry-signature`).
+`trust` includes SHA-256 + RFC 8032 Ed25519 known-answer vectors; `registry-persist` does a real
+on-disk install→reopen round-trip. Fuzz harness at `tests/mela.fcyr` covers the manifest JSON,
+trust hex/key/signature, transparency-log, and registry-index parsers (survive arbitrary bytes).
+`cyrius test` is the gate; each ported module adds its parity group.
 
 ## Dependencies
 
@@ -60,7 +67,6 @@ _None yet._
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). Next milestone: **v0.5.0 — Local registry** (`local_registry.rs`,
-the largest module at 970 lines; dep gate the manifest model + stdlib `fs`): on-device
-install/record/query/remove, persisted. This is where the on-disk format + `fs` land (and the
-deferred `trust` keyring `load()` can follow).
+See [`roadmap.md`](roadmap.md). Next milestone: **v0.6.0 — Remote client** (`remote_client.rs`,
+4 pub fns, 751 lines; dep gate stdlib `tls`/`tls_native` + `sandhi` HTTP client): search / fetch
+/ download / publish over TLS (no OpenSSL).

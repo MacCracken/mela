@@ -1,0 +1,356 @@
+# local_registry.cyr — file-backed registry of installed packages.
+#
+# Ports rust-old/src/local_registry.rs: the on-device index of installed
+# marketplace packages (install / record / query / search / remove), persisted
+# to `index.json` under the registry root. Hashing + signature verification ride
+# the trust gate (v0.3.0); the manifest model (v0.2.0) is the record payload.
+#
+# Scope (ADR-0005): the gzip/tar tarball extraction (extract_manifest_from_tarball,
+# extract_tarball, the `.sig` sidecar read, count_files) is DEFERRED to the v0.8.0
+# packaging milestone (sankoch). install here operates on an already-extracted
+# manifest + content hash + size. The signature-verify gate is ported as a
+# content+signature check; full install-time enforcement is wired at v0.9.0.
+#
+# timestamps are i64 epochs supplied explicitly (ADR-0003/0004 precedent).
+
+var REG_INDEX_FILENAME = "index.json";
+var REG_INDEX_MAXLEN   = 1048576;        # 1 MiB read buffer for the index
+var REG_DIR_MODE       = 0x1FF;          # 0o777
+
+# ---------------------------------------------------------------------------
+# InstalledMarketplacePackage record
+# ---------------------------------------------------------------------------
+#
+# Layout (8-byte fields):
+#   0  manifest        (MarketplaceManifest*)
+#   8  installed_at    (i64 epoch)
+#   16 install_dir     (Str)
+#   24 package_hash    (Str; SHA-256 hex of the package)
+#   32 auto_update     (i64; 0/1)
+#   40 installed_size  (i64 bytes)
+
+fn imp_new(manifest, installed_at, install_dir: Str, package_hash: Str,
+           auto_update, installed_size): i64 {
+    var p = alloc(48);
+    store64(p,      manifest);
+    store64(p + 8,  installed_at);
+    store64(p + 16, install_dir);
+    store64(p + 24, package_hash);
+    store64(p + 32, auto_update);
+    store64(p + 40, installed_size);
+    return p;
+}
+
+fn imp_manifest(p)            { return load64(p); }
+fn imp_installed_at(p): i64   { return load64(p + 8); }
+fn imp_install_dir(p): Str    { return load64(p + 16); }
+fn imp_package_hash(p): Str   { return load64(p + 24); }
+fn imp_auto_update(p): i64    { return load64(p + 32); }
+fn imp_installed_size(p): i64 { return load64(p + 40); }
+
+# Shorthands off the manifest (Rust name() / version() / publisher()).
+fn imp_name(p): Str      { return man_name(imp_manifest(p)); }
+fn imp_version(p): Str   { return man_version(imp_manifest(p)); }
+fn imp_publisher(p): Str { return pub_name(man_publisher(imp_manifest(p))); }
+
+# ---------------------------------------------------------------------------
+# Install result
+# ---------------------------------------------------------------------------
+#
+#   0 name (Str)  8 version (Str)  16 install_dir (Str)
+#   24 has_upgrade (i64)  32 upgraded_from (Str; valid when has_upgrade==1)
+
+fn instres_name(x): Str          { return load64(x); }
+fn instres_version(x): Str       { return load64(x + 8); }
+fn instres_install_dir(x): Str   { return load64(x + 16); }
+fn instres_has_upgrade(x): i64   { return load64(x + 24); }
+fn instres_upgraded_from(x): Str { return load64(x + 32); }
+
+# ---------------------------------------------------------------------------
+# Index JSON codec (on-disk format pinned in ADR-0005)
+# ---------------------------------------------------------------------------
+
+fn _reg_jstr(o, key): Str {
+    var v = json_v_obj_get(o, key);
+    if (v == 0) { return str_from(""); }
+    if (json_v_is_str(v) == 0) { return str_from(""); }
+    return json_v_str(v);
+}
+fn _reg_jint(o, key): i64 {
+    var v = json_v_obj_get(o, key);
+    if (v == 0) { return 0; }
+    if (json_v_is_int(v) == 0) { return 0; }
+    return json_v_int(v);
+}
+fn _reg_jbool(o, key): i64 {
+    var v = json_v_obj_get(o, key);
+    if (v == 0) { return 0; }
+    if (json_v_is_bool(v) == 0) { return 0; }
+    return json_v_bool(v);
+}
+
+fn _reg_record_to_jv(p): i64 {
+    var o = json_v_obj_new();
+    json_v_obj_set(o, str_from("manifest"),       manifest_to_jv(imp_manifest(p)));
+    json_v_obj_set(o, str_from("installed_at"),   json_v_int_new(imp_installed_at(p)));
+    json_v_obj_set(o, str_from("install_dir"),    json_v_str_new(imp_install_dir(p)));
+    json_v_obj_set(o, str_from("package_hash"),   json_v_str_new(imp_package_hash(p)));
+    json_v_obj_set(o, str_from("auto_update"),    json_v_bool_new(imp_auto_update(p)));
+    json_v_obj_set(o, str_from("installed_size"), json_v_int_new(imp_installed_size(p)));
+    return o;
+}
+
+fn _reg_record_from_jv(o): i64 {
+    if (json_v_is_obj(o) == 0) { return 0; }
+    var manifest = manifest_from_jv(json_v_obj_get(o, "manifest"));
+    if (manifest == 0) { return 0; }
+    return imp_new(manifest, _reg_jint(o, "installed_at"), _reg_jstr(o, "install_dir"),
+                   _reg_jstr(o, "package_hash"), _reg_jbool(o, "auto_update"),
+                   _reg_jint(o, "installed_size"));
+}
+
+# Serialize an index map (name -> record) to a JSON object string.
+fn registry_index_to_json(index): Str {
+    var o = json_v_obj_new();
+    var keys = map_keys(index);
+    var n = vec_len(keys);
+    var i = 0;
+    while (i < n) {
+        var k = vec_get(keys, i);
+        json_v_obj_set(o, k, _reg_record_to_jv(map_get(index, k)));
+        i = i + 1;
+    }
+    return json_v_build(o);
+}
+
+# Parse a JSON index object string into `index`. Returns 1 on success, 0 on a
+# parse error / non-object root (entries that fail to rebuild are skipped).
+fn registry_index_from_json_into(js: Str, index): i64 {
+    var root = json_v_parse_str(str_data(js), str_len(js));   # explicit buf+len (see trust.cyr)
+    if (root == 0) { return 0; }
+    if (json_v_is_obj(root) == 0) { return 0; }
+    var n = json_v_obj_len(root);
+    var i = 0;
+    while (i < n) {
+        var key = json_v_obj_key(root, i);
+        var rec = _reg_record_from_jv(json_v_obj_val(root, i));
+        if (rec != 0) { map_set(index, key, rec); }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# ---------------------------------------------------------------------------
+# LocalRegistry
+# ---------------------------------------------------------------------------
+#
+# Layout (8-byte fields):
+#   0  root_dir          (Str)
+#   8  index             (Str-keyed map: name -> record)
+#   16 keyring           (PublisherKeyring, from trust)
+#   24 transparency_log  (TransparencyLog)
+#   32 storage_quota     (i64; 0 = unlimited)
+
+fn registry_root(r): Str   { return load64(r); }
+fn registry_index(r)       { return load64(r + 8); }
+fn registry_keyring(r)     { return load64(r + 16); }
+fn registry_tlog(r)        { return load64(r + 24); }
+fn registry_quota(r): i64  { return load64(r + 32); }
+fn registry_set_storage_quota(r, q) { store64(r + 32, q); return 0; }
+
+fn _registry_index_path(r): Str {
+    return path_join(registry_root(r), str_from(REG_INDEX_FILENAME));
+}
+
+# Save the index to <root>/index.json (creates root if needed). Returns bytes
+# written, or a negative error. Mirrors Rust `save_index`.
+fn registry_save_index(r): i64 {
+    sys_mkdir(str_data(registry_root(r)), REG_DIR_MODE);   # ok if it already exists
+    var js = registry_index_to_json(registry_index(r));
+    return file_write_all(str_data(_registry_index_path(r)), str_data(js), str_len(js));
+}
+
+# Load the index from disk into the registry (no-op if the file is absent).
+# Mirrors Rust `load_index`.
+fn registry_load_index(r): i64 {
+    var path = _registry_index_path(r);
+    if (file_exists(str_data(path)) == 0) { return 0; }
+    var buf = alloc(REG_INDEX_MAXLEN);
+    var n = file_read_all(str_data(path), buf, REG_INDEX_MAXLEN);
+    if (n <= 0) { return 0; }
+    return registry_index_from_json_into(str_new(buf, n), registry_index(r));
+}
+
+# new(root_dir) — file-backed registry; loads any existing index. Mirrors Rust `new`.
+fn registry_new(root_dir: Str): i64 {
+    var r = alloc(40);
+    store64(r,      root_dir);
+    store64(r + 8,  map_new_str());
+    store64(r + 16, keyring_new());
+    store64(r + 24, tlog_new());
+    store64(r + 32, 0);
+    registry_load_index(r);
+    return r;
+}
+
+# in_memory() — no persistence (root "/dev/null"). Mirrors Rust `in_memory`.
+fn registry_in_memory(): i64 {
+    var r = alloc(40);
+    store64(r,      str_from("/dev/null"));
+    store64(r + 8,  map_new_str());
+    store64(r + 16, keyring_new());
+    store64(r + 24, tlog_new());
+    store64(r + 32, 0);
+    return r;
+}
+
+fn registry_len(r): i64      { return map_size(registry_index(r)); }
+fn registry_is_empty(r): i64 { if (map_size(registry_index(r)) == 0) { return 1; } return 0; }
+fn registry_get_package(r, name: Str): i64 { return map_get(registry_index(r), name); }
+
+# total_installed_size — sum of installed_size across the index. Mirrors Rust.
+fn registry_total_installed_size(r): i64 {
+    var vals = map_values(registry_index(r));
+    var n = vec_len(vals);
+    var i = 0;
+    var total = 0;
+    while (i < n) {
+        total = total + imp_installed_size(vec_get(vals, i));
+        i = i + 1;
+    }
+    return total;
+}
+
+fn registry_packages_dir(r): Str {
+    return path_join(registry_root(r), str_from("packages"));
+}
+
+# install — record an (already-extracted) package: quota check, manifest
+# validate, upgrade detection, index insert, persist. Returns an install-result,
+# or 0 on a quota or validation failure. Mirrors Rust `install_package` minus the
+# tarball extraction (ADR-0005). auto_update defaults to 0, as in Rust.
+fn registry_install(r, manifest, package_hash: Str, installed_size, installed_at): i64 {
+    var quota = registry_quota(r);
+    if (quota > 0) {
+        if (registry_total_installed_size(r) + installed_size > quota) { return 0; }
+    }
+    if (vec_len(manifest_validate(manifest)) != 0) { return 0; }
+
+    var name = man_name(manifest);
+    var version = man_version(manifest);
+
+    var has_up = 0;
+    var up_from = str_from("");
+    var existing = map_get(registry_index(r), name);
+    if (existing != 0) {
+        has_up = 1;
+        up_from = imp_version(existing);
+    }
+
+    var install_dir = path_join(registry_packages_dir(r), name);
+    var rec = imp_new(manifest, installed_at, install_dir, package_hash, 0, installed_size);
+    map_set(registry_index(r), name, rec);
+    registry_save_index(r);
+
+    var res = alloc(40);
+    store64(res,      name);
+    store64(res + 8,  version);
+    store64(res + 16, install_dir);
+    store64(res + 24, has_up);
+    store64(res + 32, up_from);
+    return res;
+}
+
+# uninstall(name) — remove from the index + persist. Returns 1 if removed, 0 if
+# not installed (Rust errors in that case). Mirrors Rust `uninstall_package`
+# (physical install-dir removal deferred with the tarball work, ADR-0005).
+fn registry_uninstall(r, name: Str): i64 {
+    if (map_get(registry_index(r), name) == 0) { return 0; }
+    map_delete(registry_index(r), name);
+    registry_save_index(r);
+    return 1;
+}
+
+# list_installed — all records, sorted by name. Mirrors Rust `list_installed`.
+fn registry_list_installed(r): i64 {
+    var vals = map_values(registry_index(r));
+    var n = vec_len(vals);
+    # selection sort by imp_name (reuses _str_lt from depgraph.cyr)
+    var i = 0;
+    while (i < n) {
+        var min_idx = i;
+        var j = i + 1;
+        while (j < n) {
+            if (_str_lt(imp_name(vec_get(vals, j)), imp_name(vec_get(vals, min_idx))) == 1) { min_idx = j; }
+            j = j + 1;
+        }
+        var tmp = vec_get(vals, i);
+        vec_set(vals, i, vec_get(vals, min_idx));
+        vec_set(vals, min_idx, tmp);
+        i = i + 1;
+    }
+    return vals;
+}
+
+# ASCII-lowercase a Str into a fresh Str (for case-insensitive search).
+fn _reg_to_lower(s: Str): Str {
+    var n = str_len(s);
+    var src = str_data(s);
+    var buf = alloc(n + 1);
+    var i = 0;
+    while (i < n) {
+        var c = load8(src + i);
+        if (c >= 65) { if (c <= 90) { c = c + 32; } }
+        store8(buf + i, c);
+        i = i + 1;
+    }
+    store8(buf + n, 0);
+    return str_new(buf, n);
+}
+
+# True if record matches a lowercased query in name, description, or any tag.
+fn _reg_matches(rec, ql: Str): i64 {
+    if (str_contains(_reg_to_lower(imp_name(rec)), ql) == 1) { return 1; }
+    if (str_contains(_reg_to_lower(man_description(imp_manifest(rec))), ql) == 1) { return 1; }
+    var tags = man_tags(imp_manifest(rec));
+    var n = vec_len(tags);
+    var i = 0;
+    var hit = 0;
+    while (i < n) {
+        if (hit == 0) {
+            if (str_contains(_reg_to_lower(vec_get(tags, i)), ql) == 1) { hit = 1; }
+        }
+        i = i + 1;
+    }
+    return hit;
+}
+
+# search(query) — case-insensitive match on name / description / tags. Mirrors
+# Rust `search`.
+fn registry_search(r, query: Str): i64 {
+    var ql = _reg_to_lower(query);
+    var vals = map_values(registry_index(r));
+    var n = vec_len(vals);
+    var out = vec_new();
+    var i = 0;
+    while (i < n) {
+        var rec = vec_get(vals, i);
+        if (_reg_matches(rec, ql) == 1) { vec_push(out, rec); }
+        i = i + 1;
+    }
+    return out;
+}
+
+# verify a package's signature against a trusted publisher key. Returns 1 if a
+# current key for `key_id` exists and the signature over `content` is valid; 0
+# otherwise (no trusted key, undecodable key, or bad signature). This is the
+# trust gate the registry enforces at install — mirrors the Rust
+# install_package verification branch (get_current_key -> verifying_key ->
+# verify_signature). `now` is explicit (ADR-0003).
+fn registry_verify_package(keyring, key_id: Str, content, content_len, sig, sig_len, now): i64 {
+    var kv = keyring_get_current_key(keyring, key_id, now);
+    if (kv == 0) { return 0; }              # no trusted key for this publisher
+    var pk = kv_verifying_key(kv);
+    if (pk == 0) { return 0; }              # undecodable public key
+    return trust_verify(content, content_len, sig, sig_len, pk);
+}

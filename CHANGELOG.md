@@ -6,6 +6,38 @@ include benchmark numbers; breaking changes get a **Breaking** section with a mi
 
 ## [Unreleased]
 
+## [0.5.0] — Local registry (`local_registry.rs`)
+
+The on-device store: install / record / query / search / remove, persisted to
+`index.json` and reloaded on open. Ports the index + lifecycle half of the
+largest Rust module (970 lines) over stdlib `fs` + the v0.2.0 manifest model.
+**184/184 parity tests** green (was 147), including real on-disk round-trips.
+
+### Added
+- **`src/local_registry.cyr` — `InstalledMarketplacePackage` + `LocalRegistry`.**
+  `registry_install` (quota check, manifest validate, upgrade detection, index
+  insert + persist), `registry_uninstall`, `get_package`, `list_installed`
+  (sorted), `search` (case-insensitive over name / description / tags),
+  `total_installed_size`, `len`, `is_empty`, `set_storage_quota`, `in_memory`.
+- **On-disk index** — `save_index` / `load_index` via stdlib `fs`
+  (`file_write_all` / `file_read_all` / `sys_mkdir`); `index.json` is a
+  name→record JSON object with the manifest nested via the ADR-0001 codec.
+  Install → reopen → query → uninstall → reopen round-trips on disk, parity-tested.
+- **Signature-verify gate** — `registry_verify_package` (current-key lookup →
+  decode key → `trust_verify`): valid signature accepted, tampered content /
+  wrong key / unknown key_id rejected.
+- **`manifest_to_jv` / `manifest_from_jv`** — value-tree entry points so the
+  manifest codec composes inside the index record without re-serializing.
+- **Fuzz** (`tests/mela.fcyr`) extended: the registry index importer survives
+  arbitrary bytes.
+- **ADR**: [0005](docs/adr/0005-registry-index-format-and-tarball-deferral.md) —
+  the `index.json` on-disk format, and deferral of gzip/tar tarball extraction
+  (`extract_*_tarball`, `.sig` sidecar, `count_files`) to v0.8.0 (`sankoch`).
+
+### Notes
+- No new dependency: persistence uses already-vendored stdlib `fs` / `io` /
+  `syscalls`; hashing + verification reuse `sigil` (v0.3.0).
+
 ## [0.4.0] — Transparency log (`transparency.rs`)
 
 Every publication recorded in an append-only, hash-chained log: each entry is

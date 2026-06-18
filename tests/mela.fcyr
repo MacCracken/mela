@@ -9,6 +9,7 @@ include "src/category.cyr"
 include "src/manifest.cyr"
 include "src/trust.cyr"
 include "src/transparency.cyr"
+include "src/local_registry.cyr"
 
 fn fuzz_main(data, len) {
     if (len == 0) { return 0; }
@@ -24,6 +25,9 @@ fn fuzz_main(data, len) {
 
     # transparency log import (v0.4.0): arbitrary bytes -> 0, never a crash
     tlog_from_json(s);
+
+    # registry index import (v0.5.0): arbitrary bytes into a fresh index
+    registry_index_from_json_into(s, map_new_str());
 
     # verify with arbitrary bytes as the public key + a signature derived from
     # the input — must reject (0), never fault.

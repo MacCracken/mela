@@ -8,6 +8,7 @@ include "src/manifest.cyr"
 include "src/depgraph.cyr"
 include "src/trust.cyr"
 include "src/transparency.cyr"
+include "src/local_registry.cyr"
 
 # MarketplaceCategory — parity with rust-old/src/lib.rs (Display + FromStr).
 fn test_category() {
@@ -535,6 +536,129 @@ fn test_transparency_json() {
     return 0;
 }
 
+# --- registry test helpers ---
+
+# Remove any stale index so on-disk reopen tests start clean.
+fn rclean(dir) {
+    sys_unlink(str_data(path_join(str_from(dir), str_from("index.json"))));
+    return 0;
+}
+
+# Sample manifest with a tag (for search-by-tag).
+fn mk_pkg(name, ver) {
+    var m = mk_manifest(str_from(name), str_from("Test package"), str_from(ver),
+                        str_from("Test Publisher"), str_from("abc12345"));
+    vec_push(man_tags(m), str_from("scanner"));
+    return m;
+}
+
+# LocalRegistry in-memory lifecycle — parity with rust-old/src/local_registry.rs.
+fn test_registry() {
+    test_group("registry");
+    var DIR = "/tmp/mela-test-reg";
+    rclean(DIR);
+
+    var reg = registry_new(str_from(DIR));
+    assert_eq(registry_is_empty(reg), 1, "new registry empty");
+    assert_eq(registry_len(reg),      0, "new registry len 0");
+
+    # install + list + get
+    var res = registry_install(reg, mk_pkg("test-pkg", "1.0.0"), str_from("hash1"), 1024, 1000);
+    assert_neq(res, 0, "install ok");
+    assert_eq(str_eq_cstr(instres_name(res),    "test-pkg"), 1, "install result name");
+    assert_eq(str_eq_cstr(instres_version(res), "1.0.0"),    1, "install result version");
+    assert_eq(instres_has_upgrade(res), 0, "install not an upgrade");
+    assert_eq(registry_len(reg),        1, "len 1 after install");
+    var listed = registry_list_installed(reg);
+    assert_eq(vec_len(listed), 1, "list len 1");
+    assert_eq(str_eq_cstr(imp_name(vec_get(listed, 0)), "test-pkg"), 1, "listed name");
+    var pkg = registry_get_package(reg, str_from("test-pkg"));
+    assert_neq(pkg, 0, "get_package found");
+    assert_eq(str_eq_cstr(imp_version(pkg),   "1.0.0"),          1, "get_package version");
+    assert_eq(str_eq_cstr(imp_publisher(pkg), "Test Publisher"), 1, "get_package publisher");
+    assert_eq(registry_total_installed_size(reg), 1024, "total size 1024");
+
+    # upgrade keeps a single entry, reports previous version
+    var res2 = registry_install(reg, mk_pkg("test-pkg", "2.0.0"), str_from("hash2"), 2048, 1001);
+    assert_eq(instres_has_upgrade(res2), 1, "upgrade detected");
+    assert_eq(str_eq_cstr(instres_upgraded_from(res2), "1.0.0"), 1, "upgraded from 1.0.0");
+    assert_eq(str_eq_cstr(instres_version(res2),       "2.0.0"), 1, "upgrade version 2.0.0");
+    assert_eq(registry_len(reg), 1, "upgrade keeps len 1");
+
+    # search (name / tag / miss)
+    assert_eq(vec_len(registry_search(reg, str_from("test"))),    1, "search name match");
+    assert_eq(vec_len(registry_search(reg, str_from("scanner"))), 1, "search tag match");
+    assert_eq(vec_len(registry_search(reg, str_from("zzz"))),     0, "search no match");
+
+    # uninstall
+    assert_eq(registry_uninstall(reg, str_from("test-pkg")), 1, "uninstall ok");
+    assert_eq(registry_is_empty(reg),                        1, "empty after uninstall");
+    assert_eq(registry_uninstall(reg, str_from("nope")),     0, "uninstall nonexistent fails");
+
+    # invalid manifest (empty name) rejected
+    var bad = mk_manifest(str_from(""), str_from("Test"), str_from("1.0.0"), str_from("P"), str_from("k"));
+    assert_eq(registry_install(reg, bad, str_from("h"), 10, 1002), 0, "invalid manifest rejected");
+
+    # storage quota
+    var qreg = registry_in_memory();
+    registry_set_storage_quota(qreg, 1);
+    assert_eq(registry_install(qreg, mk_pkg("q", "1.0.0"), str_from("h"), 100, 1000), 0, "quota exceeded rejected");
+    return 0;
+}
+
+# On-disk persistence — install, reopen, verify the index survived. Mirrors
+# rust-old test_persistence.
+fn test_registry_persistence() {
+    test_group("registry-persist");
+    var DIR = "/tmp/mela-test-reg-persist";
+    rclean(DIR);
+
+    var r1 = registry_new(str_from(DIR));
+    registry_install(r1, mk_pkg("persist-pkg", "1.0.0"), str_from("hashX"), 512, 1000);
+    assert_eq(registry_len(r1), 1, "installed in r1");
+
+    # reopen: a fresh registry loads the index from disk
+    var r2 = registry_new(str_from(DIR));
+    assert_eq(registry_len(r2), 1, "reopened len 1");
+    var pkg = registry_get_package(r2, str_from("persist-pkg"));
+    assert_neq(pkg, 0, "reopened get_package");
+    assert_eq(str_eq_cstr(imp_version(pkg),      "1.0.0"), 1, "reopened version");
+    assert_eq(str_eq_cstr(imp_package_hash(pkg), "hashX"), 1, "reopened package_hash");
+    assert_eq(imp_installed_size(pkg),           512,         "reopened installed_size");
+    assert_eq(imp_installed_at(pkg),             1000,        "reopened installed_at");
+
+    # uninstall persists too
+    registry_uninstall(r2, str_from("persist-pkg"));
+    var r3 = registry_new(str_from(DIR));
+    assert_eq(registry_is_empty(r3), 1, "reopened empty after uninstall");
+    return 0;
+}
+
+# Signature-verify gate — parity with rust-old install signature branch.
+fn test_registry_signature() {
+    test_group("registry-signature");
+    var NOW = 1000;
+    var sk[64];
+    var pk[32];
+    var key_id = trust_keypair_from_seed(hex_decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", 64), &sk, &pk);
+    var kr = keyring_new();
+    keyring_add_key(kr, kv_new(key_id, NOW - 100, 0, 0, trust_hex_encode(&pk, 32)));
+    var sig = trust_sign(&sk, "package bytes", 13);
+
+    assert_eq(registry_verify_package(kr, key_id, "package bytes", 13, sig, 64, NOW), 1, "valid signature accepted");
+    assert_eq(registry_verify_package(kr, key_id, "tampered byte", 13, sig, 64, NOW), 0, "tampered content rejected");
+    assert_eq(registry_verify_package(kr, str_from("deadbeefdeadbeef"), "package bytes", 13, sig, 64, NOW), 0, "unknown key_id rejected");
+
+    # keyring carries a DIFFERENT key under the same key_id -> verify fails
+    var sk2[64];
+    var pk2[32];
+    trust_keypair_from_seed(hex_decode("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb", 64), &sk2, &pk2);
+    var kr2 = keyring_new();
+    keyring_add_key(kr2, kv_new(key_id, NOW - 100, 0, 0, trust_hex_encode(&pk2, 32)));
+    assert_eq(registry_verify_package(kr2, key_id, "package bytes", 13, sig, 64, NOW), 0, "wrong key rejected");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_category();
@@ -549,6 +673,9 @@ fn main() {
     test_keyring();
     test_transparency();
     test_transparency_json();
+    test_registry();
+    test_registry_persistence();
+    test_registry_signature();
     return assert_summary();
 }
 

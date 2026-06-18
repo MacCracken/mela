@@ -31,3 +31,7 @@ Decisions about mela — what we chose, the context, and the consequences we acc
 - [0004 — Transparency log timestamp is an i64 epoch](0004-transparency-timestamp-epoch.md) —
   *Accepted* · `LogEntry.timestamp` is an explicit `i64` epoch (not chrono), hashed as its
   decimal form and serialized as a JSON int; the chain stays self-consistent + tamper-evident.
+- [0005 — Registry on-disk index format + tarball-extraction deferral](0005-registry-index-format-and-tarball-deferral.md) —
+  *Accepted* · `index.json` is a name→record JSON object (manifest nested via the ADR-0001 codec);
+  install operates on an already-extracted manifest, with gzip/tar extraction deferred to v0.8.0
+  (`sankoch`).

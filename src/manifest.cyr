@@ -304,10 +304,11 @@ fn publisher_from_json(json: Str): i64 {
                          _man_jstr(root, "homepage"));
 }
 
-# manifest_to_json — serialize per ADR-0001 (flattened agent identity at top
-# level, publisher nested, category as PascalCase, default fields always
-# emitted).
-fn manifest_to_json(m): Str {
+# manifest_to_jv — build the JSON value object per ADR-0001 (flattened agent
+# identity at top level, publisher nested, category as PascalCase, default
+# fields always emitted). Returned as a json_v so it can nest (e.g. inside a
+# registry index record); manifest_to_json just serializes it.
+fn manifest_to_jv(m): i64 {
     var o = json_v_obj_new();
     json_v_obj_set(o, str_from("name"),        json_v_str_new(man_name(m)));
     json_v_obj_set(o, str_from("version"),     json_v_str_new(man_version(m)));
@@ -338,15 +339,12 @@ fn manifest_to_json(m): Str {
     }
     json_v_obj_set(o, str_from("dependencies"), deps);
     json_v_obj_set(o, str_from("tags"), _man_arr_from_vec(man_tags(m)));
-
-    return json_v_build(o);
+    return o;
 }
 
-# manifest_from_json — parse per ADR-0001. Returns a MarketplaceManifest, or 0
-# on a JSON parse error / non-object root. Missing default fields become empty.
-fn manifest_from_json(json: Str): i64 {
-    var root = json_v_parse_str(str_data(json), str_len(json));   # see publisher_from_json
-    if (root == 0) { return 0; }
+# manifest_from_jv — build a MarketplaceManifest from a parsed JSON object value,
+# or 0 if it isn't an object. Missing default fields become empty.
+fn manifest_from_jv(root): i64 {
     if (json_v_is_obj(root) == 0) { return 0; }
 
     var name = _man_jstr(root, "name");
@@ -385,4 +383,16 @@ fn manifest_from_json(json: Str): i64 {
         }
     }
     return m;
+}
+
+# manifest_to_json / from_json — serialize per ADR-0001. from_json returns 0 on a
+# JSON parse error / non-object root.
+fn manifest_to_json(m): Str {
+    return json_v_build(manifest_to_jv(m));
+}
+
+fn manifest_from_json(json: Str): i64 {
+    var root = json_v_parse_str(str_data(json), str_len(json));   # see publisher_from_json
+    if (root == 0) { return 0; }
+    return manifest_from_jv(root);
 }
