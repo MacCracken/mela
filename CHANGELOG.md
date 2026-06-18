@@ -6,6 +6,20 @@ include benchmark numbers; breaking changes get a **Breaking** section with a mi
 
 ## [Unreleased]
 
+## [0.9.5] — Format-agnostic artifact fetch (consumable by ark)
+
+### Added
+
+- **`mela_fetch_artifact(c, name, version, dest_path)`** — the consumer-facing
+  download primitive. Fetches the artifact over the sandhi transport and writes
+  the body **verbatim to a caller-chosen path**, making **no assumption about
+  the artifact type**. `rc_download` (mela's agent flow) now builds on it but
+  keeps its `.agnos-agent` convention. This unblocks **ark**, whose packages are
+  takumi `.ark` binaries, not mela `.agnos-agent` bundles: ark passes its own
+  `.ark` cache path and interprets the bytes with its own installer, instead of
+  being forced into mela's agent-bundle layout/extension. 492 tests (+2 guards);
+  `dist/mela.cyr` regenerated.
+
 ## [0.9.4] — Every load-bearing seam is now real on disk
 
 The remaining "deferred" stubs are gone: artifact fetch+write, uninstall file

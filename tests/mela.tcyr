@@ -1165,6 +1165,13 @@ fn test_transport() {
     assert_eq(rc_publish(off, str_from("bytes"), str_from("p.agnos-agent"), str_from("tok")), 0, "offline publish -> 0");
     var on = registry_client_new(str_from("http://127.0.0.1:1/"), str_from("/tmp/mela-dl-guard"));
     assert_eq(rc_download(on, str_from("../evil"), str_from("1.0.0")), 0, "invalid-name download -> 0");
+    # format-agnostic fetch (0.9.5): same no-network guards, caller-chosen dest.
+    assert_eq(mela_fetch_artifact(off, str_from("p"), str_from("1.0.0"),
+                                  str_from("/tmp/mela-dl-guard/p.ark")), 0,
+              "offline fetch_artifact -> 0");
+    assert_eq(mela_fetch_artifact(on, str_from("../evil"), str_from("1.0.0"),
+                                  str_from("/tmp/mela-dl-guard/x.ark")), 0,
+              "invalid-name fetch_artifact -> 0");
     return 0;
 }
 
