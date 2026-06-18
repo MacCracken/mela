@@ -81,5 +81,12 @@ fn pipeline_install(reg, keyring, bundle, sig, sig_len, expected_hash: Str, now)
     }
 
     if (vec_len(manifest_validate(manifest)) != 0) { return 0; }
-    return registry_install(reg, manifest, package_hash, len, now);
+    var res = registry_install(reg, manifest, package_hash, len, now);
+    if (res != 0) {
+        # actually unpack the bundle onto disk under the install dir (real
+        # extraction, ADR-0005; the zip-slip guard runs per entry). A no-op for
+        # an in-memory registry (/dev/null root) — file writes just fail closed.
+        agpkg_extract_to_dir(data, len, instres_install_dir(res));
+    }
+    return res;
 }

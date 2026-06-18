@@ -15,7 +15,7 @@ surface is in [`../api/`](../api/), per-module status in
 |--------|------|--------|
 | `category` + `manifest` + `depgraph` | Core types — `MarketplaceManifest`, `MarketplaceCategory`, `PublisherInfo`; the `DependencyGraph` / `DepNode` resolver | ✅ ported |
 | `local_registry` | The on-device registry — installed/cached artifacts, `index.json`, query | ✅ ported (fs-backed) |
-| `remote_client` | Remote marketplace client — search / fetch / download / publish | ✅ ported (HTTP/TLS transport = deferred seam, ADR-0006) |
+| `remote_client` | Remote marketplace client — search / fetch / download / publish | ✅ ported (real HTTP+HTTPS+DNS via `sandhi`) |
 | `trust` | Ed25519 publisher-signature verification; SHA-256 download integrity gating | ✅ ported (via `sigil`) |
 | `transparency` | Append-only, hash-chained transparency log of published artifacts | ✅ ported |
 | `ratings` | Ratings & reviews | ✅ ported |
@@ -64,7 +64,9 @@ non-malleable (RFC 8032 §5.1.7, via `sigil`); see [`../development/threat-model
   `.agnos-agent` packer (replaces `flate2`; tar is hand-rolled ustar, ADR-0008).
 - stdlib `bayan` (JSON), `fs`, `hashmap`, etc. The Rust oracle's crates
   (`reqwest`/rustls, `tar`, `tokio`, `serde`, `uuid`, `chrono`, `tracing`) are replaced by the
-  Cyrius stdlib + the deps above; the live HTTP/TLS transport is a deferred seam (ADR-0006).
+  Cyrius stdlib + the deps above.
+- **[`sandhi`](https://github.com/MacCracken/sandhi)** — the HTTP/HTTPS client (DNS resolver +
+  TLS) backing `remote_client`'s transport (replaces `reqwest`/rustls).
 
 ## Planned boundaries
 

@@ -596,6 +596,40 @@ fn agpkg_read_entry(data, len, name: Str): i64 {
     return found;
 }
 
+# agpkg_extract_to_dir — gunzip + extract every safe regular-file entry of the
+# bundle to disk under `dest` (creating parent dirs), applying the zip-slip /
+# symlink guard per entry. Returns the number of files written, or -1 on a
+# decompress error. This is the real on-disk extractor (closes ADR-0005).
+fn agpkg_extract_to_dir(data, len, dest: Str): i64 {
+    var dst = alloc(AGPKG_BUF_MAXLEN);
+    var dlen = gzip_decompress(data, len, dst, AGPKG_BUF_MAXLEN);
+    if (dlen < 0) { return 0 - 1; }
+    _rc_mkdir_p(dest);
+    var off = 0;
+    var go = 1;
+    var count = 0;
+    while (go == 1) {
+        if (off + 512 > dlen) { go = 0; }
+        else {
+            if (load8(dst + off) == 0) { go = 0; }
+            else {
+                var esize = _tar_read_size(dst, off);
+                if (_tar_entry_safe(dst, off) == 1) {       # zip-slip / symlink guard
+                    if (off + 512 + esize <= dlen) {
+                        var outpath = path_join(dest, _tar_read_name(dst, off));
+                        _rc_mkdir_p(path_dirname(outpath));   # ensure parent dirs
+                        if (file_write_all(str_data(outpath), dst + off + 512, esize) >= 0) {
+                            count = count + 1;
+                        }
+                    }
+                }
+                off = off + 512 + _roundup512(esize);
+            }
+        }
+    }
+    return count;
+}
+
 # Gunzip + parse a gzipped-ustar byte buffer; returns a Vec of entry-name Strs,
 # or 0 on a decompress error. Robust to arbitrary input (bounds-checked) — the
 # fuzz entry point.

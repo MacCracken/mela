@@ -6,6 +6,41 @@ include benchmark numbers; breaking changes get a **Breaking** section with a mi
 
 ## [Unreleased]
 
+## [0.9.2] — Consumable library + the deferred work, actually done
+
+Closes the gaps that were standing between 0.9.1 and a real v1.0: mela now ships
+as a **library ark can consume**, and the two pieces previously stubbed/deferred
+— on-disk extraction and network transport — are **implemented and proven**, not
+ADR-deferred. **472/472 parity tests** green (was 463; the live HTTP/HTTPS fetch is a bash demo,
+not in `cyrius test`).
+
+### Added
+- **Library packaging (ADR-0010)** — `[lib]` section + `cyrius distlib` →
+  **`dist/mela.cyr`**, the single-file bundle downstream consumers pull via
+  `[deps.mela] modules = ["dist/mela.cyr"]`. mela was binary-only (no `[lib]`,
+  no bundle), so ark could not depend on it. Proven: a program including *only*
+  `dist/mela.cyr` runs `cat_parse`, `manifest_validate`, and the full
+  `pipeline_install` (both trust gates) successfully.
+- **Real on-disk tarball extraction (ADR-0005 resolved)** — `agpkg_extract_to_dir`
+  unpacks a gzipped-ustar bundle to disk (gunzip + per-entry zip-slip guard +
+  parent-dir creation + write); `pipeline_install` now **extracts onto the
+  install dir** after the gates pass. Tested on disk (`extraction` group: files
+  written, content re-parses, a `../escaped.so` entry is *not* written).
+- **Real HTTP + HTTPS transport (ADR-0006 resolved)** — `_rc_http_get` rides
+  **`sandhi`**'s full HTTP client: URL parse → **DNS resolution** → **TLS** (for
+  `https://`) → HTTP/1.1-or-H2 → response framing, over real sockets.
+  `rc_search` / `rc_fetch_manifest` run the live online flow (build URL → fetch →
+  parse → cache). **Proven live both ways**: HTTP from `python3 -m http.server`
+  returned the served manifest, and **`https://example.com/` returned the real
+  page** — i.e. sandhi resolved the name, completed the TLS handshake, and
+  fetched over HTTPS. No IPv4-only / no-HTTPS caveats: sandhi handles all of it.
+
+### Dependencies
+- Added **`sandhi`** (`dist/sandhi.cyr`, tag 1.6.7) — the HTTP/HTTPS client
+  (DNS + TLS), replacing Rust `reqwest`; plus its stdlib transitive set (`net`,
+  `async`, `atomic`, `mmap`, `dynlib`, `fdlopen`, `regression`, `http`, `tls`,
+  `ws`).
+
 ## [0.9.1] — API freeze + documentation cleanup
 
 Freezes the public surface and reconciles the docs with the shipped port.

@@ -1,6 +1,6 @@
 [package]
 name = "mela"
-version = "0.9.1"
+version = "0.9.2"
 description = "mela — Cyrius port (from 6208 lines of Rust)"
 license = "GPL-3.0-only"
 language = "cyrius"
@@ -9,6 +9,27 @@ cyrius = "6.2.19"
 [build]
 entry = "src/main.cyr"
 output = "mela"
+
+# `[lib]` declares the src modules `cyrius distlib` concatenates into
+# dist/mela.cyr — the single-file bundle downstream consumers (ark) pull via
+# `[deps.mela] modules = ["dist/mela.cyr"]`. Order = src/main.cyr's include
+# chain (dependency order). Consumers also pin mela's own deps (agnostik / sigil
+# / sankoch + the stdlib list below).
+[lib]
+modules = [
+    "src/category.cyr",
+    "src/manifest.cyr",
+    "src/depgraph.cyr",
+    "src/trust.cyr",
+    "src/transparency.cyr",
+    "src/local_registry.cyr",
+    "src/remote_client.cyr",
+    "src/sandbox_profiles.cyr",
+    "src/ratings.cyr",
+    "src/flutter_packaging.cyr",
+    "src/flutter_agpkg.cyr",
+    "src/pipeline.cyr",
+]
 
 [deps]
 # Base stdlib + the modules agnostik's dist bundle needs (hashmap/tagged/result/
@@ -22,6 +43,10 @@ stdlib = [
     # 6.2.19 stdlib snapshot module (no separate git dep needed).
     "fs", "freelist", "slice", "process", "sakshi", "ct", "keccak",
     "thread", "thread_local", "random", "bench",
+    # net + sandhi's transitive stdlib: the remote_client HTTP/HTTPS transport
+    # rides sandhi's full client (DNS resolver + TLS), not a hand-rolled socket.
+    "net", "async", "atomic", "mmap", "dynlib", "fdlopen", "regression",
+    "http", "tls", "ws",
 ]
 
 # agnostik — the Cyrius shared-types crate; supplies the AgentManifest that
@@ -50,3 +75,12 @@ git = "https://github.com/MacCracken/sankoch.git"
 path = "../sankoch"
 tag = "2.4.3"
 modules = ["dist/sankoch.cyr"]
+
+# sandhi — the Cyrius HTTP client (HTTP/1.1 + H2, TLS, and a real DNS resolver).
+# Backs the remote_client transport: sandhi_http_get_auto does connect → TLS →
+# request → response over real sockets, hostname-resolved. (replaces Rust reqwest)
+[deps.sandhi]
+git = "https://github.com/MacCracken/sandhi.git"
+path = "../sandhi"
+tag = "1.6.7"
+modules = ["dist/sandhi.cyr"]

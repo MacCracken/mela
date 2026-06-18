@@ -1,7 +1,15 @@
 # 0005 — Registry on-disk index format + tarball-extraction deferral
 
-**Status**: Accepted
+**Status**: Accepted · **tarball extraction implemented in v0.9.2**
 **Date**: 2026-06-17
+
+> **Update (v0.9.2):** the deferral below is **resolved**. `agpkg_extract_to_dir`
+> (`src/flutter_agpkg.cyr`) unpacks a gzipped-ustar bundle to disk — gunzip +
+> per-entry `_tar_entry_safe` zip-slip guard + parent-dir creation + write —
+> and `pipeline_install` now extracts onto the install dir after the gates pass.
+> Tested on disk (`extraction` group: files written, content re-parses, a
+> `../escaped.so` entry is **not** written). The text below is the original
+> rationale for the temporary deferral.
 
 ## Context
 

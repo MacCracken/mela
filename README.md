@@ -11,14 +11,14 @@ a package manager's convenience with a supply-chain auditor's guarantees.
   Cyrius port under `src/`)
 - **License**: GPL-3.0-only
 - **Genesis repo**: [agnosticos](https://github.com/MacCracken/agnosticos)
-- **Status**: pre-1.0 (**v0.9.x**) — see [`docs/development/state.md`](docs/development/state.md)
+- **Status**: pre-1.0 (**v0.9.x**) — binary **and** library (`dist/mela.cyr`) — see [`docs/development/state.md`](docs/development/state.md)
 
 > **Port complete; hardening for 1.0.** All 9 Rust modules are ported to Cyrius (the 6208-line
 > Rust implementation stays frozen at [`rust-old/`](rust-old/) as the **parity oracle**, retired
 > after v1.0). The end-to-end publish→verify→install flow is wired with **both trust gates
 > enforced**, a pre-release [security audit](docs/audit/) + [threat model](docs/development/threat-model.md)
 > are in place, and the public API is frozen ([`docs/api/`](docs/api/)). The trust properties below
-> are **shipped and tested** (457+ parity tests), not aspirations.
+> are **shipped and tested** (472 parity tests), not aspirations.
 > [`docs/development/state.md`](docs/development/state.md) tracks live status.
 
 ## Why Mela
@@ -48,21 +48,50 @@ Cyrius under `src/`:
 | `trust` | Ed25519 signature verification, publisher trust, SHA-256 integrity gating | ✅ `src/trust.cyr` (sigil; RFC 8032 KAT) |
 | `transparency` | Append-only, hash-chained transparency log of published artifacts | ✅ `src/transparency.cyr` |
 | `local_registry` | On-device registry — installed/cached artifacts, local index, query | ✅ `src/local_registry.cyr` (fs-backed) |
-| `remote_client` | Remote marketplace client — search / fetch / download / publish (transport seam) | ✅ `src/remote_client.cyr` |
+| `remote_client` | Remote marketplace client — search / fetch / download / publish (real HTTP+HTTPS+DNS via `sandhi`) | ✅ `src/remote_client.cyr` |
 | `sandbox_profiles` | Per-app capability/sandbox profiles surfaced before install | ✅ `src/sandbox_profiles.cyr` |
 | `ratings` | Ratings & reviews | ✅ `src/ratings.cyr` |
 | `flutter_packaging` / `flutter_agpkg` | Flutter app → `.agnos-agent` build + gzip/ustar archive | ✅ `src/flutter_{packaging,agpkg}.cyr` (sankoch) |
 | *(wiring)* `pipeline` | End-to-end publish→sign→log→verify→install, both gates enforced | ✅ `src/pipeline.cyr` |
 
-All 9 Rust modules ported; **457+ parity tests** green, every external-data parser fuzzed. See
+All 9 Rust modules ported; **472 parity tests** green, every external-data parser fuzzed. See
 [`docs/api/`](docs/api/) for the frozen public surface and
 [`docs/benchmarks-rust-v-cyrius.md`](docs/benchmarks-rust-v-cyrius.md) for hot-path numbers.
+
+## Consuming mela (e.g. ark)
+
+mela ships a single-file bundle at `dist/mela.cyr` (regenerate with `cyrius distlib`). To depend on it:
+
+```toml
+# consumer cyrius.cyml
+[deps.mela]
+git = "https://github.com/MacCracken/mela.git"
+modules = ["dist/mela.cyr"]
+# plus mela's own deps:
+[deps.agnostik]   # dist/agnostik.cyr
+[deps.sigil]      # dist/sigil.cyr   — Ed25519 + SHA-256
+[deps.sankoch]    # dist/sankoch.cyr — gzip
+[deps.sandhi]     # dist/sandhi.cyr  — HTTP/HTTPS client (DNS + TLS)
+# and the stdlib mela uses (string, vec, str, hashmap, bayan, fs, net, tls, async, …)
+```
+
+```cyrius
+include "lib/thread_local.cyr"   # required if you call the trust/pipeline path (sigil crypto bank)
+include "dist/mela.cyr"
+# now: cat_parse(...), manifest_validate(...), pipeline_install(reg, keyring, bundle, sig, 64, hash, now), …
+```
+
+See [`docs/api/`](docs/api/) for the frozen surface. (Verified: a program including only
+`dist/mela.cyr` runs the full publish→verify→install pipeline.)
 
 ## Where it sits
 
 - **Consumers**: [`ark`](https://github.com/MacCracken/ark) (pulls marketplace packages),
   [`daimon`](https://github.com/MacCracken/daimon) (agent discovery).
-- **Depends on**: [`sigil`](https://github.com/MacCracken/sigil) (trust/crypto boundary).
+- **Depends on**: [`sigil`](https://github.com/MacCracken/sigil) (Ed25519/SHA-256),
+  [`agnostik`](https://github.com/MacCracken/agnostik) (shared types),
+  [`sankoch`](https://github.com/MacCracken/sankoch) (gzip),
+  [`sandhi`](https://github.com/MacCracken/sandhi) (HTTP/HTTPS client).
 - **Planned — not yet scaffolded**: `mudra` (asset identity / ownership primitives) +
   `vinimaya` (atomic transfers / escrow / settlement), the value/transaction cluster for
   **paid distribution**. Neither repo exists yet; the paid-distribution surface is future work

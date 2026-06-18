@@ -47,4 +47,7 @@ Decisions about mela — what we chose, the context, and the consequences we acc
   format is cross-validated against the system `tar` both directions (rust-old can't be built).
 - [0009 — End-to-end pipeline + trust-gate enforcement](0009-end-to-end-pipeline-and-gate-enforcement.md) —
   *Accepted* · `src/pipeline.cyr` wires package→sign→log→verify→install; both trust gates
-  (signature + digest) are enforced at install; transport stays a local seam (ADR-0006).
+  (signature + digest) are enforced at install. *(v0.9.2: install now extracts to disk.)*
+- [0010 — Ship mela as a consumable library (dist bundle)](0010-library-packaging-dist-bundle.md) —
+  *Accepted (v0.9.2)* · `[lib]` + `cyrius distlib` → `dist/mela.cyr`; the bundle ark consumes via
+  `[deps.mela]`. Proven by a dist-only consumer running the full pipeline.

@@ -1084,6 +1084,51 @@ fn test_hardening() {
     return 0;
 }
 
+# Transport (sandhi-backed). The real HTTP/HTTPS+DNS fetch is exercised live in
+# the v0.9.2 CHANGELOG demo (local server + httpbin.org); in-process we just
+# confirm the no-network guard so `cyrius test` never opens a socket.
+fn test_transport() {
+    test_group("transport");
+    assert_eq(_rc_http_get(str_from("")), 0, "empty url -> 0 (no socket)");
+    return 0;
+}
+
+# Real on-disk extraction — pack a bundle, extract to disk, verify the files.
+fn test_extraction() {
+    test_group("extraction");
+    var DIR = "/tmp/mela-extract";
+    sys_unlink(str_data(path_join(str_from(DIR), str_from("manifest.json"))));
+    sys_unlink(str_data(path_join(str_from(DIR), str_from("sandbox.json"))));
+
+    var agent = mk_agent(str_from("extract-pkg"), str_from("d"));
+    var manifest = manifest_new(agent, publisher_new(str_from("P"), str_from("k"), str_from("")), CAT_UTILITY, str_from("1.0.0"));
+    var bundle = pipeline_package(manifest, generate_sandbox_profile(mk_pfconfig()));
+
+    var n = agpkg_extract_to_dir(str_data(bundle), str_len(bundle), str_from(DIR));
+    assert_eq(n, 2, "extracted 2 files");
+    assert_eq(file_exists(str_data(path_join(str_from(DIR), str_from("manifest.json")))), 1, "manifest.json on disk");
+    assert_eq(file_exists(str_data(path_join(str_from(DIR), str_from("sandbox.json")))), 1, "sandbox.json on disk");
+    # the extracted manifest.json re-parses to the same package
+    var buf = alloc(65536);
+    var rn = file_read_all(str_data(path_join(str_from(DIR), str_from("manifest.json"))), buf, 65536);
+    var reparsed = manifest_from_json(str_new(buf, rn));
+    assert_neq(reparsed, 0, "extracted manifest re-parses");
+    assert_eq(str_eq_cstr(man_name(reparsed), "extract-pkg"), 1, "extracted manifest name");
+
+    # zip-slip entry is NOT written to disk
+    var EDIR = "/tmp/mela-extract-evil";
+    var evil = vec_new();
+    var blob = str_from("x");
+    vec_push(evil, tentry_new(str_from("../escaped.so"), str_data(blob), str_len(blob)));
+    vec_push(evil, tentry_new(str_from("ok.txt"),        str_data(blob), str_len(blob)));
+    var ebundle = _gzip_str(_tar_build(evil));
+    var en = agpkg_extract_to_dir(str_data(ebundle), str_len(ebundle), str_from(EDIR));
+    assert_eq(en, 1, "only the safe entry extracted");
+    assert_eq(file_exists(str_data(path_join(str_from(EDIR), str_from("ok.txt")))), 1, "safe file written");
+    assert_eq(file_exists("/tmp/mela-extract-evil/../escaped.so"), 0, "traversal file NOT written");
+    return 0;
+}
+
 # End-to-end pipeline: package -> sign+log -> verify (both gates) -> install.
 fn test_pipeline() {
     test_group("pipeline");
@@ -1440,6 +1485,8 @@ fn main() {
     test_agpkg();
     test_agpkg_archive();
     test_hardening();
+    test_transport();
+    test_extraction();
     test_pipeline();
     return assert_summary();
 }

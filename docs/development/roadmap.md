@@ -1,6 +1,6 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-06-17 (v0.9.1) · Live status: [`state.md`](state.md) · Per-version history:
+> **Last Updated**: 2026-06-17 (v0.9.2) · Live status: [`state.md`](state.md) · Per-version history:
 > [`../../CHANGELOG.md`](../../CHANGELOG.md)
 >
 > The path from the **v0.1.0 port scaffold** to a **v1.0 release**. mela is mid-port from Rust
@@ -31,6 +31,17 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 ---
 
 ## Completed
+
+### v0.9.2 — Consumable library + the deferred work, done ✅ (2026-06-17)
+- **Library packaging (ADR-0010)**: `[lib]` + `cyrius distlib` → `dist/mela.cyr`. mela was
+  binary-only, so ark couldn't depend on it; now it can (`[deps.mela]`). Proven: a dist-only
+  consumer runs the full pipeline.
+- **Real on-disk extraction (ADR-0005 resolved)**: `agpkg_extract_to_dir`; `pipeline_install`
+  extracts to disk after the gates. Tested (files written, traversal blocked).
+- **Real HTTP+HTTPS+DNS transport (ADR-0006 resolved)**: `_rc_http_get` rides `sandhi`. Proven
+  live — local HTTP server **and** `https://example.com/` (DNS + TLS). **472/472 tests** green
+  (the live fetch is a bash demo, not in `cyrius test`).
+- No deferred seams remain.
 
 ### v0.9.1 — API freeze + documentation cleanup ✅ (2026-06-17)
 - **`docs/api/`** — the frozen, v1.0-bound public surface (conventions + per-module stable

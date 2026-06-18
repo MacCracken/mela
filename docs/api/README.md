@@ -110,8 +110,9 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
 
 ## remote_client — `src/remote_client.cyr`
 
-> The live HTTP/TLS transport is a deferred seam (ADR-0006); the URL/encode/parse/cache/offline
-> surface below is stable.
+> Transport is real: `_rc_http_get` rides `sandhi` (DNS + TLS + HTTP/1.1/H2). `rc_search` /
+> `rc_fetch_manifest` perform live fetches (and cache the result); the offline branches fall back
+> to the cache.
 
 - `url_encode(Str): Str`; `sanitize_filename(Str): Str`; `validate_path_segment(Str): i64`.
 - URL builders: `build_search_url(base, query, category, has_category, page)`;
@@ -198,7 +199,6 @@ The end-to-end flow (ADR-0009); both trust gates are enforced at install.
 ## Stability notes
 
 - **Error model**: `0` for failure/absence; no panics. Callers check for `0`.
-- **Deferred seams** (not yet wired, ADR-tracked): live `remote_client` HTTP/TLS transport
-  (ADR-0006); on-disk tarball extraction (ADR-0005). Their *interfaces* above are stable; the
-  install path (`pipeline_install`) is unchanged when they land.
+- **Fully wired (v0.9.2)**: HTTP+HTTPS+DNS transport (via `sandhi`) and on-disk tarball
+  extraction (`agpkg_extract_to_dir`, run by `pipeline_install`) — no remaining deferred seams.
 - **Internal** (`_`-prefixed, e.g. `_tar_*`, `_man_*`, `_rc_*`): not part of this contract.

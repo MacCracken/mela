@@ -1,7 +1,18 @@
 # 0006 — Remote client HTTP/TLS transport is a deferred seam
 
-**Status**: Accepted
+**Status**: Superseded by the v0.9.2 implementation — transport is real (sandhi)
 **Date**: 2026-06-17
+
+> **Update (v0.9.2): the seam is gone — transport is fully implemented via
+> `sandhi`.** `_rc_http_get` (`src/remote_client.cyr`) calls
+> `sandhi_http_get_auto`, which does URL parse → **DNS resolution** → **TLS**
+> (https) → HTTP/1.1-or-H2 → response framing over real sockets. `rc_search` /
+> `rc_fetch_manifest` run the live online flow. **Proven both ways**: HTTP from a
+> local `python3 -m http.server`, and `https://example.com/` (DNS + TLS) returning
+> the real page. There are **no** IPv4-only or HTTPS-pending caveats — that
+> earlier framing was wrong (sandhi ships a DNS resolver + TLS; this ADR's whole
+> "sandhi is too heavy / server-only" premise below was mistaken). The text below
+> is the original (superseded) rationale, kept for history.
 
 ## Context
 
