@@ -10,6 +10,8 @@ include "src/trust.cyr"
 include "src/transparency.cyr"
 include "src/local_registry.cyr"
 include "src/remote_client.cyr"
+include "src/sandbox_profiles.cyr"
+include "src/ratings.cyr"
 
 # MarketplaceCategory — parity with rust-old/src/lib.rs (Display + FromStr).
 fn test_category() {
@@ -794,6 +796,280 @@ fn test_remote_client() {
     return 0;
 }
 
+# 3 ratings: pkg-a{agent-1:5, agent-2:3}, pkg-b{agent-1:4}. Increasing timestamps.
+fn mk_rstore() {
+    var s = rstore_new();
+    rstore_add_rating(s, str_from("agent-1"), str_from("pkg-a"), 5, 1, str_from("Great!"), str_from("1.0.0"), 100);
+    rstore_add_rating(s, str_from("agent-2"), str_from("pkg-a"), 3, 0, str_from(""),       str_from("1.0.0"), 101);
+    rstore_add_rating(s, str_from("agent-1"), str_from("pkg-b"), 4, 1, str_from("Good"),   str_from("2.0.0"), 102);
+    return s;
+}
+
+# ratings core — parity with rust-old/src/ratings.rs (add/validate/dedup/stats/filter/top).
+fn test_ratings() {
+    test_group("ratings");
+
+    # add basic
+    var s = rstore_new();
+    var r = rstore_add_rating(s, str_from("agent-1"), str_from("my-package"), 4, 1, str_from("Nice package"), str_from("1.0.0"), 100);
+    assert_neq(r, 0, "add ok");
+    assert_eq(str_eq_cstr(rating_agent_id(r),     "agent-1"),    1, "rating agent_id");
+    assert_eq(rating_score(r),                     4,               "rating score");
+    assert_eq(str_eq_cstr(rating_review(r),       "Nice package"), 1, "rating review");
+    assert_eq(rstore_total_count(s),               1,               "total 1");
+
+    # no review
+    var s2 = rstore_new();
+    var rn = rstore_add_rating(s2, str_from("a"), str_from("p"), 3, 0, str_from(""), str_from("0.1.0"), 100);
+    assert_eq(rating_has_review(rn), 0, "no review flag");
+
+    # validation rejects
+    assert_eq(rstore_add_rating(rstore_new(), str_from("a"), str_from("p"), 0,   0, str_from(""), str_from("1.0.0"), 1), 0, "score 0 rejected");
+    assert_eq(rstore_add_rating(rstore_new(), str_from("a"), str_from("p"), 6,   0, str_from(""), str_from("1.0.0"), 1), 0, "score 6 rejected");
+    assert_eq(rstore_add_rating(rstore_new(), str_from("a"), str_from("p"), 255, 0, str_from(""), str_from("1.0.0"), 1), 0, "score 255 rejected");
+    assert_eq(rstore_add_rating(rstore_new(), str_from(""),  str_from("p"), 3,   0, str_from(""), str_from("1.0.0"), 1), 0, "empty agent rejected");
+    assert_eq(rstore_add_rating(rstore_new(), str_from("a"), str_from(""),  3,   0, str_from(""), str_from("1.0.0"), 1), 0, "empty package rejected");
+    assert_eq(rstore_add_rating(rstore_new(), str_from("a"), str_from("p"), 4,   1, repeat_char(2001, 120), str_from("1.0.0"), 1), 0, "review too long rejected");
+    assert_neq(rstore_add_rating(rstore_new(), str_from("a"), str_from("p"), 5,  1, repeat_char(2000, 121), str_from("1.0.0"), 1), 0, "review at max length ok");
+
+    # dedup: same agent + package, latest wins
+    var sd = rstore_new();
+    rstore_add_rating(sd, str_from("agent-1"), str_from("pkg"), 2, 1, str_from("Meh"), str_from("1.0.0"), 100);
+    rstore_add_rating(sd, str_from("agent-1"), str_from("pkg"), 5, 1, str_from("Better"), str_from("1.1.0"), 101);
+    assert_eq(rstore_total_count(sd), 1, "dedup total 1");
+    assert_eq(f64_to(stats_average_score(rstore_get_stats(sd, str_from("pkg")))), 5, "dedup avg 5");
+
+    # dedup independence
+    var si = rstore_new();
+    rstore_add_rating(si, str_from("agent-1"), str_from("pkg-a"), 5, 0, str_from(""), str_from("1.0.0"), 1);
+    rstore_add_rating(si, str_from("agent-1"), str_from("pkg-b"), 3, 0, str_from(""), str_from("1.0.0"), 2);
+    assert_eq(rstore_total_count(si), 2, "same agent diff pkg -> 2");
+
+    # stats
+    var st = mk_rstore();
+    var sa = rstore_get_stats(st, str_from("pkg-a"));
+    assert_eq(str_eq_cstr(stats_package_name(sa), "pkg-a"), 1, "stats package");
+    assert_eq(stats_total_ratings(sa), 2, "stats total 2");
+    assert_eq(f64_to(stats_average_score(sa)), 4, "stats avg 4");
+    assert_eq(stats_dist(sa, 5), 1, "stats dist[5]");
+    assert_eq(stats_dist(sa, 3), 1, "stats dist[3]");
+    assert_eq(stats_has_latest(sa), 1, "stats has latest");
+    assert_eq(rstore_get_stats(st, str_from("pkg-b")) != 0, 1, "pkg-b stats present");
+    assert_eq(rstore_get_stats(st, str_from("nope")), 0, "nonexistent stats -> 0");
+
+    # distribution 1..5
+    var sdist = rstore_new();
+    rstore_add_rating(sdist, str_from("a1"), str_from("pkg"), 1, 0, str_from(""), str_from("1.0.0"), 1);
+    rstore_add_rating(sdist, str_from("a2"), str_from("pkg"), 2, 0, str_from(""), str_from("1.0.0"), 2);
+    rstore_add_rating(sdist, str_from("a3"), str_from("pkg"), 3, 0, str_from(""), str_from("1.0.0"), 3);
+    rstore_add_rating(sdist, str_from("a4"), str_from("pkg"), 4, 0, str_from(""), str_from("1.0.0"), 4);
+    rstore_add_rating(sdist, str_from("a5"), str_from("pkg"), 5, 0, str_from(""), str_from("1.0.0"), 5);
+    var sds = rstore_get_stats(sdist, str_from("pkg"));
+    assert_eq(stats_total_ratings(sds), 5, "dist total 5");
+    assert_eq(f64_to(stats_average_score(sds)), 3, "dist avg 3");
+    assert_eq(stats_dist(sds, 1), 1, "dist[1]");
+    assert_eq(stats_dist(sds, 5), 1, "dist[5]");
+
+    # filters
+    assert_eq(vec_len(rstore_get_ratings(st, filter_new())), 3, "filter all 3");
+    var fp = filter_new(); filter_set_package(fp, str_from("pkg-a"));
+    assert_eq(vec_len(rstore_get_ratings(st, fp)), 2, "filter package 2");
+    var fa = filter_new(); filter_set_agent(fa, str_from("agent-1"));
+    assert_eq(vec_len(rstore_get_ratings(st, fa)), 2, "filter agent 2");
+    var fm = filter_new(); filter_set_min_score(fm, 4);
+    assert_eq(vec_len(rstore_get_ratings(st, fm)), 2, "filter min_score 2");
+    var fd = filter_new(); filter_set_from(fd, 0); filter_set_until(fd, 1000000);
+    assert_eq(vec_len(rstore_get_ratings(st, fd)), 3, "filter date range 3");
+    var fc = filter_new(); filter_set_package(fc, str_from("pkg-a")); filter_set_min_score(fc, 4);
+    var fcr = rstore_get_ratings(st, fc);
+    assert_eq(vec_len(fcr), 1, "filter combined 1");
+    assert_eq(rating_score(vec_get(fcr, 0)), 5, "filter combined score 5");
+    var fnm = filter_new(); filter_set_package(fnm, str_from("nonexistent"));
+    assert_eq(vec_len(rstore_get_ratings(st, fnm)), 0, "filter no match 0");
+    var ff = filter_new(); filter_set_from(ff, 1000000);
+    assert_eq(vec_len(rstore_get_ratings(st, ff)), 0, "filter future from 0");
+
+    # get_ratings newest-first
+    var rr = rstore_get_ratings(st, filter_new());
+    assert_eq(rating_created_at(vec_get(rr, 0)) >= rating_created_at(vec_get(rr, 1)), 1, "ratings newest first");
+
+    # top_rated
+    var top = rstore_top_rated(st, 0, 0);
+    assert_eq(vec_len(top), 2, "top_rated 2 packages");
+    assert_eq(str_eq_cstr(stats_package_name(vec_get(top, 0)), "pkg-a"), 1, "top_rated tiebreak pkg-a first");
+    var topmin = rstore_top_rated(st, 1, 2);
+    assert_eq(vec_len(topmin), 1, "top_rated min 2 -> 1");
+    assert_eq(str_eq_cstr(stats_package_name(vec_get(topmin, 0)), "pkg-a"), 1, "top_rated min pkg-a");
+    assert_eq(vec_len(rstore_top_rated(st, 1, 100)), 0, "top_rated high threshold empty");
+    assert_eq(vec_len(rstore_top_rated(rstore_new(), 0, 0)), 0, "top_rated empty store");
+
+    # top_rated score ordering
+    var so = rstore_new();
+    rstore_add_rating(so, str_from("a1"), str_from("low"),  1, 0, str_from(""), str_from("1.0.0"), 1);
+    rstore_add_rating(so, str_from("a1"), str_from("high"), 5, 0, str_from(""), str_from("1.0.0"), 2);
+    rstore_add_rating(so, str_from("a1"), str_from("mid"),  3, 0, str_from(""), str_from("1.0.0"), 3);
+    var sot = rstore_top_rated(so, 0, 0);
+    assert_eq(str_eq_cstr(stats_package_name(vec_get(sot, 0)), "high"), 1, "order high first");
+    assert_eq(str_eq_cstr(stats_package_name(vec_get(sot, 1)), "mid"),  1, "order mid second");
+    assert_eq(str_eq_cstr(stats_package_name(vec_get(sot, 2)), "low"),  1, "order low last");
+
+    # counts
+    assert_eq(rstore_total_count(rstore_new()),   0, "empty total 0");
+    assert_eq(rstore_package_count(rstore_new()), 0, "empty package 0");
+    return 0;
+}
+
+# ratings persistence + serialization — parity with rust-old.
+fn test_ratings_persist() {
+    test_group("ratings-persist");
+    var PATH = "/tmp/mela-test-ratings.json";
+    sys_unlink(str_data(str_from(PATH)));
+
+    # save + load roundtrip
+    var st = mk_rstore();
+    var w = rstore_save(st, str_from(PATH));
+    assert_eq(w > 0, 1, "save wrote bytes");
+    assert_eq(file_exists(str_data(str_from(PATH))), 1, "saved file exists");
+    var loaded = rstore_load(str_from(PATH));
+    assert_eq(rstore_total_count(loaded),   3, "loaded total 3");
+    assert_eq(rstore_package_count(loaded), 2, "loaded packages 2");
+    var sa = rstore_get_stats(loaded, str_from("pkg-a"));
+    assert_eq(stats_total_ratings(sa),             2, "loaded pkg-a total 2");
+    assert_eq(f64_to(stats_average_score(sa)),     4, "loaded pkg-a avg 4");
+
+    # missing file -> empty store
+    var EMPTY = "/tmp/mela-test-ratings-missing.json";
+    sys_unlink(str_data(str_from(EMPTY)));
+    assert_eq(rstore_total_count(rstore_load(str_from(EMPTY))), 0, "missing -> empty");
+
+    # save empty store -> load empty
+    var SE = "/tmp/mela-test-ratings-empty.json";
+    sys_unlink(str_data(str_from(SE)));
+    rstore_save(rstore_new(), str_from(SE));
+    assert_eq(rstore_total_count(rstore_load(str_from(SE))), 0, "empty store roundtrip");
+
+    # corrupted file -> 0
+    var BAD = "/tmp/mela-test-ratings-bad.json";
+    file_write_all(str_data(str_from(BAD)), "not valid json!!!", 17);
+    assert_eq(rstore_load(str_from(BAD)), 0, "corrupt -> 0");
+
+    # rating serialization
+    var r = rating_new(str_from("agent-1"), str_from("pkg"), 4, 1, str_from("Good"), 100, str_from("1.0.0"));
+    var r2 = rating_from_json(rating_to_json(r));
+    assert_neq(r2, 0, "rating parse");
+    assert_eq(str_eq_cstr(rating_agent_id(r2), "agent-1"), 1, "rating ser agent_id");
+    assert_eq(rating_score(r2),                4,             "rating ser score");
+    assert_eq(str_eq_cstr(rating_review(r2),   "Good"),     1, "rating ser review");
+
+    # stats serialization
+    var ss = rstore_new();
+    rstore_add_rating(ss, str_from("a"), str_from("p"), 4, 0, str_from(""), str_from("1.0.0"), 1);
+    var stj = stats_from_json(stats_to_json(rstore_get_stats(ss, str_from("p"))));
+    assert_neq(stj, 0, "stats parse");
+    assert_eq(str_eq_cstr(stats_package_name(stj), "p"), 1, "stats ser package");
+    assert_eq(stats_total_ratings(stj),             1,     "stats ser total");
+    return 0;
+}
+
+# sandbox_profiles — parity with rust-old/src/sandbox_profiles.rs.
+fn test_sandbox() {
+    test_group("sandbox");
+
+    # Photis Nadi
+    var pn = build_photis_nadi_profile();
+    assert_eq(profile_preset(pn), SP_PHOTO_EDITOR, "photis preset");
+    assert_eq(vec_len(profile_landlock_rules(pn)), 3, "photis 3 rules");
+    assert_eq(profile_has_rule(pn, str_from("~/.local/share/photisnadi/"), str_from("rw")), 1, "photis data rule");
+    assert_eq(profile_has_rule(pn, str_from("/usr/share/fonts"), str_from("ro")), 1, "photis fonts ro");
+    assert_eq(nr_enabled(profile_network(pn)), 1, "photis network on");
+    assert_eq(profile_allows_host(pn, str_from("*.supabase.co")), 1, "photis supabase.co");
+    assert_eq(profile_allows_host(pn, str_from("*.supabase.in")), 1, "photis supabase.in");
+    assert_eq(vec_len(nr_hosts(profile_network(pn))), 2, "photis 2 hosts");
+    assert_eq(str_eq_cstr(profile_seccomp_mode(pn), "desktop"), 1, "photis seccomp desktop");
+    assert_eq(profile_max_memory_mb(pn), 512, "photis 512mb");
+    assert_eq(profile_allow_process_spawn(pn), 0, "photis no spawn");
+    assert_eq(str_len(validate_profile(pn)), 0, "photis validates");
+
+    # Aequi
+    var aq = build_aequi_profile();
+    assert_eq(profile_preset(aq), SP_PRODUCTIVITY, "aequi preset");
+    assert_eq(vec_len(profile_landlock_rules(aq)), 5, "aequi 5 rules");
+    assert_eq(profile_has_rule(aq, str_from("/usr/share/tesseract-ocr"), str_from("ro")), 1, "aequi tesseract ro");
+    assert_eq(nr_enabled(profile_network(aq)), 0, "aequi network off");
+    assert_eq(vec_len(nr_hosts(profile_network(aq))), 0, "aequi no hosts");
+    assert_eq(str_len(validate_profile(aq)), 0, "aequi validates");
+
+    # preset builder
+    var pe = build_profile_for_preset(SP_PHOTO_EDITOR, str_from("ed"), str_from("/data/editor"));
+    assert_eq(profile_preset(pe), SP_PHOTO_EDITOR, "photo preset");
+    assert_eq(str_eq_cstr(profile_seccomp_mode(pe), "desktop"), 1, "photo desktop");
+    assert_eq(str_len(validate_profile(pe)), 0, "photo validates");
+
+    var pr = build_profile_for_preset(SP_PRODUCTIVITY, str_from("o"), str_from("/data/office"));
+    assert_eq(nr_enabled(profile_network(pr)), 1, "productivity network on");
+    assert_eq(profile_has_rule(pr, str_from("~/Documents"), str_from("rw")), 1, "productivity documents");
+
+    var br = build_profile_for_preset(SP_BROWSER, str_from("b"), str_from("/data/browser"));
+    assert_eq(profile_allow_process_spawn(br), 1, "browser spawn");
+    assert_eq(profile_max_memory_mb(br), 2048, "browser 2048mb");
+
+    var gm = build_profile_for_preset(SP_GAME, str_from("g"), str_from("/data/game"));
+    assert_eq(profile_max_memory_mb(gm), 4096, "game 4096mb");
+    assert_eq(profile_allow_process_spawn(gm), 0, "game no spawn");
+
+    var cli = build_profile_for_preset(SP_CLI_TOOL, str_from("c"), str_from("/data/cli"));
+    assert_eq(str_eq_cstr(profile_seccomp_mode(cli), "basic"), 1, "cli basic");
+    assert_eq(nr_enabled(profile_network(cli)), 0, "cli network off");
+    assert_eq(profile_allow_process_spawn(cli), 1, "cli spawn");
+
+    var cu = build_profile_for_preset(SP_CUSTOM, str_from("x"), str_from("/data/custom"));
+    assert_eq(profile_preset(cu), SP_CUSTOM, "custom preset");
+    assert_eq(vec_len(profile_landlock_rules(cu)), 1, "custom 1 rule");
+    assert_eq(str_len(validate_profile(cu)), 0, "custom validates");
+
+    # GPU compute
+    var gpu = build_profile_for_preset(SP_GPU_COMPUTE, str_from("synapse"), str_from("/var/lib/synapse"));
+    assert_eq(profile_has_rule_containing(gpu, str_from("/dev/dri")), 1, "gpu dri");
+    assert_eq(profile_has_rule_containing(gpu, str_from("nvidia")),   1, "gpu nvidia");
+    assert_eq(profile_has_rule_containing(gpu, str_from("rocm")),     1, "gpu rocm");
+    assert_eq(profile_allow_process_spawn(gpu), 1, "gpu spawn");
+    assert_eq(profile_max_memory_mb(gpu), 4096, "gpu 4096mb");
+    assert_eq(profile_allows_host(gpu, str_from("huggingface.co")), 1, "gpu huggingface");
+
+    # validation failures
+    var bad_empty = profile_new(SP_PHOTO_EDITOR, vec_new(), str_from("desktop"), nr_new(0, vec_new()), 512, 0);
+    assert_eq(str_contains(validate_profile(bad_empty), str_from("at least one")), 1, "empty rules rejected");
+
+    var bad_access = build_photis_nadi_profile();
+    store64(vec_get(profile_landlock_rules(bad_access), 0) + 8, str_from("rwx"));   # access @ offset 8
+    assert_eq(str_contains(validate_profile(bad_access), str_from("invalid")), 1, "bad access rejected");
+
+    var bad_path = build_photis_nadi_profile();
+    store64(vec_get(profile_landlock_rules(bad_path), 0), str_from(""));            # path @ offset 0
+    assert_eq(str_contains(validate_profile(bad_path), str_from("empty path")), 1, "empty path rejected");
+
+    var bad_seccomp = build_photis_nadi_profile();
+    store64(bad_seccomp + 16, str_from("super-permissive"));                        # seccomp_mode @ offset 16
+    assert_eq(str_contains(validate_profile(bad_seccomp), str_from("seccomp")), 1, "bad seccomp rejected");
+
+    var bad_mem = build_photis_nadi_profile();
+    store64(bad_mem + 32, 0);                                                        # max_memory_mb @ offset 32
+    assert_eq(str_contains(validate_profile(bad_mem), str_from("max_memory_mb")), 1, "zero memory rejected");
+
+    var bad_net = build_photis_nadi_profile();
+    store64(profile_network(bad_net), 0);                                            # disable network, keep hosts
+    assert_eq(str_contains(validate_profile(bad_net), str_from("allowed_hosts")), 1, "disabled net with hosts rejected");
+
+    # serde roundtrip
+    var rt = profile_from_json(profile_to_json(pn));
+    assert_neq(rt, 0, "profile json parses");
+    assert_eq(profile_preset(rt), profile_preset(pn), "roundtrip preset");
+    assert_eq(profile_max_memory_mb(rt), profile_max_memory_mb(pn), "roundtrip memory");
+    assert_eq(vec_len(profile_landlock_rules(rt)), vec_len(profile_landlock_rules(pn)), "roundtrip rules len");
+    assert_eq(nr_enabled(profile_network(rt)), nr_enabled(profile_network(pn)), "roundtrip network enabled");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_category();
@@ -814,6 +1090,9 @@ fn main() {
     test_remote();
     test_remote_codec();
     test_remote_client();
+    test_sandbox();
+    test_ratings();
+    test_ratings_persist();
     return assert_summary();
 }
 

@@ -1,6 +1,6 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-06-17 (v0.6.0) · Live status: [`state.md`](state.md) · Per-version history:
+> **Last Updated**: 2026-06-17 (v0.7.0) · Live status: [`state.md`](state.md) · Per-version history:
 > [`../../CHANGELOG.md`](../../CHANGELOG.md)
 >
 > The path from the **v0.1.0 port scaffold** to a **v1.0 release**. mela is mid-port from Rust
@@ -31,6 +31,14 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 ---
 
 ## Completed
+
+### v0.7.0 — Sandbox profiles + ratings ✅ (2026-06-17)
+- **`sandbox_profiles.rs` ported** → `src/sandbox_profiles.cyr`: `SandboxPreset`,
+  `PredefinedProfile`, Photis Nadi / Aequi / per-preset builders, `validate_profile`, JSON codec.
+- **`ratings.rs` ported** → `src/ratings.cyr`: deduplicating `RatingStore`, `add_rating` /
+  `get_ratings` / `get_stats` (real f64 averages) / `top_rated`, filters, save/load JSON.
+- Profiles surface declared capabilities pre-install; ratings round-trip on disk; both
+  parity-tested; importers fuzzed. f64 + i64-time + rule-type decisions in ADR-0007. **355/355 tests**.
 
 ### v0.6.0 — Remote client ✅ (2026-06-17)
 - **`remote_client.rs` logic ported** → `src/remote_client.cyr`: url_encode / sanitize /

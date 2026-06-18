@@ -6,6 +6,31 @@ include benchmark numbers; breaking changes get a **Breaking** section with a mi
 
 ## [Unreleased]
 
+## [0.7.0] — Sandbox profiles + ratings (`sandbox_profiles.rs`, `ratings.rs`)
+
+Capability disclosure before install, and a ratings/reviews system. Ports two
+modules. **355/355 parity tests** green (was 240). No new dependency.
+
+### Added
+- **`src/sandbox_profiles.cyr`** — `SandboxPreset` (+ Display), `LandlockRule` /
+  `NetworkRule` / `PredefinedProfile`, the Photis Nadi & Aequi profiles, the
+  generic `build_profile_for_preset` (photo-editor / productivity / browser /
+  game / cli-tool / gpu-compute / custom), and `validate_profile`. JSON
+  serde-roundtrip (preset as PascalCase variant name).
+- **`src/ratings.cyr`** — `Rating` / `RatingStats` / `RatingFilter` and a
+  deduplicating `RatingStore` (one rating per agent per package, latest wins):
+  `add_rating` (validation), `get_ratings` (filter + newest-first sort),
+  `get_stats` (average / distribution / latest), `top_rated` (average desc,
+  total tiebreak), counts. `average_score` is a real `f64`; the store persists
+  integer scores and recomputes stats on read.
+- **Ratings persistence** — `save` / `load` JSON over stdlib `fs` (missing file →
+  empty store, corrupt → error); `Rating` / `RatingStats` / store (de)serialization.
+- **Fuzz** (`tests/mela.fcyr`) extended: the sandbox-profile and ratings-store
+  importers survive arbitrary bytes.
+- **ADR**: [0007](docs/adr/0007-ratings-f64-and-sandbox-rule-types.md) — f64
+  averages via Cyrius float builtins, i64 epoch timestamps, and
+  `LandlockRule`/`NetworkRule` defined in `sandbox_profiles` until `flutter_agpkg`.
+
 ## [0.6.0] — Remote client (`remote_client.rs`)
 
 Talk to a marketplace registry: search / fetch-manifest / download / publish

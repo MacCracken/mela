@@ -1,0 +1,462 @@
+# ratings.cyr — agent/user ratings & reviews for marketplace packages.
+#
+# Ports rust-old/src/ratings.rs: a deduplicating rating store (one rating per
+# agent per package, latest wins), aggregate stats, filtered queries, top-rated
+# ranking, and JSON persistence.
+#
+# average_score is a real f64 (Cyrius f64 builtins: f64_from/to/div/gt/lt) — the
+# store persists integer scores and recomputes stats on read, so no float ever
+# round-trips through disk (ADR-0007). created_at is an i64 epoch supplied
+# explicitly (ADR-0003/0004 precedent), not chrono.
+
+var MAX_REVIEW_LENGTH = 2000;
+var MIN_SCORE = 1;
+var MAX_SCORE = 5;
+
+# ---------------------------------------------------------------------------
+# Rating
+# ---------------------------------------------------------------------------
+#
+#   0 agent_id (Str)  8 package_name (Str)  16 score (i64)
+#   24 has_review (i64)  32 review (Str)  40 created_at (i64)  48 version_reviewed (Str)
+
+fn rating_new(agent_id: Str, package_name: Str, score, has_review, review: Str,
+              created_at, version_reviewed: Str): i64 {
+    var r = alloc(56);
+    store64(r,      agent_id);
+    store64(r + 8,  package_name);
+    store64(r + 16, score);
+    store64(r + 24, has_review);
+    store64(r + 32, review);
+    store64(r + 40, created_at);
+    store64(r + 48, version_reviewed);
+    return r;
+}
+fn rating_agent_id(r): Str     { return load64(r); }
+fn rating_package_name(r): Str { return load64(r + 8); }
+fn rating_score(r): i64        { return load64(r + 16); }
+fn rating_has_review(r): i64   { return load64(r + 24); }
+fn rating_review(r): Str       { return load64(r + 32); }
+fn rating_created_at(r): i64   { return load64(r + 40); }
+fn rating_version(r): Str      { return load64(r + 48); }
+
+# ---------------------------------------------------------------------------
+# RatingStats
+# ---------------------------------------------------------------------------
+#
+#   0 package_name (Str)  8 average_score (f64 bits)  16 total_ratings (i64)
+#   24 distribution (ptr to 6 i64, indexed by score)  32 has_latest (i64)  40 latest_review (i64)
+
+fn _dist_new(): i64 {
+    var d = alloc(48);
+    var i = 0;
+    while (i < 6) { store64(d + i * 8, 0); i = i + 1; }
+    return d;
+}
+
+fn stats_package_name(s): Str  { return load64(s); }
+fn stats_average_score(s): i64 { return load64(s + 8); }   # f64 bits
+fn stats_total_ratings(s): i64 { return load64(s + 16); }
+fn stats_distribution(s)       { return load64(s + 24); }
+fn stats_has_latest(s): i64    { return load64(s + 32); }
+fn stats_latest_review(s): i64 { return load64(s + 40); }
+fn stats_dist(s, score): i64   { return load64(load64(s + 24) + score * 8); }
+
+# ---------------------------------------------------------------------------
+# RatingFilter
+# ---------------------------------------------------------------------------
+#
+#   0  has_min_score  8  min_score
+#   16 has_package    24 package_name (Str)
+#   32 has_agent      40 agent_id (Str)
+#   48 has_from       56 from (i64)
+#   64 has_until      72 until (i64)
+
+fn filter_new(): i64 {
+    var f = alloc(80);
+    var i = 0;
+    while (i < 10) { store64(f + i * 8, 0); i = i + 1; }
+    return f;
+}
+fn filter_set_min_score(f, v) { store64(f, 1); store64(f + 8, v); return 0; }
+fn filter_set_package(f, v: Str) { store64(f + 16, 1); store64(f + 24, v); return 0; }
+fn filter_set_agent(f, v: Str) { store64(f + 32, 1); store64(f + 40, v); return 0; }
+fn filter_set_from(f, v) { store64(f + 48, 1); store64(f + 56, v); return 0; }
+fn filter_set_until(f, v) { store64(f + 64, 1); store64(f + 72, v); return 0; }
+
+# matches(rating) — true if the rating satisfies every set criterion. Mirrors
+# Rust `RatingFilter::matches`.
+fn filter_matches(f, rating): i64 {
+    if (load64(f) == 1) {                       # min_score
+        if (rating_score(rating) < load64(f + 8)) { return 0; }
+    }
+    if (load64(f + 16) == 1) {                  # package_name
+        if (str_eq(rating_package_name(rating), load64(f + 24)) == 0) { return 0; }
+    }
+    if (load64(f + 32) == 1) {                  # agent_id
+        if (str_eq(rating_agent_id(rating), load64(f + 40)) == 0) { return 0; }
+    }
+    if (load64(f + 48) == 1) {                  # from
+        if (rating_created_at(rating) < load64(f + 56)) { return 0; }
+    }
+    if (load64(f + 64) == 1) {                  # until
+        if (rating_created_at(rating) > load64(f + 72)) { return 0; }
+    }
+    return 1;
+}
+
+# ---------------------------------------------------------------------------
+# RatingStore — package_name -> (agent_id -> Rating)
+# ---------------------------------------------------------------------------
+
+fn rstore_new(): i64 { return map_new_str(); }
+
+# add_rating — validate + dedup-insert (latest wins). Returns the Rating, or 0 on
+# a validation failure (empty agent/package, score out of 1..5, review too long).
+# Takes an explicit created_at (Rust used Utc::now()). Mirrors Rust `add_rating`.
+fn rstore_add_rating(store, agent_id: Str, package_name: Str, score, has_review,
+                     review: Str, version_reviewed: Str, created_at): i64 {
+    if (str_len(agent_id) == 0) { return 0; }
+    if (str_len(package_name) == 0) { return 0; }
+    if (score < MIN_SCORE) { return 0; }
+    if (score > MAX_SCORE) { return 0; }
+    if (has_review == 1) {
+        if (str_len(review) > MAX_REVIEW_LENGTH) { return 0; }
+    }
+    var rating = rating_new(agent_id, package_name, score, has_review, review,
+                            created_at, version_reviewed);
+    var pkg_map = map_get(store, package_name);
+    if (pkg_map == 0) {
+        pkg_map = map_new_str();
+        map_set(store, package_name, pkg_map);
+    }
+    map_set(pkg_map, agent_id, rating);          # dedup: same agent overwrites
+    return rating;
+}
+
+fn rstore_package_count(store): i64 { return map_size(store); }
+
+# total_count — unique ratings across all packages. Mirrors Rust `total_count`.
+fn rstore_total_count(store): i64 {
+    var maps = map_values(store);
+    var n = vec_len(maps);
+    var i = 0;
+    var total = 0;
+    while (i < n) {
+        total = total + map_size(vec_get(maps, i));
+        i = i + 1;
+    }
+    return total;
+}
+
+# Collect every Rating in the store into a fresh Vec.
+fn _rstore_all_ratings(store): i64 {
+    var out = vec_new();
+    var maps = map_values(store);
+    var n = vec_len(maps);
+    var i = 0;
+    while (i < n) {
+        var ratings = map_values(vec_get(maps, i));
+        var rn = vec_len(ratings);
+        var j = 0;
+        while (j < rn) {
+            vec_push(out, vec_get(ratings, j));
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+# Sort a Vec<Rating> by created_at descending (newest first), in place.
+fn _sort_ratings_desc(v): i64 {
+    var n = vec_len(v);
+    var i = 0;
+    while (i < n) {
+        var max_idx = i;
+        var j = i + 1;
+        while (j < n) {
+            if (rating_created_at(vec_get(v, j)) > rating_created_at(vec_get(v, max_idx))) { max_idx = j; }
+            j = j + 1;
+        }
+        var tmp = vec_get(v, i);
+        vec_set(v, i, vec_get(v, max_idx));
+        vec_set(v, max_idx, tmp);
+        i = i + 1;
+    }
+    return 0;
+}
+
+# get_ratings(filter) — all matching ratings, newest first. Mirrors Rust `get_ratings`.
+fn rstore_get_ratings(store, filter): i64 {
+    var all = _rstore_all_ratings(store);
+    var out = vec_new();
+    var n = vec_len(all);
+    var i = 0;
+    while (i < n) {
+        var r = vec_get(all, i);
+        if (filter_matches(filter, r) == 1) { vec_push(out, r); }
+        i = i + 1;
+    }
+    _sort_ratings_desc(out);
+    return out;
+}
+
+# get_stats(package_name) — aggregate stats, or 0 if the package has no ratings.
+# Mirrors Rust `get_stats`.
+fn rstore_get_stats(store, package_name: Str): i64 {
+    var pkg_map = map_get(store, package_name);
+    if (pkg_map == 0) { return 0; }
+    var ratings = map_values(pkg_map);
+    var count = vec_len(ratings);
+    if (count == 0) { return 0; }
+
+    var dist = _dist_new();
+    var total = 0;
+    var has_latest = 0;
+    var latest = 0;
+    var i = 0;
+    while (i < count) {
+        var r = vec_get(ratings, i);
+        var sc = rating_score(r);
+        store64(dist + sc * 8, load64(dist + sc * 8) + 1);
+        total = total + sc;
+        if (has_latest == 0) { has_latest = 1; latest = rating_created_at(r); }
+        else { if (rating_created_at(r) > latest) { latest = rating_created_at(r); } }
+        i = i + 1;
+    }
+
+    var s = alloc(48);
+    store64(s,      package_name);
+    store64(s + 8,  f64_div(f64_from(total), f64_from(count)));
+    store64(s + 16, count);
+    store64(s + 24, dist);
+    store64(s + 32, has_latest);
+    store64(s + 40, latest);
+    return s;
+}
+
+# top_rated(has_min, min_ratings) — packages ranked by average desc, total
+# desc on ties; packages below the min-ratings threshold excluded. Mirrors Rust.
+fn rstore_top_rated(store, has_min, min_ratings): i64 {
+    var threshold = 0;
+    if (has_min == 1) { threshold = min_ratings; }
+    var keys = map_keys(store);
+    var n = vec_len(keys);
+    var out = vec_new();
+    var i = 0;
+    while (i < n) {
+        var st = rstore_get_stats(store, vec_get(keys, i));
+        if (st != 0) {
+            if (stats_total_ratings(st) >= threshold) { vec_push(out, st); }
+        }
+        i = i + 1;
+    }
+    # selection sort: average_score desc, then total_ratings desc
+    var m = vec_len(out);
+    var a = 0;
+    while (a < m) {
+        var best = a;
+        var b = a + 1;
+        while (b < m) {
+            if (_stats_better(vec_get(out, b), vec_get(out, best)) == 1) { best = b; }
+            b = b + 1;
+        }
+        var tmp = vec_get(out, a);
+        vec_set(out, a, vec_get(out, best));
+        vec_set(out, best, tmp);
+        a = a + 1;
+    }
+    return out;
+}
+
+# True if stats `x` ranks above `y` (higher average, or equal average + higher total).
+fn _stats_better(x, y): i64 {
+    var ax = stats_average_score(x);
+    var ay = stats_average_score(y);
+    if (f64_gt(ax, ay) == 1) { return 1; }
+    if (f64_lt(ax, ay) == 1) { return 0; }
+    if (stats_total_ratings(x) > stats_total_ratings(y)) { return 1; }
+    return 0;
+}
+
+# ---------------------------------------------------------------------------
+# JSON codec + persistence (ADR-0001 wire style; ratings store on disk)
+# ---------------------------------------------------------------------------
+
+var RATINGS_MAXLEN = 1048576;    # 1 MiB read buffer
+
+fn _r_jstr(o, key): Str {
+    var v = json_v_obj_get(o, key);
+    if (v == 0) { return str_from(""); }
+    if (json_v_is_str(v) == 0) { return str_from(""); }
+    return json_v_str(v);
+}
+fn _r_jint(o, key): i64 {
+    var v = json_v_obj_get(o, key);
+    if (v == 0) { return 0; }
+    if (json_v_is_int(v) == 0) { return 0; }
+    return json_v_int(v);
+}
+
+fn _rating_to_jv(r): i64 {
+    var o = json_v_obj_new();
+    json_v_obj_set(o, str_from("agent_id"),     json_v_str_new(rating_agent_id(r)));
+    json_v_obj_set(o, str_from("package_name"), json_v_str_new(rating_package_name(r)));
+    json_v_obj_set(o, str_from("score"),        json_v_int_new(rating_score(r)));
+    if (rating_has_review(r) == 1) {
+        json_v_obj_set(o, str_from("review"), json_v_str_new(rating_review(r)));
+    } else {
+        json_v_obj_set(o, str_from("review"), json_v_null());
+    }
+    json_v_obj_set(o, str_from("created_at"),       json_v_int_new(rating_created_at(r)));
+    json_v_obj_set(o, str_from("version_reviewed"), json_v_str_new(rating_version(r)));
+    return o;
+}
+
+fn _rating_from_jv(o): i64 {
+    var rv = json_v_obj_get(o, "review");
+    var has_review = 0;
+    var review = str_from("");
+    if (json_v_is_str(rv) == 1) { has_review = 1; review = json_v_str(rv); }
+    return rating_new(_r_jstr(o, "agent_id"), _r_jstr(o, "package_name"), _r_jint(o, "score"),
+                      has_review, review, _r_jint(o, "created_at"), _r_jstr(o, "version_reviewed"));
+}
+
+fn rating_to_json(r): Str { return json_v_build(_rating_to_jv(r)); }
+fn rating_from_json(json: Str): i64 {
+    var root = json_v_parse_str(str_data(json), str_len(json));
+    if (root == 0) { return 0; }
+    if (json_v_is_obj(root) == 0) { return 0; }
+    return _rating_from_jv(root);
+}
+
+# RatingStats <-> JSON (distribution as {score:count}; latest as int or null).
+fn stats_to_json(s): Str {
+    var o = json_v_obj_new();
+    json_v_obj_set(o, str_from("package_name"),  json_v_str_new(stats_package_name(s)));
+    json_v_obj_set(o, str_from("average_score"), json_v_float_new(stats_average_score(s)));
+    json_v_obj_set(o, str_from("total_ratings"), json_v_int_new(stats_total_ratings(s)));
+    var dist_o = json_v_obj_new();
+    var score = 1;
+    while (score <= 5) {
+        var c = stats_dist(s, score);
+        if (c > 0) { json_v_obj_set(dist_o, str_from_int(score), json_v_int_new(c)); }
+        score = score + 1;
+    }
+    json_v_obj_set(o, str_from("distribution"), dist_o);
+    if (stats_has_latest(s) == 1) {
+        json_v_obj_set(o, str_from("latest_review"), json_v_int_new(stats_latest_review(s)));
+    } else {
+        json_v_obj_set(o, str_from("latest_review"), json_v_null());
+    }
+    return json_v_build(o);
+}
+
+fn stats_from_json(json: Str): i64 {
+    var root = json_v_parse_str(str_data(json), str_len(json));
+    if (root == 0) { return 0; }
+    if (json_v_is_obj(root) == 0) { return 0; }
+    var dist = _dist_new();
+    var dv = json_v_obj_get(root, "distribution");
+    if (json_v_is_obj(dv) == 1) {
+        var n = json_v_obj_len(dv);
+        var i = 0;
+        while (i < n) {
+            var k = json_v_obj_key(dv, i);            # "1".."5"
+            var v = json_v_obj_val(dv, i);
+            if (str_len(k) > 0) {
+                var sc = load8(str_data(k)) - 48;     # single-digit score
+                if (sc >= 1) {
+                    if (sc <= 5) {
+                        if (json_v_is_int(v) == 1) { store64(dist + sc * 8, json_v_int(v)); }
+                    }
+                }
+            }
+            i = i + 1;
+        }
+    }
+    var has_latest = 0;
+    var latest = 0;
+    var lv = json_v_obj_get(root, "latest_review");
+    if (json_v_is_int(lv) == 1) { has_latest = 1; latest = json_v_int(lv); }
+    var avg = f64_from(0);
+    var av = json_v_obj_get(root, "average_score");
+    if (json_v_is_float(av) == 1) { avg = json_v_float(av); }
+    if (json_v_is_int(av) == 1)   { avg = f64_from(json_v_int(av)); }
+    var s = alloc(48);
+    store64(s,      _r_jstr(root, "package_name"));
+    store64(s + 8,  avg);
+    store64(s + 16, _r_jint(root, "total_ratings"));
+    store64(s + 24, dist);
+    store64(s + 32, has_latest);
+    store64(s + 40, latest);
+    return s;
+}
+
+# RatingStore <-> JSON: { package: { agent_id: rating } }.
+fn rstore_to_json(store): Str {
+    var o = json_v_obj_new();
+    var pkgs = map_keys(store);
+    var pn = vec_len(pkgs);
+    var i = 0;
+    while (i < pn) {
+        var pkg = vec_get(pkgs, i);
+        var pkg_map = map_get(store, pkg);
+        var pkg_obj = json_v_obj_new();
+        var agents = map_keys(pkg_map);
+        var an = vec_len(agents);
+        var j = 0;
+        while (j < an) {
+            var agent = vec_get(agents, j);
+            json_v_obj_set(pkg_obj, agent, _rating_to_jv(map_get(pkg_map, agent)));
+            j = j + 1;
+        }
+        json_v_obj_set(o, pkg, pkg_obj);
+        i = i + 1;
+    }
+    return json_v_build(o);
+}
+
+fn rstore_from_json(json: Str): i64 {
+    var root = json_v_parse_str(str_data(json), str_len(json));
+    if (root == 0) { return 0; }
+    if (json_v_is_obj(root) == 0) { return 0; }
+    var store = rstore_new();
+    var pn = json_v_obj_len(root);
+    var i = 0;
+    while (i < pn) {
+        var pkg = json_v_obj_key(root, i);
+        var pkg_in = json_v_obj_val(root, i);
+        if (json_v_is_obj(pkg_in) == 1) {
+            var pkg_map = map_new_str();
+            var an = json_v_obj_len(pkg_in);
+            var j = 0;
+            while (j < an) {
+                var agent = json_v_obj_key(pkg_in, j);
+                var rv = json_v_obj_val(pkg_in, j);
+                if (json_v_is_obj(rv) == 1) { map_set(pkg_map, agent, _rating_from_jv(rv)); }
+                j = j + 1;
+            }
+            map_set(store, pkg, pkg_map);
+        }
+        i = i + 1;
+    }
+    return store;
+}
+
+# save(path) — write the store as JSON. Mirrors Rust `save`.
+fn rstore_save(store, path: Str): i64 {
+    var js = rstore_to_json(store);
+    return file_write_all(str_data(path), str_data(js), str_len(js));
+}
+
+# load(path) — read a store; a missing file yields an empty store, a corrupt
+# file yields 0 (error). Mirrors Rust `load`.
+fn rstore_load(path: Str): i64 {
+    if (file_exists(str_data(path)) == 0) { return rstore_new(); }
+    var buf = alloc(RATINGS_MAXLEN);
+    var n = file_read_all(str_data(path), buf, RATINGS_MAXLEN);
+    if (n <= 0) { return rstore_new(); }
+    return rstore_from_json(str_new(buf, n));
+}

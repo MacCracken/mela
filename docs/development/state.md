@@ -5,9 +5,9 @@
 
 ## Version
 
-**0.6.0** — Remote client (2026-06-17). `lib.rs` + `trust.rs` + `transparency.rs` +
-`local_registry.rs` + `remote_client.rs` (logic; transport seam) ported. 6208 lines of Rust
-preserved at `rust-old/` for parity reference.
+**0.7.0** — Sandbox profiles + ratings (2026-06-17). `lib.rs` + `trust.rs` + `transparency.rs` +
+`local_registry.rs` + `remote_client.rs` (logic) + `sandbox_profiles.rs` + `ratings.rs` ported.
+6208 lines of Rust preserved at `rust-old/` for parity reference.
 
 ## Toolchain
 
@@ -18,7 +18,7 @@ preserved at `rust-old/` for parity reference.
 
 - Rust reference: 6208 lines at `rust-old/` (frozen, do not edit).
 - Cyrius port: **`lib.rs` + `trust.rs` + `transparency.rs` + `local_registry.rs`* +
-  `remote_client.rs`† complete (5 of 9 modules)** —
+  `remote_client.rs`† + `sandbox_profiles.rs` + `ratings.rs` complete (7 of 9 modules)** —
   - `src/category.cyr` — `MarketplaceCategory` (`cat_name` / `cat_parse`, Rust `Display`/`FromStr`).
   - `src/manifest.cyr` — `PublisherInfo`, `MarketplaceManifest` (`validate` / `qualified_name`),
     `is_valid_semver`, and the JSON codec (`*_to_json` / `*_from_json`, wire format = ADR-0001).
@@ -35,22 +35,26 @@ preserved at `rust-old/` for parity reference.
   - `src/remote_client.cyr` — `RegistryClient`: url_encode / sanitize / validate, URL builders,
     response types + JSON codec, offline guards, fs response cache. Live HTTP/TLS transport is a
     seam deferred to v0.9.0 (ADR-0006).
-  - `src/main.cyr` wires all seven.
-- Remaining (4): `ratings`, `sandbox_profiles`, `flutter_packaging`/`flutter_agpkg`. Deferred
+  - `src/sandbox_profiles.cyr` — `SandboxPreset`, `PredefinedProfile` (+ Landlock/Network rules),
+    Photis Nadi / Aequi / per-preset builders, `validate_profile`, JSON codec (ADR-0007).
+  - `src/ratings.cyr` — `RatingStore` (dedup), `add_rating`/`get_ratings`/`get_stats` (f64 avg)/
+    `top_rated`, filters, save/load JSON via `fs` (ADR-0007).
+  - `src/main.cyr` wires all nine source modules.
+- Remaining (2): `flutter_packaging` + `flutter_agpkg` (the v0.8.0 packaging milestone). Deferred
   pieces: **\*** `local_registry` tarball extraction → **v0.8.0** (`sankoch`, ADR-0005); **†**
   `remote_client` live `sandhi`/`tls` transport → **v0.9.0** end-to-end (ADR-0006).
-  Next milestone: **v0.7.0 sandbox_profiles + ratings**.
+  Next milestone: **v0.8.0 packaging**.
 
 ## Tests
 
-**240/240** parity tests green (`tests/mela.tcyr` — groups `category`, `semver`, `publisher`,
+**355/355** parity tests green (`tests/mela.tcyr` — groups `category`, `semver`, `publisher`,
 `manifest`, `depgraph-base`, `depgraph-resolve`, `json`, `trust`, `keyversion`, `keyring`,
 `transparency`, `transparency-json`, `registry`, `registry-persist`, `registry-signature`,
-`remote`, `remote-codec`, `remote-client`). `trust` includes SHA-256 + RFC 8032 Ed25519
-known-answer vectors; `registry-persist` does a real on-disk install→reopen round-trip;
-`remote-codec` parses a canned mock registry response. Fuzz harness at `tests/mela.fcyr` covers
-the manifest JSON, trust hex/key/signature, transparency-log, registry-index, and remote response
-parsers (survive arbitrary bytes). `cyrius test` is the gate; each ported module adds its group.
+`remote`, `remote-codec`, `remote-client`, `sandbox`, `ratings`, `ratings-persist`). `trust` has
+SHA-256 + RFC 8032 Ed25519 KAT vectors; `registry-persist` / `ratings-persist` do real on-disk
+round-trips. Fuzz harness at `tests/mela.fcyr` covers the manifest JSON, trust hex/key/signature,
+transparency-log, registry-index, remote response, sandbox-profile, and ratings-store parsers
+(survive arbitrary bytes). `cyrius test` is the gate; each ported module adds its group.
 
 ## Dependencies
 
@@ -71,6 +75,7 @@ _None yet._
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). Next milestone: **v0.7.0 — Sandbox profiles + ratings**
-(`sandbox_profiles.rs` 740 lines + `ratings.rs` 897 lines; dep gate the manifest model +
-`agnostik` security types): capability disclosure before install, and ratings/reviews.
+See [`roadmap.md`](roadmap.md). Next milestone: **v0.8.0 — Packaging** (`flutter_packaging.rs` 561
+lines + `flutter_agpkg.rs` 660 lines; dep gate **`sankoch`** for LZ4/DEFLATE/gzip): build / inspect
+/ validate the `.agpkg` archive format. This also unblocks the deferred `local_registry` tarball
+extraction (ADR-0005) and unifies the `LandlockRule`/`NetworkRule` types (ADR-0007).

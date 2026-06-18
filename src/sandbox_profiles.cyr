@@ -1,0 +1,413 @@
+# sandbox_profiles.cyr — curated sandbox profiles for known app types.
+#
+# Ports rust-old/src/sandbox_profiles.rs: predefined Landlock/seccomp/network
+# profiles per app category, the Photis Nadi / Aequi specific profiles, the
+# generic preset builder, and profile validation.
+#
+# LandlockRule / NetworkRule are defined here as plain structs. In the Rust
+# oracle they live in flutter_agpkg (the v0.8.0 packaging module); when that
+# ports, it shares these shapes. Pure data + validation — no new deps.
+
+# ---------------------------------------------------------------------------
+# SandboxPreset
+# ---------------------------------------------------------------------------
+
+var SP_PHOTO_EDITOR    = 0;
+var SP_PRODUCTIVITY    = 1;
+var SP_BROWSER         = 2;
+var SP_GAME            = 3;
+var SP_CLI_TOOL        = 4;
+var SP_GPU_COMPUTE     = 5;
+var SP_CUSTOM          = 6;
+
+# Display name (Rust `impl Display`).
+fn sandbox_preset_name(p): Str {
+    if (p == SP_PHOTO_EDITOR) { return str_from("photo-editor"); }
+    if (p == SP_PRODUCTIVITY) { return str_from("productivity-app"); }
+    if (p == SP_BROWSER)      { return str_from("browser"); }
+    if (p == SP_GAME)         { return str_from("game-app"); }
+    if (p == SP_CLI_TOOL)     { return str_from("cli-tool"); }
+    if (p == SP_GPU_COMPUTE)  { return str_from("gpu-compute"); }
+    if (p == SP_CUSTOM)       { return str_from("custom"); }
+    return str_from("");
+}
+
+# ---------------------------------------------------------------------------
+# LandlockRule { path, access } / NetworkRule { enabled, allowed_hosts }
+# ---------------------------------------------------------------------------
+
+fn ll_new(path: Str, access: Str): i64 {
+    var r = alloc(16);
+    store64(r,     path);
+    store64(r + 8, access);
+    return r;
+}
+fn ll_path(r): Str   { return load64(r); }
+fn ll_access(r): Str { return load64(r + 8); }
+
+fn nr_new(enabled, allowed_hosts): i64 {
+    var n = alloc(16);
+    store64(n,     enabled);
+    store64(n + 8, allowed_hosts);
+    return n;
+}
+fn nr_enabled(n): i64 { return load64(n); }
+fn nr_hosts(n)        { return load64(n + 8); }
+
+# Vec<Str> builders for landlock-rule / host lists.
+fn _rules(): i64 { return vec_new(); }
+fn _rule(rules, path, access): i64 { vec_push(rules, ll_new(str_from(path), str_from(access))); return rules; }
+fn _hosts0(): i64 { return vec_new(); }
+fn _host(hosts, h): i64 { vec_push(hosts, str_from(h)); return hosts; }
+
+# ---------------------------------------------------------------------------
+# PredefinedProfile
+# ---------------------------------------------------------------------------
+#
+#   0  preset (i64)           8  landlock_rules (Vec<LandlockRule>)
+#   16 seccomp_mode (Str)     24 network (NetworkRule*)
+#   32 max_memory_mb (i64)    40 allow_process_spawn (i64)
+
+fn profile_new(preset, landlock_rules, seccomp_mode: Str, network, max_memory_mb, allow_process_spawn): i64 {
+    var p = alloc(48);
+    store64(p,      preset);
+    store64(p + 8,  landlock_rules);
+    store64(p + 16, seccomp_mode);
+    store64(p + 24, network);
+    store64(p + 32, max_memory_mb);
+    store64(p + 40, allow_process_spawn);
+    return p;
+}
+fn profile_preset(p): i64          { return load64(p); }
+fn profile_landlock_rules(p)       { return load64(p + 8); }
+fn profile_seccomp_mode(p): Str    { return load64(p + 16); }
+fn profile_network(p)              { return load64(p + 24); }
+fn profile_max_memory_mb(p): i64   { return load64(p + 32); }
+fn profile_allow_process_spawn(p): i64 { return load64(p + 40); }
+
+# ---------------------------------------------------------------------------
+# Specific profiles
+# ---------------------------------------------------------------------------
+
+# Photis Nadi (Flutter photo editor; Supabase backend + local Hive DB).
+fn build_photis_nadi_profile(): i64 {
+    var rules = _rules();
+    _rule(rules, "~/.local/share/photisnadi/", "rw");
+    _rule(rules, "/tmp", "rw");
+    _rule(rules, "/usr/share/fonts", "ro");
+    var net = nr_new(1, _host(_host(_hosts0(), "*.supabase.co"), "*.supabase.in"));
+    return profile_new(SP_PHOTO_EDITOR, rules, str_from("desktop"), net, 512, 0);
+}
+
+# Aequi (Tauri accounting; local SQLite + optional Tesseract OCR).
+fn build_aequi_profile(): i64 {
+    var rules = _rules();
+    _rule(rules, "~/.local/share/aequi/", "rw");
+    _rule(rules, "/tmp", "rw");
+    _rule(rules, "/usr/share/fonts", "ro");
+    _rule(rules, "/usr/share/tesseract-ocr", "ro");
+    _rule(rules, "/usr/share/aequi/rules", "ro");
+    var net = nr_new(0, _hosts0());
+    return profile_new(SP_PRODUCTIVITY, rules, str_from("desktop"), net, 512, 0);
+}
+
+# ---------------------------------------------------------------------------
+# Generic preset builder
+# ---------------------------------------------------------------------------
+
+fn _build_photo_editor(data_dir): i64 {
+    var rules = _rules();
+    _rule(rules, data_dir, "rw");
+    _rule(rules, "/tmp", "rw");
+    _rule(rules, "/usr/share/fonts", "ro");
+    return profile_new(SP_PHOTO_EDITOR, rules, str_from("desktop"), nr_new(0, _hosts0()), 512, 0);
+}
+
+fn _build_productivity(data_dir): i64 {
+    var rules = _rules();
+    _rule(rules, data_dir, "rw");
+    _rule(rules, "/tmp", "rw");
+    _rule(rules, "/usr/share/fonts", "ro");
+    _rule(rules, "~/Documents", "rw");
+    return profile_new(SP_PRODUCTIVITY, rules, str_from("desktop"), nr_new(1, _hosts0()), 1024, 0);
+}
+
+fn _build_browser(data_dir): i64 {
+    var rules = _rules();
+    _rule(rules, data_dir, "rw");
+    _rule(rules, "/tmp", "rw");
+    _rule(rules, "/usr/share/fonts", "ro");
+    _rule(rules, "~/Downloads", "rw");
+    return profile_new(SP_BROWSER, rules, str_from("desktop"), nr_new(1, _host(_hosts0(), "*")), 2048, 1);
+}
+
+fn _build_game(data_dir): i64 {
+    var rules = _rules();
+    _rule(rules, data_dir, "rw");
+    _rule(rules, "/tmp", "rw");
+    _rule(rules, "/usr/share/fonts", "ro");
+    return profile_new(SP_GAME, rules, str_from("desktop"), nr_new(1, _hosts0()), 4096, 0);
+}
+
+fn _build_cli_tool(data_dir): i64 {
+    var rules = _rules();
+    _rule(rules, data_dir, "rw");
+    _rule(rules, "/tmp", "rw");
+    return profile_new(SP_CLI_TOOL, rules, str_from("basic"), nr_new(0, _hosts0()), 256, 1);
+}
+
+fn _build_gpu_compute(data_dir): i64 {
+    var rules = _rules();
+    _rule(rules, data_dir, "rw");
+    _rule(rules, "/tmp", "rw");
+    _rule(rules, "/dev/dri", "rw");
+    _rule(rules, "/dev/nvidia0", "rw");
+    _rule(rules, "/dev/nvidia1", "rw");
+    _rule(rules, "/dev/nvidiactl", "rw");
+    _rule(rules, "/dev/nvidia-uvm", "rw");
+    _rule(rules, "/dev/nvidia-uvm-tools", "rw");
+    _rule(rules, "/dev/kfd", "rw");
+    _rule(rules, "/usr/lib/cuda", "ro");
+    _rule(rules, "/usr/local/cuda", "ro");
+    _rule(rules, "/opt/rocm", "ro");
+    _rule(rules, "/usr/lib/x86_64-linux-gnu", "ro");
+    var hosts = _hosts0();
+    _host(hosts, "localhost");
+    _host(hosts, "127.0.0.1");
+    _host(hosts, "huggingface.co");
+    _host(hosts, "*.huggingface.co");
+    _host(hosts, "hf.co");
+    _host(hosts, "*.hf.co");
+    return profile_new(SP_GPU_COMPUTE, rules, str_from("desktop"), nr_new(1, hosts), 4096, 1);
+}
+
+# build_profile_for_preset(preset, app_name, data_dir). app_name is unused by
+# the presets (Rust ignores it too), kept for signature parity.
+fn build_profile_for_preset(preset, app_name: Str, data_dir: Str): i64 {
+    if (preset == SP_PHOTO_EDITOR) { return _build_photo_editor(data_dir); }
+    if (preset == SP_PRODUCTIVITY) { return _build_productivity(data_dir); }
+    if (preset == SP_BROWSER)      { return _build_browser(data_dir); }
+    if (preset == SP_GAME)         { return _build_game(data_dir); }
+    if (preset == SP_CLI_TOOL)     { return _build_cli_tool(data_dir); }
+    if (preset == SP_GPU_COMPUTE)  { return _build_gpu_compute(data_dir); }
+    # Custom: single rw rule on data_dir, basic seccomp, no network.
+    var rules = _rules();
+    vec_push(rules, ll_new(data_dir, str_from("rw")));
+    return profile_new(SP_CUSTOM, rules, str_from("basic"), nr_new(0, _hosts0()), 256, 0);
+}
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+# Returns "" if the profile is valid, else the first problem (Rust `bail!`
+# messages). Mirrors Rust `validate_profile`.
+fn validate_profile(profile): Str {
+    var rules = profile_landlock_rules(profile);
+    var n = vec_len(rules);
+    if (n == 0) { return str_from("profile must have at least one Landlock rule"); }
+
+    # access modes
+    var i = 0;
+    var bad_access = 0;
+    while (i < n) {
+        if (bad_access == 0) {
+            var acc = ll_access(vec_get(rules, i));
+            var ok = 0;
+            if (str_eq_cstr(acc, "ro") == 1) { ok = 1; }
+            if (str_eq_cstr(acc, "rw") == 1) { ok = 1; }
+            if (ok == 0) { bad_access = 1; }
+        }
+        i = i + 1;
+    }
+    if (bad_access == 1) { return str_from("invalid Landlock access mode (expected 'ro' or 'rw')"); }
+
+    # non-empty paths
+    var j = 0;
+    var empty_path = 0;
+    while (j < n) {
+        if (str_len(ll_path(vec_get(rules, j))) == 0) { empty_path = 1; }
+        j = j + 1;
+    }
+    if (empty_path == 1) { return str_from("Landlock rule has an empty path"); }
+
+    # seccomp mode
+    var sm = profile_seccomp_mode(profile);
+    var sm_ok = 0;
+    if (str_eq_cstr(sm, "basic") == 1)   { sm_ok = 1; }
+    if (str_eq_cstr(sm, "desktop") == 1) { sm_ok = 1; }
+    if (str_eq_cstr(sm, "strict") == 1)  { sm_ok = 1; }
+    if (sm_ok == 0) { return str_from("unknown seccomp mode (expected basic, desktop, or strict)"); }
+
+    # memory
+    if (profile_max_memory_mb(profile) == 0) { return str_from("max_memory_mb must be greater than zero"); }
+
+    # network disabled but hosts present
+    var net = profile_network(profile);
+    if (nr_enabled(net) == 0) {
+        if (vec_len(nr_hosts(net)) != 0) { return str_from("network is disabled but allowed_hosts is non-empty"); }
+    }
+    return str_from("");
+}
+
+# Convenience: does the profile contain a landlock rule whose path contains
+# `needle` (for tests that assert device/host presence).
+fn profile_has_rule_containing(profile, needle: Str): i64 {
+    var rules = profile_landlock_rules(profile);
+    var n = vec_len(rules);
+    var i = 0;
+    var hit = 0;
+    while (i < n) {
+        if (hit == 0) {
+            if (str_contains(ll_path(vec_get(rules, i)), needle) == 1) { hit = 1; }
+        }
+        i = i + 1;
+    }
+    return hit;
+}
+
+# Convenience: does a landlock rule (path, access) pair exist exactly.
+fn profile_has_rule(profile, path: Str, access: Str): i64 {
+    var rules = profile_landlock_rules(profile);
+    var n = vec_len(rules);
+    var i = 0;
+    var hit = 0;
+    while (i < n) {
+        if (hit == 0) {
+            var r = vec_get(rules, i);
+            if (str_eq(ll_path(r), path) == 1) {
+                if (str_eq(ll_access(r), access) == 1) { hit = 1; }
+            }
+        }
+        i = i + 1;
+    }
+    return hit;
+}
+
+# Convenience: does the network rule allow `host` exactly.
+fn profile_allows_host(profile, host: Str): i64 {
+    var hosts = nr_hosts(profile_network(profile));
+    var n = vec_len(hosts);
+    var i = 0;
+    var hit = 0;
+    while (i < n) {
+        if (str_eq(vec_get(hosts, i), host) == 1) { hit = 1; }
+        i = i + 1;
+    }
+    return hit;
+}
+
+# ---------------------------------------------------------------------------
+# JSON codec (preset as serde PascalCase variant name; ADR-0001 wire style)
+# ---------------------------------------------------------------------------
+
+fn sandbox_preset_json_name(p): Str {
+    if (p == SP_PHOTO_EDITOR) { return str_from("PhotoEditor"); }
+    if (p == SP_PRODUCTIVITY) { return str_from("ProductivityApp"); }
+    if (p == SP_BROWSER)      { return str_from("Browser"); }
+    if (p == SP_GAME)         { return str_from("GameApp"); }
+    if (p == SP_CLI_TOOL)     { return str_from("CliTool"); }
+    if (p == SP_GPU_COMPUTE)  { return str_from("GpuCompute"); }
+    return str_from("Custom");
+}
+fn sandbox_preset_json_parse(s: Str): i64 {
+    if (str_eq_cstr(s, "PhotoEditor") == 1)     { return SP_PHOTO_EDITOR; }
+    if (str_eq_cstr(s, "ProductivityApp") == 1) { return SP_PRODUCTIVITY; }
+    if (str_eq_cstr(s, "Browser") == 1)         { return SP_BROWSER; }
+    if (str_eq_cstr(s, "GameApp") == 1)         { return SP_GAME; }
+    if (str_eq_cstr(s, "CliTool") == 1)         { return SP_CLI_TOOL; }
+    if (str_eq_cstr(s, "GpuCompute") == 1)      { return SP_GPU_COMPUTE; }
+    return SP_CUSTOM;
+}
+
+fn _sp_jstr(o, key): Str {
+    var v = json_v_obj_get(o, key);
+    if (v == 0) { return str_from(""); }
+    if (json_v_is_str(v) == 0) { return str_from(""); }
+    return json_v_str(v);
+}
+fn _sp_jint(o, key): i64 {
+    var v = json_v_obj_get(o, key);
+    if (v == 0) { return 0; }
+    if (json_v_is_int(v) == 0) { return 0; }
+    return json_v_int(v);
+}
+fn _sp_jbool(o, key): i64 {
+    var v = json_v_obj_get(o, key);
+    if (v == 0) { return 0; }
+    if (json_v_is_bool(v) == 0) { return 0; }
+    return json_v_bool(v);
+}
+
+fn profile_to_json(p): Str {
+    var o = json_v_obj_new();
+    json_v_obj_set(o, str_from("preset"), json_v_str_new(sandbox_preset_json_name(profile_preset(p))));
+    var arr = json_v_arr_new();
+    var rules = profile_landlock_rules(p);
+    var n = vec_len(rules);
+    var i = 0;
+    while (i < n) {
+        var r = vec_get(rules, i);
+        var ro = json_v_obj_new();
+        json_v_obj_set(ro, str_from("path"),   json_v_str_new(ll_path(r)));
+        json_v_obj_set(ro, str_from("access"), json_v_str_new(ll_access(r)));
+        json_v_arr_push(arr, ro);
+        i = i + 1;
+    }
+    json_v_obj_set(o, str_from("landlock_rules"), arr);
+    json_v_obj_set(o, str_from("seccomp_mode"), json_v_str_new(profile_seccomp_mode(p)));
+    var net = profile_network(p);
+    var no = json_v_obj_new();
+    json_v_obj_set(no, str_from("enabled"), json_v_bool_new(nr_enabled(net)));
+    var ha = json_v_arr_new();
+    var hosts = nr_hosts(net);
+    var hn = vec_len(hosts);
+    var hi = 0;
+    while (hi < hn) { json_v_arr_push(ha, json_v_str_new(vec_get(hosts, hi))); hi = hi + 1; }
+    json_v_obj_set(no, str_from("allowed_hosts"), ha);
+    json_v_obj_set(o, str_from("network"), no);
+    json_v_obj_set(o, str_from("max_memory_mb"),        json_v_int_new(profile_max_memory_mb(p)));
+    json_v_obj_set(o, str_from("allow_process_spawn"),  json_v_bool_new(profile_allow_process_spawn(p)));
+    return json_v_build(o);
+}
+
+fn profile_from_json(json: Str): i64 {
+    var root = json_v_parse_str(str_data(json), str_len(json));
+    if (root == 0) { return 0; }
+    if (json_v_is_obj(root) == 0) { return 0; }
+
+    var preset = SP_CUSTOM;
+    var pv = json_v_obj_get(root, "preset");
+    if (json_v_is_str(pv) == 1) { preset = sandbox_preset_json_parse(json_v_str(pv)); }
+
+    var rules = vec_new();
+    var arr = json_v_obj_get(root, "landlock_rules");
+    if (json_v_is_arr(arr) == 1) {
+        var n = json_v_arr_len(arr);
+        var i = 0;
+        while (i < n) {
+            var ro = json_v_arr_get(arr, i);
+            vec_push(rules, ll_new(_sp_jstr(ro, "path"), _sp_jstr(ro, "access")));
+            i = i + 1;
+        }
+    }
+
+    var hosts = vec_new();
+    var enabled = 0;
+    var net_in = json_v_obj_get(root, "network");
+    if (json_v_is_obj(net_in) == 1) {
+        enabled = _sp_jbool(net_in, "enabled");
+        var ha = json_v_obj_get(net_in, "allowed_hosts");
+        if (json_v_is_arr(ha) == 1) {
+            var hn = json_v_arr_len(ha);
+            var hi = 0;
+            while (hi < hn) {
+                var el = json_v_arr_get(ha, hi);
+                if (json_v_is_str(el) == 1) { vec_push(hosts, json_v_str(el)); }
+                hi = hi + 1;
+            }
+        }
+    }
+    return profile_new(preset, rules, _sp_jstr(root, "seccomp_mode"), nr_new(enabled, hosts),
+                       _sp_jint(root, "max_memory_mb"), _sp_jbool(root, "allow_process_spawn"));
+}

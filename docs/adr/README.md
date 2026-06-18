@@ -38,3 +38,7 @@ Decisions about mela — what we chose, the context, and the consequences we acc
 - [0006 — Remote client HTTP/TLS transport is a deferred seam](0006-remote-client-transport-seam.md) —
   *Accepted* · URL building, response-type JSON codec, offline guards, and response cache port now;
   the live `sandhi`/`tls` transport (`_rc_http_get`) defers to the v0.9.0 end-to-end wiring.
+- [0007 — Ratings f64 averages, i64 timestamps; Landlock/Network rule types](0007-ratings-f64-and-sandbox-rule-types.md) —
+  *Accepted* · `average_score` uses real f64 builtins (store persists integer scores, recomputes
+  stats); `created_at` is an i64 epoch; `LandlockRule`/`NetworkRule` defined in `sandbox_profiles`
+  until `flutter_agpkg` (v0.8.0).
