@@ -3,6 +3,8 @@
 # Stdlib auto-included via cyrius.cyml.
 
 include "src/category.cyr"   # MarketplaceCategory (first ported module)
+include "src/manifest.cyr"   # PublisherInfo + MarketplaceManifest (v0.2.0)
+include "src/depgraph.cyr"   # DepNode + DependencyGraph (v0.2.0)
 
 fn main() {
     alloc_init();

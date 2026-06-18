@@ -1,0 +1,388 @@
+# manifest.cyr — marketplace manifest model.
+#
+# Ports the manifest half of rust-old/src/lib.rs: the `is_valid_semver` helper,
+# `PublisherInfo`, and `MarketplaceManifest` (validate / qualified_name) plus a
+# hand-written JSON codec (wire format pinned in docs/adr/0001).
+#
+# Strings are the stdlib `Str` fat-pointer ({data; len}) to interop with
+# agnostik's AgentManifest (amanifest_name / _version / _description), which the
+# manifest flattens. Structs are 8-byte fields via load64/store64 at offsets.
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+# Index of the first '-' in [data, data+n), or n if none. Mirrors the
+# `splitn(2, '-')` split point in the Rust is_valid_semver.
+fn semver_version_part_len(data, n): i64 {
+    var i = 0;
+    var found = n;            # default: no dash -> whole string is version_part
+    while (i < n) {
+        if (load8(data + i) == 45) {          # '-'
+            if (found == n) { found = i; }     # first dash only
+        }
+        i = i + 1;
+    }
+    return found;
+}
+
+# Basic semver: major.minor.patch with an optional `-prerelease` suffix; the
+# three dot-separated segments before the first '-' must each be a non-empty
+# run of ASCII digits. Mirrors rust-old `is_valid_semver` (splitn(2,'-') →
+# split('.') == 3 segments → each `.parse::<u64>().is_ok()`).
+#
+# Divergence (documented): Rust's u64 parse also rejects a segment that
+# overflows u64; this port checks digit-structure only, so a >20-digit segment
+# is accepted here. No oracle fixture exercises that corner.
+fn is_valid_semver(v: Str): i64 {
+    var data = str_data(v);
+    var n = str_len(v);
+    var vp = semver_version_part_len(data, n);   # length of the version part
+    var segs = 0;
+    var seg_len = 0;
+    var bad = 0;
+    var i = 0;
+    while (i < vp) {
+        var c = load8(data + i);
+        if (c == 46) {                # '.' — segment boundary
+            if (seg_len == 0) { bad = 1; }    # empty segment fails u64 parse
+            segs = segs + 1;
+            seg_len = 0;
+        } else {
+            if (c < 48) { bad = 1; }          # not a digit
+            if (c > 57) { bad = 1; }
+            seg_len = seg_len + 1;
+        }
+        i = i + 1;
+    }
+    # account for the final segment (no trailing '.')
+    if (seg_len == 0) { bad = 1; }
+    segs = segs + 1;
+    if (segs != 3) { return 0; }
+    if (bad == 1) { return 0; }
+    return 1;
+}
+
+# ---------------------------------------------------------------------------
+# PublisherInfo — { name, key_id, homepage }
+# ---------------------------------------------------------------------------
+
+fn publisher_new(name: Str, key_id: Str, homepage: Str): i64 {
+    var p = alloc(24);
+    store64(p,      name);
+    store64(p + 8,  key_id);
+    store64(p + 16, homepage);
+    return p;
+}
+
+fn pub_name(p): Str     { return load64(p); }
+fn pub_key_id(p): Str   { return load64(p + 8); }
+fn pub_homepage(p): Str { return load64(p + 16); }
+
+# ---------------------------------------------------------------------------
+# MarketplaceManifest
+# ---------------------------------------------------------------------------
+#
+# Flattens agnostik's AgentManifest (the agent body — `name`@0 / `description`@8,
+# both Str) and layers marketplace metadata on top. The agent's *version* is
+# carried as a mela-owned Str descriptor (offset 24), NOT agnostik's structured
+# Version, so validate() can reproduce the Rust oracle's empty-version and
+# invalid-semver checks (agnostik's Version is always well-formed). See
+# docs/adr/0002.
+#
+# Layout (8-byte fields):
+#   0  agent              (agnostik AgentManifest*)
+#   8  publisher          (PublisherInfo*)
+#   16 category           (i64; CAT_* from category.cyr)
+#   24 version            (Str — validated descriptor)
+#   32 runtime            (Str)
+#   40 screenshots        (Vec<Str>)
+#   48 changelog          (Str)
+#   56 min_agnos_version  (Str)
+#   64 dependencies       (Str-keyed map: name -> version constraint)
+#   72 tags               (Vec<Str>)
+
+fn manifest_new(agent, publisher, category, version: Str): i64 {
+    var m = alloc(80);
+    store64(m,      agent);
+    store64(m + 8,  publisher);
+    store64(m + 16, category);
+    store64(m + 24, version);
+    store64(m + 32, str_from(""));      # runtime
+    store64(m + 40, vec_new());         # screenshots
+    store64(m + 48, str_from(""));      # changelog
+    store64(m + 56, str_from(""));      # min_agnos_version
+    store64(m + 64, map_new_str());     # dependencies
+    store64(m + 72, vec_new());         # tags
+    return m;
+}
+
+fn man_agent(m)              { return load64(m); }
+fn man_publisher(m)          { return load64(m + 8); }
+fn man_category(m): i64      { return load64(m + 16); }
+fn man_version(m): Str       { return load64(m + 24); }
+fn man_runtime(m): Str       { return load64(m + 32); }
+fn man_screenshots(m)        { return load64(m + 40); }
+fn man_changelog(m): Str     { return load64(m + 48); }
+fn man_min_agnos_version(m): Str { return load64(m + 56); }
+fn man_dependencies(m)       { return load64(m + 64); }
+fn man_tags(m)               { return load64(m + 72); }
+
+fn man_set_runtime(m, v: Str)           { store64(m + 32, v); return 0; }
+fn man_set_changelog(m, v: Str)         { store64(m + 48, v); return 0; }
+fn man_set_min_agnos_version(m, v: Str) { store64(m + 56, v); return 0; }
+
+# Convenience: the flattened agent identity (off agnostik's AgentManifest).
+fn man_name(m): Str        { return amanifest_name(man_agent(m)); }
+fn man_description(m): Str { return amanifest_description(man_agent(m)); }
+
+# True (1) if `name` contains any char outside [a-z], [0-9], '-'. Mirrors the
+# Rust `chars().all(|c| is_ascii_lowercase || is_ascii_digit || c == '-')`.
+fn manifest_name_chars_invalid(name: Str): i64 {
+    var data = str_data(name);
+    var n = str_len(name);
+    var i = 0;
+    var bad = 0;
+    while (i < n) {
+        var c = load8(data + i);
+        var ok = 0;
+        if (c >= 97) { if (c <= 122) { ok = 1; } }   # a-z
+        if (c >= 48) { if (c <= 57)  { ok = 1; } }    # 0-9
+        if (c == 45) { ok = 1; }                       # '-'
+        if (ok == 0) { bad = 1; }
+        i = i + 1;
+    }
+    return bad;
+}
+
+# validate() — returns a Vec<Str> of error messages (empty Vec = valid).
+# Mirrors rust-old MarketplaceManifest::validate, in the same rule order:
+# name required / <=128 / charset, version required / semver, description
+# required, publisher.name required, publisher.key_id required.
+fn manifest_validate(m): i64 {
+    var errors = vec_new();
+    var name = man_name(m);
+    var ver  = man_version(m);
+    var desc = man_description(m);
+    var publ = man_publisher(m);
+
+    if (str_len(name) == 0) {
+        vec_push(errors, str_from("name is required"));
+    }
+    if (str_len(name) > 128) {
+        vec_push(errors, str_from("name must be 128 characters or fewer"));
+    }
+    if (str_len(name) != 0) {
+        if (manifest_name_chars_invalid(name) == 1) {
+            vec_push(errors, str_from("name must contain only lowercase letters, digits, and hyphens"));
+        }
+    }
+    if (str_len(ver) == 0) {
+        vec_push(errors, str_from("version is required"));
+    }
+    if (str_len(ver) != 0) {
+        if (is_valid_semver(ver) == 0) {
+            # Rust: format!("version '{}' is not valid semver", version)
+            var msg = str_cat(str_cat(str_from("version '"), ver), str_from("' is not valid semver"));
+            vec_push(errors, msg);
+        }
+    }
+    if (str_len(desc) == 0) {
+        vec_push(errors, str_from("description is required"));
+    }
+    if (str_len(pub_name(publ)) == 0) {
+        vec_push(errors, str_from("publisher.name is required"));
+    }
+    if (str_len(pub_key_id(publ)) == 0) {
+        vec_push(errors, str_from("publisher.key_id is required"));
+    }
+    return errors;
+}
+
+# Lowercase a Str and replace ' ' with '-' into a fresh Str. Mirrors Rust
+# `name.to_lowercase().replace(' ', "-")` (space isn't a letter and hyphen
+# isn't uppercase, so the two operations commute).
+fn manifest_lower_replace_space(s: Str): Str {
+    var n = str_len(s);
+    var src = str_data(s);
+    var buf = alloc(n + 1);
+    var i = 0;
+    while (i < n) {
+        var c = load8(src + i);
+        if (c == 32) { c = 45; }                         # ' ' -> '-'
+        if (c >= 65) { if (c <= 90) { c = c + 32; } }     # A-Z -> a-z
+        store8(buf + i, c);
+        i = i + 1;
+    }
+    store8(buf + n, 0);
+    return str_new(buf, n);
+}
+
+# qualified_name() — `publisher/agent-name`, publisher lowercased + spaced→hyphen.
+fn manifest_qualified_name(m): Str {
+    var lowered = manifest_lower_replace_space(pub_name(man_publisher(m)));
+    return str_cat(str_cat(lowered, str_from("/")), man_name(m));
+}
+
+# ---------------------------------------------------------------------------
+# JSON codec (wire format pinned in docs/adr/0001)
+# ---------------------------------------------------------------------------
+#
+# category serializes as the serde PascalCase variant name (NOT the cat_name
+# Display form) — the codec carries its own enum mapping per ADR-0001.
+
+fn cat_json_name(cat): Str {
+    if (cat == CAT_UTILITY)      { return str_from("Utility"); }
+    if (cat == CAT_PRODUCTIVITY) { return str_from("Productivity"); }
+    if (cat == CAT_SECURITY)     { return str_from("Security"); }
+    if (cat == CAT_DEVTOOL)      { return str_from("DevTool"); }
+    if (cat == CAT_DESKTOP_APP)  { return str_from("DesktopApp"); }
+    if (cat == CAT_SYSTEM)       { return str_from("System"); }
+    return str_from("");
+}
+
+fn cat_json_parse(s: Str): i64 {
+    if (str_eq_cstr(s, "Utility") == 1)      { return CAT_UTILITY; }
+    if (str_eq_cstr(s, "Productivity") == 1) { return CAT_PRODUCTIVITY; }
+    if (str_eq_cstr(s, "Security") == 1)     { return CAT_SECURITY; }
+    if (str_eq_cstr(s, "DevTool") == 1)      { return CAT_DEVTOOL; }
+    if (str_eq_cstr(s, "DesktopApp") == 1)   { return CAT_DESKTOP_APP; }
+    if (str_eq_cstr(s, "System") == 1)       { return CAT_SYSTEM; }
+    return CAT_PARSE_FAIL;
+}
+
+# String value of object field `key`, or "" if absent / not a string
+# (serde #[serde(default)] semantics).
+fn _man_jstr(obj, key): Str {
+    var v = json_v_obj_get(obj, key);
+    if (v == 0) { return str_from(""); }
+    if (json_v_is_str(v) == 0) { return str_from(""); }
+    return json_v_str(v);
+}
+
+# Build a JTAG_ARR of the Str elements of a Vec<Str>.
+fn _man_arr_from_vec(v): i64 {
+    var arr = json_v_arr_new();
+    var n = vec_len(v);
+    var i = 0;
+    while (i < n) {
+        json_v_arr_push(arr, json_v_str_new(vec_get(v, i)));
+        i = i + 1;
+    }
+    return arr;
+}
+
+# Append each string element of JSON array `arr` into Vec<Str> `dst`.
+fn _man_vec_from_arr(arr, dst): i64 {
+    if (json_v_is_arr(arr) == 0) { return 0; }
+    var n = json_v_arr_len(arr);
+    var i = 0;
+    while (i < n) {
+        var el = json_v_arr_get(arr, i);
+        if (json_v_is_str(el) == 1) { vec_push(dst, json_v_str(el)); }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# publisher_to_json / from_json — { name, key_id, homepage }.
+fn publisher_to_json(p): Str {
+    var o = json_v_obj_new();
+    json_v_obj_set(o, str_from("name"),     json_v_str_new(pub_name(p)));
+    json_v_obj_set(o, str_from("key_id"),   json_v_str_new(pub_key_id(p)));
+    json_v_obj_set(o, str_from("homepage"), json_v_str_new(pub_homepage(p)));
+    return json_v_build(o);
+}
+
+fn publisher_from_json(json: Str): i64 {
+    # json_v_parse_str (explicit buf+len) — the Str-arg wrapper mis-marshals
+    # the fat pointer through its untyped param (reads len 0 -> spurious EOF).
+    var root = json_v_parse_str(str_data(json), str_len(json));
+    if (root == 0) { return 0; }
+    if (json_v_is_obj(root) == 0) { return 0; }
+    return publisher_new(_man_jstr(root, "name"), _man_jstr(root, "key_id"),
+                         _man_jstr(root, "homepage"));
+}
+
+# manifest_to_json — serialize per ADR-0001 (flattened agent identity at top
+# level, publisher nested, category as PascalCase, default fields always
+# emitted).
+fn manifest_to_json(m): Str {
+    var o = json_v_obj_new();
+    json_v_obj_set(o, str_from("name"),        json_v_str_new(man_name(m)));
+    json_v_obj_set(o, str_from("version"),     json_v_str_new(man_version(m)));
+    json_v_obj_set(o, str_from("description"), json_v_str_new(man_description(m)));
+
+    var p = man_publisher(m);
+    var pj = json_v_obj_new();
+    json_v_obj_set(pj, str_from("name"),     json_v_str_new(pub_name(p)));
+    json_v_obj_set(pj, str_from("key_id"),   json_v_str_new(pub_key_id(p)));
+    json_v_obj_set(pj, str_from("homepage"), json_v_str_new(pub_homepage(p)));
+    json_v_obj_set(o, str_from("publisher"), pj);
+
+    json_v_obj_set(o, str_from("category"), json_v_str_new(cat_json_name(man_category(m))));
+    json_v_obj_set(o, str_from("runtime"),  json_v_str_new(man_runtime(m)));
+    json_v_obj_set(o, str_from("screenshots"), _man_arr_from_vec(man_screenshots(m)));
+    json_v_obj_set(o, str_from("changelog"),         json_v_str_new(man_changelog(m)));
+    json_v_obj_set(o, str_from("min_agnos_version"), json_v_str_new(man_min_agnos_version(m)));
+
+    var dm = man_dependencies(m);
+    var deps = json_v_obj_new();
+    var dkeys = map_keys(dm);
+    var dnk = vec_len(dkeys);
+    var di = 0;
+    while (di < dnk) {
+        var dk = vec_get(dkeys, di);
+        json_v_obj_set(deps, dk, json_v_str_new(map_get(dm, dk)));
+        di = di + 1;
+    }
+    json_v_obj_set(o, str_from("dependencies"), deps);
+    json_v_obj_set(o, str_from("tags"), _man_arr_from_vec(man_tags(m)));
+
+    return json_v_build(o);
+}
+
+# manifest_from_json — parse per ADR-0001. Returns a MarketplaceManifest, or 0
+# on a JSON parse error / non-object root. Missing default fields become empty.
+fn manifest_from_json(json: Str): i64 {
+    var root = json_v_parse_str(str_data(json), str_len(json));   # see publisher_from_json
+    if (root == 0) { return 0; }
+    if (json_v_is_obj(root) == 0) { return 0; }
+
+    var name = _man_jstr(root, "name");
+    var version = _man_jstr(root, "version");
+    var desc = _man_jstr(root, "description");
+
+    var pubv = json_v_obj_get(root, "publisher");
+    var publisher = publisher_new(_man_jstr(pubv, "name"), _man_jstr(pubv, "key_id"),
+                                  _man_jstr(pubv, "homepage"));
+
+    var catv = json_v_obj_get(root, "category");
+    var cat = CAT_PARSE_FAIL;
+    if (json_v_is_str(catv) == 1) { cat = cat_json_parse(json_v_str(catv)); }
+
+    var agent = agent_manifest_new(name);
+    store64(agent + 8, desc);              # agnostik AgentManifest: description @ 8
+    var m = manifest_new(agent, publisher, cat, version);
+
+    man_set_runtime(m, _man_jstr(root, "runtime"));
+    man_set_changelog(m, _man_jstr(root, "changelog"));
+    man_set_min_agnos_version(m, _man_jstr(root, "min_agnos_version"));
+
+    _man_vec_from_arr(json_v_obj_get(root, "screenshots"), man_screenshots(m));
+    _man_vec_from_arr(json_v_obj_get(root, "tags"), man_tags(m));
+
+    var depsv = json_v_obj_get(root, "dependencies");
+    if (json_v_is_obj(depsv) == 1) {
+        var dm2 = man_dependencies(m);
+        var dn = json_v_obj_len(depsv);
+        var i = 0;
+        while (i < dn) {
+            var k = json_v_obj_key(depsv, i);
+            var val = json_v_obj_val(depsv, i);
+            if (json_v_is_str(val) == 1) { map_set(dm2, k, json_v_str(val)); }
+            i = i + 1;
+        }
+    }
+    return m;
+}

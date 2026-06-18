@@ -1,6 +1,6 @@
 [package]
 name = "mela"
-version = "0.1.0"
+version = "0.2.0"
 description = "mela — Cyrius port (from 6208 lines of Rust)"
 license = "GPL-3.0-only"
 language = "cyrius"
@@ -11,4 +11,18 @@ entry = "src/main.cyr"
 output = "mela"
 
 [deps]
-stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args", "assert"]
+# Base stdlib + the modules agnostik's dist bundle needs (hashmap/tagged/result/
+# fnptr/trait/bayan/chrono) — see agnostik cyrius.cyml [deps]. bayan carries the
+# JSON codec (the standalone `json` module was folded into bayan at 6.1.25).
+stdlib = [
+    "string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args", "assert",
+    "hashmap", "tagged", "result", "fnptr", "trait", "bayan", "chrono",
+]
+
+# agnostik — the Cyrius shared-types crate; supplies the AgentManifest that
+# MarketplaceManifest flattens (agent.cyr: agent_manifest_new / amanifest_*).
+[deps.agnostik]
+git = "https://github.com/MacCracken/agnostik.git"
+path = "../agnostik"
+tag = "1.3.1"
+modules = ["dist/agnostik.cyr"]

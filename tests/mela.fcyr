@@ -1,13 +1,31 @@
 # mela fuzz harness
+#
+# Drives the manifest JSON parser (the external-data parse path) with arbitrary
+# bytes: a malformed manifest must return 0, never crash. Mirrors the v0.2.0
+# "malformed-manifest fuzz harness" done-when.
+
+include "src/category.cyr"
+include "src/manifest.cyr"
 
 fn fuzz_main(data, len) {
     if (len == 0) { return 0; }
+    var s = str_new(data, len);
+    manifest_from_json(s);     # parse error -> 0; must not fault
+    publisher_from_json(s);
     return 0;
 }
 
 fn main() {
     alloc_init();
-    fuzz_main("test", 4);
+    # Smoke inputs (the fuzzer replaces these with mutations): valid, partial,
+    # and outright garbage all have to be survived.
+    fuzz_main("{\"name\":\"x\",\"version\":\"1.0.0\",\"category\":\"Utility\"}",
+              strlen("{\"name\":\"x\",\"version\":\"1.0.0\",\"category\":\"Utility\"}"));
+    fuzz_main("{", strlen("{"));
+    fuzz_main("{\"publisher\":{", strlen("{\"publisher\":{"));
+    fuzz_main("not json at all", strlen("not json at all"));
+    fuzz_main("[]", strlen("[]"));
+    fuzz_main("{\"category\":12345}", strlen("{\"category\":12345}"));
     println("fuzz: ok");
     return 0;
 }

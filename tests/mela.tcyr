@@ -4,6 +4,8 @@
 # matches the Rust oracle at rust-old/src/.
 
 include "src/category.cyr"
+include "src/manifest.cyr"
+include "src/depgraph.cyr"
 
 # MarketplaceCategory — parity with rust-old/src/lib.rs (Display + FromStr).
 fn test_category() {
@@ -40,9 +42,267 @@ fn test_category() {
     return 0;
 }
 
+# is_valid_semver — parity with rust-old test_semver_validation.
+fn test_semver() {
+    test_group("semver");
+    assert_eq(is_valid_semver(str_from("1.0.0")),       1, "1.0.0 valid");
+    assert_eq(is_valid_semver(str_from("0.1.0")),       1, "0.1.0 valid");
+    assert_eq(is_valid_semver(str_from("2026.3.6")),    1, "2026.3.6 valid");
+    assert_eq(is_valid_semver(str_from("1.0.0-alpha")), 1, "1.0.0-alpha valid");
+    assert_eq(is_valid_semver(str_from("1.0")),         0, "1.0 invalid");
+    assert_eq(is_valid_semver(str_from("abc")),         0, "abc invalid");
+    assert_eq(is_valid_semver(str_from("1.0.0.0")),     0, "1.0.0.0 invalid");
+    return 0;
+}
+
+# PublisherInfo — field round-trip through the struct accessors.
+fn test_publisher() {
+    test_group("publisher");
+    var p = publisher_new(str_from("AGNOS Team"), str_from("deadbeef"),
+                          str_from("https://agnos.org"));
+    assert_eq(str_eq_cstr(pub_name(p),     "AGNOS Team"),        1, "publisher name");
+    assert_eq(str_eq_cstr(pub_key_id(p),   "deadbeef"),          1, "publisher key_id");
+    assert_eq(str_eq_cstr(pub_homepage(p), "https://agnos.org"), 1, "publisher homepage");
+    return 0;
+}
+
+# --- manifest test helpers ---
+
+# agnostik AgentManifest with name + description (description is at offset 8 in
+# agnostik's layout; agent_manifest_new only takes the name).
+fn mk_agent(name: Str, desc: Str): i64 {
+    var a = agent_manifest_new(name);
+    store64(a + 8, desc);
+    return a;
+}
+
+fn mk_manifest(name: Str, desc: Str, ver: Str, pubname: Str, keyid: Str): i64 {
+    var agent = mk_agent(name, desc);
+    var publ = publisher_new(pubname, keyid, str_from("https://example.com"));
+    return manifest_new(agent, publ, CAT_UTILITY, ver);
+}
+
+# True (1) if any error message in `errs` contains the cstring `needle`.
+# Mirrors the Rust `errors.iter().any(|e| e.contains(needle))`.
+fn errors_contain(errs, needle): i64 {
+    var n = vec_len(errs);
+    var i = 0;
+    var found = 0;
+    var needle_s = str_from(needle);
+    while (i < n) {
+        if (str_contains(vec_get(errs, i), needle_s) == 1) { found = 1; }
+        i = i + 1;
+    }
+    return found;
+}
+
+# A Str of `count` copies of byte `ch`.
+fn repeat_char(count, ch): Str {
+    var buf = alloc(count + 1);
+    var i = 0;
+    while (i < count) { store8(buf + i, ch); i = i + 1; }
+    store8(buf + count, 0);
+    return str_new(buf, count);
+}
+
+# MarketplaceManifest validate() + qualified_name() — parity with rust-old.
+fn test_manifest() {
+    test_group("manifest");
+
+    # valid manifest -> no errors
+    var ok = mk_manifest(str_from("test-agent"), str_from("A test agent"),
+                         str_from("1.0.0"), str_from("Test Publisher"), str_from("abc12345"));
+    assert_eq(vec_len(manifest_validate(ok)), 0, "valid manifest has no errors");
+
+    # missing name
+    var m_name = mk_manifest(str_from(""), str_from("A test agent"),
+                            str_from("1.0.0"), str_from("Test Publisher"), str_from("abc12345"));
+    assert_eq(errors_contain(manifest_validate(m_name), "name is required"), 1, "missing name");
+
+    # name too long (200 chars)
+    var m_long = mk_manifest(repeat_char(200, 97), str_from("A test agent"),
+                            str_from("1.0.0"), str_from("Test Publisher"), str_from("abc12345"));
+    assert_eq(errors_contain(manifest_validate(m_long), "128 characters"), 1, "long name");
+
+    # invalid name chars
+    var m_chars = mk_manifest(str_from("Test Agent!"), str_from("A test agent"),
+                             str_from("1.0.0"), str_from("Test Publisher"), str_from("abc12345"));
+    assert_eq(errors_contain(manifest_validate(m_chars), "lowercase"), 1, "invalid name chars");
+
+    # missing version
+    var m_ver = mk_manifest(str_from("test-agent"), str_from("A test agent"),
+                           str_from(""), str_from("Test Publisher"), str_from("abc12345"));
+    assert_eq(errors_contain(manifest_validate(m_ver), "version is required"), 1, "missing version");
+
+    # invalid semver
+    var m_sem = mk_manifest(str_from("test-agent"), str_from("A test agent"),
+                           str_from("not-a-version"), str_from("Test Publisher"), str_from("abc12345"));
+    assert_eq(errors_contain(manifest_validate(m_sem), "semver"), 1, "invalid semver");
+
+    # missing description
+    var m_desc = mk_manifest(str_from("test-agent"), str_from(""),
+                            str_from("1.0.0"), str_from("Test Publisher"), str_from("abc12345"));
+    assert_eq(errors_contain(manifest_validate(m_desc), "description is required"), 1, "missing description");
+
+    # missing publisher fields
+    var m_pub = mk_manifest(str_from("test-agent"), str_from("A test agent"),
+                           str_from("1.0.0"), str_from(""), str_from(""));
+    assert_eq(errors_contain(manifest_validate(m_pub), "publisher.name"),   1, "missing publisher.name");
+    assert_eq(errors_contain(manifest_validate(m_pub), "publisher.key_id"), 1, "missing publisher.key_id");
+
+    # qualified_name: publisher lowercased + spaced->hyphen, then /agent-name
+    assert_eq(str_eq_cstr(manifest_qualified_name(ok), "test-publisher/test-agent"), 1, "qualified name");
+    return 0;
+}
+
+# --- depgraph test helpers ---
+
+fn deps0(): i64 { return vec_new(); }
+fn deps1(a: Str): i64 { var v = vec_new(); vec_push(v, a); return v; }
+fn deps2(a: Str, b: Str): i64 { var v = vec_new(); vec_push(v, a); vec_push(v, b); return v; }
+
+# DependencyGraph base ops — parity with rust-old (empty / missing / no-missing).
+fn test_depgraph_base() {
+    test_group("depgraph-base");
+
+    # empty graph
+    var g0 = depgraph_new();
+    assert_eq(depgraph_is_empty(g0), 1, "empty graph is_empty");
+    assert_eq(depgraph_len(g0),      0, "empty graph len 0");
+
+    # single node, add + len + contains
+    var g1 = depgraph_new();
+    depgraph_add(g1, depnode_new(str_from("agent-a"), str_from("1.0.0"), deps0()));
+    assert_eq(depgraph_is_empty(g1),                   0, "single graph not empty");
+    assert_eq(depgraph_len(g1),                        1, "single graph len 1");
+    assert_eq(depgraph_contains(g1, str_from("agent-a")), 1, "graph contains agent-a");
+
+    # missing dep
+    var gm = depgraph_new();
+    depgraph_add(gm, depnode_new(str_from("a"), str_from("1.0.0"), deps1(str_from("missing-dep"))));
+    var missing = depgraph_check_missing(gm);
+    assert_eq(vec_len(missing), 1, "one missing dep");
+    assert_eq(str_eq_cstr(dep_pair_a(vec_get(missing, 0)), "a"),           1, "missing owner a");
+    assert_eq(str_eq_cstr(dep_pair_b(vec_get(missing, 0)), "missing-dep"), 1, "missing dep name");
+
+    # no missing
+    var gn = depgraph_new();
+    depgraph_add(gn, depnode_new(str_from("a"), str_from("1.0.0"), deps0()));
+    assert_eq(vec_len(depgraph_check_missing(gn)), 0, "no missing deps");
+    return 0;
+}
+
+# Position of `name` in an order Vec<Str>, or -1. Mirrors Rust
+# `order.iter().position(|n| n == name)`.
+fn order_pos(order, name): i64 {
+    var n = vec_len(order);
+    var i = 0;
+    var pos = 0 - 1;
+    var target = str_from(name);
+    while (i < n) {
+        if (str_eq(vec_get(order, i), target) == 1) { pos = i; }
+        i = i + 1;
+    }
+    return pos;
+}
+
+# detect_cycle + resolve — parity with rust-old (empty/single/chain/diamond/cycle).
+fn test_depgraph_resolve() {
+    test_group("depgraph-resolve");
+    var V = str_from("1.0.0");
+
+    # empty graph resolves to an empty order (Ok, not Err)
+    var g0 = depgraph_new();
+    var o0 = depgraph_resolve(g0);
+    assert_neq(o0,         0, "empty resolve is Ok");
+    assert_eq(vec_len(o0), 0, "empty resolve is empty");
+
+    # single node
+    var g1 = depgraph_new();
+    depgraph_add(g1, depnode_new(str_from("agent-a"), V, deps0()));
+    var o1 = depgraph_resolve(g1);
+    assert_eq(vec_len(o1),                       1, "single resolve len 1");
+    assert_eq(str_eq_cstr(vec_get(o1, 0), "agent-a"), 1, "single resolve agent-a");
+
+    # linear chain c -> b -> a : a before b before c
+    var gc = depgraph_new();
+    depgraph_add(gc, depnode_new(str_from("c"), V, deps1(str_from("b"))));
+    depgraph_add(gc, depnode_new(str_from("b"), V, deps1(str_from("a"))));
+    depgraph_add(gc, depnode_new(str_from("a"), V, deps0()));
+    var oc = depgraph_resolve(gc);
+    assert_eq(vec_len(oc), 3, "chain resolve len 3");
+    assert_lt(order_pos(oc, "a"), order_pos(oc, "b"), "chain a before b");
+    assert_lt(order_pos(oc, "b"), order_pos(oc, "c"), "chain b before c");
+
+    # diamond d -> {b,c} -> a : a before d, total 4
+    var gd = depgraph_new();
+    depgraph_add(gd, depnode_new(str_from("d"), V, deps2(str_from("b"), str_from("c"))));
+    depgraph_add(gd, depnode_new(str_from("b"), V, deps1(str_from("a"))));
+    depgraph_add(gd, depnode_new(str_from("c"), V, deps1(str_from("a"))));
+    depgraph_add(gd, depnode_new(str_from("a"), V, deps0()));
+    var od = depgraph_resolve(gd);
+    assert_eq(vec_len(od), 4, "diamond resolve len 4");
+    assert_lt(order_pos(od, "a"), order_pos(od, "d"), "diamond a before d");
+
+    # cycle a <-> b : detect_cycle is Some, resolve is Err
+    var gx = depgraph_new();
+    depgraph_add(gx, depnode_new(str_from("a"), V, deps1(str_from("b"))));
+    depgraph_add(gx, depnode_new(str_from("b"), V, deps1(str_from("a"))));
+    assert_neq(depgraph_detect_cycle(gx), 0, "cycle detected");
+    assert_eq(depgraph_resolve(gx),      0, "cycle resolve is Err");
+    return 0;
+}
+
+# JSON codec (ADR-0001) — category mapping + publisher/manifest round-trips,
+# parity with rust-old test_manifest_serialization / test_publisher_info_serialization.
+fn test_json() {
+    test_group("json");
+
+    # category serializes as PascalCase variant name (NOT the Display form)
+    assert_eq(str_eq_cstr(cat_json_name(CAT_DESKTOP_APP), "DesktopApp"), 1, "cat json DesktopApp");
+    assert_eq(str_eq_cstr(cat_json_name(CAT_DEVTOOL),     "DevTool"),    1, "cat json DevTool");
+    assert_eq(cat_json_parse(str_from("Utility")),    CAT_UTILITY,     "cat parse Utility");
+    assert_eq(cat_json_parse(str_from("DesktopApp")), CAT_DESKTOP_APP, "cat parse DesktopApp");
+    assert_eq(cat_json_parse(str_from("nope")),       CAT_PARSE_FAIL,  "cat parse unknown");
+
+    # PublisherInfo round-trip
+    var p = publisher_new(str_from("AGNOS Team"), str_from("deadbeef"), str_from("https://agnos.org"));
+    var p2 = publisher_from_json(publisher_to_json(p));
+    assert_neq(p2, 0, "publisher json parses");
+    assert_eq(str_eq_cstr(pub_name(p2),   "AGNOS Team"), 1, "json pub name");
+    assert_eq(str_eq_cstr(pub_key_id(p2), "deadbeef"),   1, "json pub key_id");
+
+    # MarketplaceManifest round-trip
+    var agent = mk_agent(str_from("test-agent"), str_from("A test agent"));
+    var publ = publisher_new(str_from("Test Publisher"), str_from("abc12345"), str_from("https://example.com"));
+    var m = manifest_new(agent, publ, CAT_UTILITY, str_from("1.0.0"));
+    man_set_runtime(m, str_from("native"));
+    man_set_changelog(m, str_from("Initial release"));
+    man_set_min_agnos_version(m, str_from("2026.3.6"));
+    vec_push(man_tags(m), str_from("test"));
+
+    var m2 = manifest_from_json(manifest_to_json(m));
+    assert_neq(m2, 0, "manifest json parses");
+    assert_eq(str_eq_cstr(man_name(m2),        "test-agent"),   1, "json name");
+    assert_eq(man_category(m2),                CAT_UTILITY,        "json category");
+    assert_eq(str_eq_cstr(pub_key_id(man_publisher(m2)), "abc12345"), 1, "json publisher.key_id");
+    assert_eq(str_eq_cstr(man_version(m2),     "1.0.0"),        1, "json version");
+    assert_eq(str_eq_cstr(man_description(m2), "A test agent"), 1, "json description");
+    assert_eq(str_eq_cstr(man_runtime(m2),     "native"),       1, "json runtime");
+    assert_eq(vec_len(man_tags(m2)),           1,                  "json tags len");
+    assert_eq(str_eq_cstr(vec_get(man_tags(m2), 0), "test"),    1, "json tag value");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_category();
+    test_semver();
+    test_publisher();
+    test_manifest();
+    test_depgraph_base();
+    test_depgraph_resolve();
+    test_json();
     return assert_summary();
 }
 

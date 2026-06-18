@@ -1,6 +1,6 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-06-17 · Live status: [`state.md`](state.md) · Per-version history:
+> **Last Updated**: 2026-06-17 (v0.2.0) · Live status: [`state.md`](state.md) · Per-version history:
 > [`../../CHANGELOG.md`](../../CHANGELOG.md)
 >
 > The path from the **v0.1.0 port scaffold** to a **v1.0 release**. mela is mid-port from Rust
@@ -31,6 +31,14 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 ---
 
 ## Completed
+
+### v0.2.0 — Core manifest model ✅ (2026-06-17)
+- **`lib.rs` fully ported.** `src/manifest.cyr` (`PublisherInfo`, `MarketplaceManifest` +
+  `validate`/`qualified_name`, `is_valid_semver`, JSON codec) and `src/depgraph.cyr` (`DepNode`,
+  `DependencyGraph`: `add`/`len`/`is_empty`/`check_missing`/`detect_cycle`/Kahn `resolve`).
+- **`agnostik` dep wired** (`dist/agnostik.cyr`) as the `AgentManifest` source.
+- Manifest wire format pinned (ADR-0001 JSON) + version-as-`Str` divergence (ADR-0002).
+- **76/76 parity tests** green; malformed-manifest fuzz harness.
 
 ### v0.1.0 — Port scaffold ✅ (2026-06-17)
 - `cyrius port` scaffold: 6208 lines of Rust → `rust-old/` (oracle); `cyrius.cyml` (pin

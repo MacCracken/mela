@@ -1,0 +1,260 @@
+# depgraph.cyr — dependency resolution.
+#
+# Ports the dependency-graph half of rust-old/src/lib.rs: `DepNode` and
+# `DependencyGraph` (add / len / is_empty / check_missing / detect_cycle /
+# resolve). The graph is a Str-keyed map of name -> DepNode, mirroring the Rust
+# `HashMap<String, DepNode>`.
+#
+# Structs are 8-byte fields via load64/store64; strings are stdlib `Str`.
+
+# ---------------------------------------------------------------------------
+# DepNode — { name, version, dependencies }
+# ---------------------------------------------------------------------------
+
+fn depnode_new(name: Str, version: Str, deps): i64 {
+    var n = alloc(24);
+    store64(n,      name);
+    store64(n + 8,  version);
+    store64(n + 16, deps);     # Vec<Str>
+    return n;
+}
+
+fn depnode_name(n): Str    { return load64(n); }
+fn depnode_version(n): Str { return load64(n + 8); }
+fn depnode_deps(n)         { return load64(n + 16); }
+
+# ---------------------------------------------------------------------------
+# DependencyGraph — nodes: HashMap<String, DepNode>
+# ---------------------------------------------------------------------------
+#
+# The graph handle IS the Str-keyed node map (no extra wrapper). Use map_new_str
+# (not the cstr-keyed map_new) since keys are heap Strs.
+
+fn depgraph_new(): i64 { return map_new_str(); }
+
+# Add a package; keyed by its name (overwrites a same-name node, like
+# HashMap::insert). Mirrors Rust `add`.
+fn depgraph_add(g, node): i64 {
+    map_set(g, depnode_name(node), node);
+    return 0;
+}
+
+fn depgraph_len(g): i64      { return map_size(g); }
+fn depgraph_is_empty(g): i64 { if (map_size(g) == 0) { return 1; } return 0; }
+fn depgraph_contains(g, name): i64 { return map_has(g, name); }
+fn depgraph_get(g, name): i64      { return map_get(g, name); }
+
+# (owner-name, missing-dep) pair for check_missing results.
+fn dep_pair_new(a: Str, b: Str): i64 {
+    var p = alloc(16);
+    store64(p,     a);
+    store64(p + 8, b);
+    return p;
+}
+fn dep_pair_a(p): Str { return load64(p); }
+fn dep_pair_b(p): Str { return load64(p + 8); }
+
+# check_missing() — Vec of (node.name, dep) for every dependency not present in
+# the graph. Mirrors Rust `check_missing`.
+fn depgraph_check_missing(g): i64 {
+    var missing = vec_new();
+    var nodes = map_values(g);
+    var nn = vec_len(nodes);
+    var i = 0;
+    while (i < nn) {
+        var node = vec_get(nodes, i);
+        var deps = depnode_deps(node);
+        var dn = vec_len(deps);
+        var j = 0;
+        while (j < dn) {
+            var dep = vec_get(deps, j);
+            if (map_has(g, dep) == 0) {
+                vec_push(missing, dep_pair_new(depnode_name(node), dep));
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return missing;
+}
+
+# ---------------------------------------------------------------------------
+# Cycle detection (DFS) + topological resolve (Kahn)
+# ---------------------------------------------------------------------------
+
+# DFS from `name`, carrying the visited set, the recursion-stack set (both
+# Str-keyed maps used as sets), and the current path (Vec<Str>). Returns the
+# cycle path Vec on a back-edge, else 0. Mirrors rust-old `dfs_cycle`.
+fn _dfs_cycle(g, name, visited, onstk, path): i64 {
+    var node = map_get(g, name);
+    if (node == 0) { return 0; }          # name not in nodes -> None
+    map_set(visited, name, 1);
+    map_set(onstk, name, 1);
+    vec_push(path, name);
+
+    var deps = depnode_deps(node);
+    var dn = vec_len(deps);
+    var i = 0;
+    var result = 0;
+    while (i < dn) {
+        if (result == 0) {                # stop descending once a cycle is found
+            var dep = vec_get(deps, i);
+            var dep_node = map_get(g, dep);
+            if (dep_node != 0) {
+                if (map_has(visited, dep) == 0) {
+                    var c = _dfs_cycle(g, dep, visited, onstk, path);
+                    if (c != 0) { result = c; }
+                } else {
+                    if (map_has(onstk, dep) == 1) {   # back-edge -> cycle
+                        vec_push(path, dep);
+                        result = path;
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    if (result != 0) { return result; }   # early return without popping (Rust parity)
+    map_delete(onstk, name);
+    vec_pop(path);
+    return 0;
+}
+
+# detect_cycle() — the cycle path Vec if one exists, else 0. Mirrors rust-old
+# `detect_cycle` (`Option<Vec<String>>`; 0 stands in for None).
+fn depgraph_detect_cycle(g): i64 {
+    var visited = map_new_str();
+    var onstk = map_new_str();
+    var path = vec_new();
+    var names = map_keys(g);
+    var nn = vec_len(names);
+    var i = 0;
+    var result = 0;
+    while (i < nn) {
+        if (result == 0) {
+            var name = vec_get(names, i);
+            if (map_has(visited, name) == 0) {
+                var c = _dfs_cycle(g, name, visited, onstk, path);
+                if (c != 0) { result = c; }
+            }
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+# Lexicographic (byte-wise) less-than for Strs: 1 if a < b, else 0.
+fn _str_lt(a: Str, b: Str): i64 {
+    var la = str_len(a);
+    var lb = str_len(b);
+    var pa = str_data(a);
+    var pb = str_data(b);
+    var n = la;
+    if (lb < la) { n = lb; }
+    var i = 0;
+    var res = 0;            # 0 undecided, 1 a<b, 2 a>b
+    while (i < n) {
+        if (res == 0) {
+            var ca = load8(pa + i);
+            var cb = load8(pb + i);
+            if (ca < cb) { res = 1; }
+            if (ca > cb) { res = 2; }
+        }
+        i = i + 1;
+    }
+    if (res == 1) { return 1; }
+    if (res == 2) { return 0; }
+    if (la < lb) { return 1; }   # prefix-equal: shorter sorts first
+    return 0;
+}
+
+# In-place ascending selection sort of a Vec<Str> (no break -> no var-in-loop
+# pitfall; node counts are small). Makes the resolve seed order deterministic.
+fn _sort_strs(v): i64 {
+    var n = vec_len(v);
+    var i = 0;
+    while (i < n) {
+        var min_idx = i;
+        var j = i + 1;
+        while (j < n) {
+            if (_str_lt(vec_get(v, j), vec_get(v, min_idx)) == 1) { min_idx = j; }
+            j = j + 1;
+        }
+        var tmp = vec_get(v, i);
+        vec_set(v, i, vec_get(v, min_idx));
+        vec_set(v, min_idx, tmp);
+        i = i + 1;
+    }
+    return 0;
+}
+
+# resolve() — topological install order (Vec<Str>), or 0 if a cycle exists
+# (Rust returns Err). Kahn's algorithm: build in-degrees + reverse-deps over the
+# edges that exist in the graph, seed with the in-degree-0 nodes (sorted for
+# determinism), drain. Mirrors rust-old `resolve`.
+fn depgraph_resolve(g): i64 {
+    if (depgraph_detect_cycle(g) != 0) { return 0; }    # Err on cycle
+
+    var in_deg = map_new_str();    # name -> in-degree (i64)
+    var rev = map_new_str();       # dep  -> Vec<dependent name>
+    var nodes = map_values(g);
+    var nn = vec_len(nodes);
+    var i = 0;
+    while (i < nn) {
+        var node = vec_get(nodes, i);
+        var nm = depnode_name(node);
+        if (map_has(in_deg, nm) == 0) { map_set(in_deg, nm, 0); }
+        var deps = depnode_deps(node);
+        var dn = vec_len(deps);
+        var j = 0;
+        while (j < dn) {
+            var dep = vec_get(deps, j);
+            if (map_has(g, dep) == 1) {                  # only edges to known nodes
+                if (map_has(in_deg, dep) == 0) { map_set(in_deg, dep, 0); }
+                map_set(in_deg, nm, map_get(in_deg, nm) + 1);
+                var lst = map_get(rev, dep);
+                if (lst == 0) {
+                    lst = vec_new();
+                    map_set(rev, dep, lst);
+                }
+                vec_push(lst, nm);
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+
+    # seed queue: in-degree-0 names, sorted
+    var keys = map_keys(in_deg);
+    var kn = vec_len(keys);
+    var queue = vec_new();
+    var k = 0;
+    while (k < kn) {
+        var key = vec_get(keys, k);
+        if (map_get(in_deg, key) == 0) { vec_push(queue, key); }
+        k = k + 1;
+    }
+    _sort_strs(queue);
+
+    # drain (queue grows via push-back; `head` is the FIFO read cursor)
+    var order = vec_new();
+    var head = 0;
+    while (head < vec_len(queue)) {
+        var name = vec_get(queue, head);
+        head = head + 1;
+        vec_push(order, name);
+        var dependents = map_get(rev, name);
+        if (dependents != 0) {
+            var dd = vec_len(dependents);
+            var d = 0;
+            while (d < dd) {
+                var dependent = vec_get(dependents, d);
+                var deg = map_get(in_deg, dependent) - 1;
+                map_set(in_deg, dependent, deg);
+                if (deg == 0) { vec_push(queue, dependent); }
+                d = d + 1;
+            }
+        }
+    }
+    return order;
+}

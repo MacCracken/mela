@@ -19,4 +19,9 @@ Decisions about mela — what we chose, the context, and the consequences we acc
 
 ## Index
 
-_No ADRs yet. Add the first as `0001-kebab-case-title.md`._
+- [0001 — Manifest wire format is JSON](0001-manifest-wire-format-json.md) — *Accepted* · the
+  hand-written manifest codec targets serde-JSON parity; category serializes as the PascalCase
+  variant name, not the `Display` form.
+- [0002 — Agent version is a mela-owned Str descriptor](0002-agent-version-as-str-descriptor.md) —
+  *Accepted* · agnostik is wired as the agent body, but version stays a validatable `Str` (its
+  `Version` struct can't be empty/invalid), so `validate()` keeps the oracle's version checks.
