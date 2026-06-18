@@ -6,6 +6,39 @@ include benchmark numbers; breaking changes get a **Breaking** section with a mi
 
 ## [Unreleased]
 
+## [0.9.0] — Security audit + hardening
+
+A pre-release security audit of the supply-chain trust boundary, informed by
+current 0-day / CVE classes, with concrete hardening. **463/463 parity tests**
+green (was 457).
+
+### Added
+- **`docs/audit/2026-06-17-audit.md`** — findings table mapping current CVE/0-day
+  classes (tar zip-slip CVE-2025-45582 / tar-fs CVE-2024-12905 / mholt zip-slip,
+  gzip-bomb CVE-2026-49853, Ed25519 §5.1.7 malleability, signature-stripping,
+  typosquatting, dependency confusion) onto mela's surface, with the control and
+  residual risk for each, plus sources.
+- **`docs/development/threat-model.md`** — assets, trust boundaries (B1 publisher
+  → artifact, B2 untrusted network, B3 on-disk), attacker model, and the control
+  holding each boundary, with the in-code enforcement points.
+
+### Security / Hardened
+- **Tar entry-safety guard** (`_tar_entry_safe` in `flutter_agpkg.cyr`) — the
+  hand-rolled ustar reader now rejects **symlink/hardlink/non-regular** entries
+  and **absolute or `..`-traversal** names. `agpkg_inspect` skips them;
+  `agpkg_read_entry` refuses them. Defends the zip-slip / symlink-escape class
+  (CVE-2025-45582, tar-fs CVE-2024-12905). New `hardening` test group.
+- **Confirmed controls** (documented, already enforced): bounded decompression
+  (fixed 8 MiB inflate buffer, fails closed → gzip-bomb safe); Ed25519
+  non-malleability via `sigil` RFC 8032 §5.1.7 + a 64-byte signature gate; both
+  install trust gates (signature + digest); manifest-name validation before the
+  install path; key-validity windows; append-only transparency log; all
+  external-data parsers fuzzed.
+
+### Notes
+- No new dependency. The deferred on-disk extractor (ADR-0005) and live transport
+  (ADR-0006) carry explicit follow-up items in the audit/threat-model.
+
 ## [0.8.1] — Release run: end-to-end wiring + benchmarks
 
 The full marketplace flow, wired across all ported modules with **both trust

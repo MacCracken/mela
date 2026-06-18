@@ -1,6 +1,6 @@
 [package]
 name = "mela"
-version = "0.8.1"
+version = "0.9.0"
 description = "mela — Cyrius port (from 6208 lines of Rust)"
 license = "GPL-3.0-only"
 language = "cyrius"

@@ -5,9 +5,9 @@
 
 ## Version
 
-**0.8.1** — Release run (2026-06-17). All 9 modules ported; the end-to-end flow is wired with
-both trust gates enforced; hot-path benchmarks captured. 6208 lines of Rust preserved at
-`rust-old/` (retired after v1.0, once coverage ≥ Rust suite).
+**0.9.0** — Security audit + hardening (2026-06-17). All 9 modules ported; end-to-end flow wired
+(both gates enforced); pre-release audit + threat model done with tar zip-slip hardening. 6208
+lines of Rust preserved at `rust-old/` (retired after v1.0, once coverage ≥ Rust suite).
 
 ## Toolchain
 
@@ -52,8 +52,8 @@ both trust gates enforced; hot-path benchmarks captured. 6208 lines of Rust pres
 
 ## Tests
 
-**457/457** parity tests green (`tests/mela.tcyr` — 25 groups across the 9 modules, plus the
-`pipeline` end-to-end group). `trust` has SHA-256 + RFC 8032 Ed25519 KAT vectors; `registry-persist`
+**463/463** parity tests green (`tests/mela.tcyr` — 25 groups across the 9 modules, plus the
+`pipeline` end-to-end and `hardening` (tar zip-slip rejection) groups). `trust` has SHA-256 + RFC 8032 Ed25519 KAT vectors; `registry-persist`
 / `ratings-persist` do real on-disk round-trips; `agpkg-archive` packs + inspects a gzipped-ustar
 `.agnos-agent` (cross-validated against the system `tar` both directions); `pipeline` runs
 package→sign→log→verify→install and rejects tampered / digest-mismatch / untrusted / wrong-key.
@@ -83,8 +83,9 @@ Direct (declared in `cyrius.cyml`):
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). Module port complete (9/9); end-to-end flow wired (0.8.1). Next:
-**v0.9.0 — Security audit + hardening** (`docs/audit/` + `docs/development/threat-model.md`), with
-web research on relevant 0-days / CVEs (Ed25519, gzip/tar zip-slip, supply-chain). Then **v0.9.1 —
-API freeze + documentation cleanup**. `rust-old/` retires after v1.0; **ark** is the intended
-downstream consumer for the v1.0 gate.
+See [`roadmap.md`](roadmap.md). Module port complete (9/9); end-to-end flow wired (0.8.1); security
+audit + threat model done with tar zip-slip hardening (0.9.0, see
+[`../audit/2026-06-17-audit.md`](../audit/2026-06-17-audit.md) +
+[`threat-model.md`](threat-model.md)). Next: **v0.9.1 — API freeze + documentation cleanup**
+(`docs/api/`). `rust-old/` retires after v1.0; **ark** is the intended downstream consumer for the
+v1.0 gate.

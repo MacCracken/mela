@@ -1062,6 +1062,28 @@ fn names_have_prefix(vec, prefix) {
     return hit;
 }
 
+# v0.9.0 hardening — tar reader rejects zip-slip / traversal entries.
+fn test_hardening() {
+    test_group("hardening");
+    var blob = str_from("payload");
+    var entries = vec_new();
+    vec_push(entries, tentry_new(str_from("../evil.so"),     str_data(blob), str_len(blob)));
+    vec_push(entries, tentry_new(str_from("/etc/passwd"),    str_data(blob), str_len(blob)));
+    vec_push(entries, tentry_new(str_from("bin/safe.so"),    str_data(blob), str_len(blob)));
+    var bundle = _gzip_str(_tar_build(entries));
+
+    var names = agpkg_inspect_bytes(str_data(bundle), str_len(bundle));
+    assert_neq(names, 0, "inspect ok");
+    assert_eq(names_contain(names, "bin/safe.so"),  1, "safe entry listed");
+    assert_eq(names_contain(names, "../evil.so"),   0, "traversal entry skipped");
+    assert_eq(names_contain(names, "/etc/passwd"),  0, "absolute path skipped");
+
+    # read_entry refuses unsafe names, allows safe ones
+    assert_eq(agpkg_read_entry(str_data(bundle), str_len(bundle), str_from("../evil.so")), 0, "traversal read refused");
+    assert_neq(agpkg_read_entry(str_data(bundle), str_len(bundle), str_from("bin/safe.so")), 0, "safe read ok");
+    return 0;
+}
+
 # End-to-end pipeline: package -> sign+log -> verify (both gates) -> install.
 fn test_pipeline() {
     test_group("pipeline");
@@ -1417,6 +1439,7 @@ fn main() {
     test_fpackaging();
     test_agpkg();
     test_agpkg_archive();
+    test_hardening();
     test_pipeline();
     return assert_summary();
 }

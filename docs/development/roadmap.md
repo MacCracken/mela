@@ -1,6 +1,6 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-06-17 (v0.8.1) · Live status: [`state.md`](state.md) · Per-version history:
+> **Last Updated**: 2026-06-17 (v0.9.0) · Live status: [`state.md`](state.md) · Per-version history:
 > [`../../CHANGELOG.md`](../../CHANGELOG.md)
 >
 > The path from the **v0.1.0 port scaffold** to a **v1.0 release**. mela is mid-port from Rust
@@ -31,6 +31,16 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 ---
 
 ## Completed
+
+### v0.9.0 — Security audit + hardening ✅ (2026-06-17)
+- **Audit** (`docs/audit/2026-06-17-audit.md`) + **threat model**
+  (`docs/development/threat-model.md`): current CVE/0-day classes mapped to mela's surface with
+  controls + residual risk; informed by web research (tar zip-slip, gzip bombs, Ed25519
+  malleability, supply-chain).
+- **Hardening**: `_tar_entry_safe` — the ustar reader rejects symlink/hardlink/non-regular entries
+  and `..`/absolute names (zip-slip class, CVE-2025-45582 / tar-fs CVE-2024-12905). `hardening`
+  test group. Bounded decompression, signature/digest gates, name validation, key windows, and
+  fuzzed parsers confirmed. **463/463 tests**.
 
 ### v0.8.1 — End-to-end wiring + benchmarks ✅ (2026-06-17)
 - **`src/pipeline.cyr`** wires the full flow: `pipeline_package` → `pipeline_publish` (Ed25519
@@ -191,14 +201,11 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
   capability-surface → install) with **both trust gates enforced**; hot-path benchmarks captured.
   See *Completed*. (Live `sandhi`/`tls` transport stays a local seam — ADR-0006/0009.)
 
-### v0.9.0 — Security audit + hardening
-- **Security audit** — `docs/audit/YYYY-MM-DD-audit.md` + `docs/development/threat-model.md`.
-  mela is a supply-chain trust boundary; the bar is high.
-- **Web research on 0-days / CVEs** relevant to the surface: Ed25519 signature-malleability and
-  verification pitfalls, gzip/tar decompression (zip-slip / path-traversal, decompression bombs),
-  JSON parser hardening, supply-chain (signing/transparency) attack classes — fold findings into
-  the threat model + concrete hardening.
-- **Fuzz every external-data parser** (already in place; extend with adversarial corpora).
+### v0.9.0 — Security audit + hardening ✅ (2026-06-17)
+- **Done.** `docs/audit/2026-06-17-audit.md` + `docs/development/threat-model.md`; web research on
+  the relevant 0-day / CVE classes folded into findings + the threat model. Concrete hardening:
+  the ustar reader's `_tar_entry_safe` zip-slip guard. See *Completed*. Follow-ups (on-disk
+  extractor path-confinement, live-transport TLS, keyring provenance) tracked in the audit.
 
 ### v0.9.1 — API freeze + documentation cleanup
 - Freeze the public API; document it in `docs/api/` (hand-written ser/de roundtrip-tested, zero
@@ -222,7 +229,7 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 - [x] Every external-data parser fuzzed. *(coverage ≥ Rust suite to confirm before v1.0)*
 - [~] `docs/benchmarks-rust-v-cyrius.md` captured — Cyrius baseline done; Rust column deferred
   (`rust-old` needs `agnos-common` to build). *(v0.8.1)*
-- [ ] Pre-release security audit passed (`docs/audit/`). *(v0.9.0)*
+- [x] Pre-release security audit passed (`docs/audit/`). *(v0.9.0)*
 - [ ] Public API frozen + `docs/api/`; CHANGELOG complete from 0.1.0. *(v0.9.1)*
 - [ ] ≥1 downstream consumer (**ark**, package pull) green against mela. *(v1.0)*
 - [ ] `rust-old/` deleted (parity + coverage met). *(after v1.0)*

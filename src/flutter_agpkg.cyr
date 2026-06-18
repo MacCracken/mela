@@ -542,6 +542,23 @@ fn agpkg_inspect(path: Str): i64 {
     return agpkg_inspect_bytes(str_data(fb), str_len(fb));
 }
 
+# _tar_entry_safe — reject tar entries that would enable a zip-slip / symlink
+# escape on extraction (defense-in-depth, hardening per the v0.9.0 audit; cf.
+# CVE-2025-45582, tar-fs CVE-2024-12905, the mholt/archiver zip-slip class). An
+# entry is safe only if it is a regular file ('0' or the old-style NUL typeflag)
+# and its name is relative with no ".." segment and no leading '/'.
+fn _tar_entry_safe(buf, off): i64 {
+    var tf = load8(buf + off + 156);             # typeflag
+    if (tf != 48) {                              # '0' regular
+        if (tf != 0) { return 0; }               # reject symlink('2')/hardlink('1')/dir('5')/...
+    }
+    var name = _tar_read_name(buf, off);
+    if (str_len(name) == 0) { return 0; }
+    if (load8(str_data(name)) == 47) { return 0; }            # leading '/' (absolute)
+    if (str_contains(name, str_from("..")) == 1) { return 0; } # any ".." (traversal)
+    return 1;
+}
+
 # agpkg_read_entry — gunzip + find the entry named `name`, returning its content
 # bytes as a Str (or 0 if absent / on a decompress error). Bounds-checked. Used
 # to pull manifest.json / sandbox.json back out of a packed bundle (unblocks the
@@ -560,11 +577,14 @@ fn agpkg_read_entry(data, len, name: Str): i64 {
             else {
                 var esize = _tar_read_size(dst, off);
                 if (str_eq(_tar_read_name(dst, off), name) == 1) {
-                    if (off + 512 + esize <= dlen) {
-                        var out = alloc(esize + 1);
-                        memcpy(out, dst + off + 512, esize);
-                        store8(out + esize, 0);
-                        found = str_new(out, esize);
+                    # only return content for a safe regular-file entry
+                    if (_tar_entry_safe(dst, off) == 1) {
+                        if (off + 512 + esize <= dlen) {
+                            var out = alloc(esize + 1);
+                            memcpy(out, dst + off + 512, esize);
+                            store8(out + esize, 0);
+                            found = str_new(out, esize);
+                        }
                     }
                     go = 0;
                 } else {
@@ -591,7 +611,9 @@ fn agpkg_inspect_bytes(data, len): i64 {
         else {
             if (load8(dst + off) == 0) { go = 0; }     # zero block => EOF
             else {
-                vec_push(names, _tar_read_name(dst, off));
+                # only list safe regular-file entries (zip-slip / symlink escapes
+                # are skipped, not surfaced as installable — v0.9.0 hardening)
+                if (_tar_entry_safe(dst, off) == 1) { vec_push(names, _tar_read_name(dst, off)); }
                 off = off + 512 + _roundup512(_tar_read_size(dst, off));
             }
         }
