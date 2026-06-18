@@ -5,6 +5,7 @@
 include "src/category.cyr"   # MarketplaceCategory (first ported module)
 include "src/manifest.cyr"   # PublisherInfo + MarketplaceManifest (v0.2.0)
 include "src/depgraph.cyr"   # DepNode + DependencyGraph (v0.2.0)
+include "src/trust.cyr"      # Ed25519/SHA-256 trust gate (v0.3.0)
 
 fn main() {
     alloc_init();

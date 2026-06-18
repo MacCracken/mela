@@ -1,6 +1,6 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-06-17 (v0.2.0) · Live status: [`state.md`](state.md) · Per-version history:
+> **Last Updated**: 2026-06-17 (v0.3.0) · Live status: [`state.md`](state.md) · Per-version history:
 > [`../../CHANGELOG.md`](../../CHANGELOG.md)
 >
 > The path from the **v0.1.0 port scaffold** to a **v1.0 release**. mela is mid-port from Rust
@@ -31,6 +31,14 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 ---
 
 ## Completed
+
+### v0.3.0 — Trust gate ✅ (2026-06-17)
+- **`trust.rs` ported** → `src/trust.cyr` over **sigil** (`dist/sigil.cyr`): Ed25519
+  sign/verify + SHA-256 hashing, hex codec, `KeyVersion` (`is_valid_at` / `verifying_key`),
+  in-memory `PublisherKeyring`. Disk `load()` deferred to the fs milestone.
+- Sign→verify round-trips; tampered + wrong-key + bad-length signatures all rejected;
+  SHA-256 + RFC 8032 Ed25519 known-answer vectors match. Trust parsers fuzzed.
+- Time as `i64` epoch, explicit `now`, deferred loader (ADR-0003). **114/114 tests** green.
 
 ### v0.2.0 — Core manifest model ✅ (2026-06-17)
 - **`lib.rs` fully ported.** `src/manifest.cyr` (`PublisherInfo`, `MarketplaceManifest` +

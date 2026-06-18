@@ -1,0 +1,194 @@
+# trust.cyr — marketplace trust & signing.
+#
+# Ports rust-old/src/trust.rs: Ed25519 publisher signing/verification and
+# SHA-256 download-integrity hashing, over the `sigil` crypto crate
+# (ed25519_keypair / _sign / _verify, sha256_hex, hex_encode / hex_decode).
+# Plus the publisher keyring (KeyVersion + PublisherKeyring) — see below.
+#
+# sigil's constant-time crypto scratch (cbank) calls thread_local_get/set/init.
+# The stdlib auto-resolver does NOT pull `thread_local` through sigil's dist
+# bundle (only through project source), so without this explicit include the
+# binary links with undefined thread_local_* and SIGILLs the first time
+# ed25519_verify runs. Force it in here. (Mirrors the libro/kybernet ordering
+# note for sigil consumers.)
+include "lib/thread_local.cyr"
+
+# Key/signature/digest sizes (bytes). Ed25519 secret = seed(32) || pubkey(32).
+var TRUST_SK_LEN  = 64;
+var TRUST_PK_LEN  = 32;
+var TRUST_SIG_LEN = 64;
+
+# ---------------------------------------------------------------------------
+# Hashing + hex
+# ---------------------------------------------------------------------------
+
+# SHA-256 of `len` bytes -> 64-char lowercase hex Str. Mirrors Rust `hash_data`.
+fn trust_hash_data(data, len): Str {
+    return str_from(sha256_hex(data, len));
+}
+
+# Hex-encode `len` bytes -> Str. Mirrors Rust `hex::encode`.
+fn trust_hex_encode(data, len): Str {
+    return str_from(hex_encode(data, len));
+}
+
+# Hex-decode a Str -> byte buffer, or 0 on error (odd length / empty / non-hex).
+# Mirrors Rust `hex::decode` (odd-length and invalid-digit both Err).
+fn trust_hex_decode(s: Str): i64 {
+    return hex_decode(str_data(s), str_len(s));
+}
+
+# Decoded byte length for a hex Str (len/2). Pairs with trust_hex_decode.
+fn trust_hex_decode_len(s: Str): i64 {
+    return str_len(s) / 2;
+}
+
+# ---------------------------------------------------------------------------
+# Signing / verification
+# ---------------------------------------------------------------------------
+
+# Sign `len` bytes with a 64-byte Ed25519 secret key (seed||pk). Returns a fresh
+# 64-byte signature buffer. Mirrors Rust `sign_data`.
+fn trust_sign(sk, data, len): i64 {
+    var sig = alloc(TRUST_SIG_LEN);
+    ed25519_sign(sk, data, len, sig);
+    return sig;
+}
+
+# Verify a signature over `len` bytes against a 32-byte public key. Returns 1 if
+# valid, 0 otherwise. A signature that is not exactly 64 bytes is rejected
+# (Rust `verify_signature` errors on a non-64-byte signature). Mirrors Rust
+# `verify_signature` (Ok -> 1, Err -> 0).
+fn trust_verify(data, len, sig, sig_len, pk): i64 {
+    if (sig_len != TRUST_SIG_LEN) { return 0; }
+    return ed25519_verify(pk, data, len, sig);
+}
+
+# ---------------------------------------------------------------------------
+# Key generation
+# ---------------------------------------------------------------------------
+
+# key_id = lowercase hex of the first 8 bytes of the public key (16 chars).
+# Mirrors Rust `key_id_from_verifying_key`.
+fn trust_key_id_from_pk(pk): Str {
+    return str_from(hex_encode(pk, 8));
+}
+
+# Deterministic keypair from a 32-byte seed. Fills sk_out[64] and pk_out[32];
+# returns the key_id. (Rust generate_keypair is randomized; this is the
+# seed-driven form used for known-answer tests + reproducible keys.)
+fn trust_keypair_from_seed(seed, sk_out, pk_out): Str {
+    ed25519_keypair(seed, sk_out, pk_out);
+    return trust_key_id_from_pk(pk_out);
+}
+
+# Random keypair. Fills sk_out[64] and pk_out[32]; returns the key_id. Mirrors
+# Rust `generate_keypair` (entropy via sigil's CSPRNG).
+fn trust_generate_keypair(sk_out, pk_out): Str {
+    ed25519_generate_keypair(sk_out, pk_out);
+    return trust_key_id_from_pk(pk_out);
+}
+
+# ---------------------------------------------------------------------------
+# KeyVersion — a versioned publisher key with a validity window
+# ---------------------------------------------------------------------------
+#
+# Rust modelled valid_from / valid_until as chrono DateTime<Utc> with an
+# Option for the expiry. The port uses i64 epoch timestamps and an explicit
+# has_until flag (Cyrius has no Option), so validity is plain integer
+# comparison and tests are deterministic (no Utc::now()).
+#
+# Layout (8-byte fields):
+#   0  key_id          (Str)
+#   8  valid_from      (i64 epoch)
+#   16 has_until       (i64; 1 if an expiry is set, else 0)
+#   24 valid_until     (i64 epoch; meaningful only when has_until == 1)
+#   32 public_key_hex  (Str; 64 hex chars for a 32-byte key)
+
+fn kv_new(key_id: Str, valid_from, has_until, valid_until, public_key_hex: Str): i64 {
+    var kv = alloc(40);
+    store64(kv,      key_id);
+    store64(kv + 8,  valid_from);
+    store64(kv + 16, has_until);
+    store64(kv + 24, valid_until);
+    store64(kv + 32, public_key_hex);
+    return kv;
+}
+
+fn kv_key_id(kv): Str         { return load64(kv); }
+fn kv_valid_from(kv): i64     { return load64(kv + 8); }
+fn kv_has_until(kv): i64      { return load64(kv + 16); }
+fn kv_valid_until(kv): i64    { return load64(kv + 24); }
+fn kv_public_key_hex(kv): Str { return load64(kv + 32); }
+
+# is_valid_at(when) — Rust parity: false before valid_from, false after
+# valid_until (when set), else true.
+fn kv_is_valid_at(kv, when): i64 {
+    if (when < kv_valid_from(kv)) { return 0; }
+    if (kv_has_until(kv) == 1) {
+        if (when > kv_valid_until(kv)) { return 0; }
+    }
+    return 1;
+}
+
+# verifying_key() — decode public_key_hex to 32 raw key bytes, or 0 on error
+# (not 64 hex chars, or non-hex). Mirrors Rust `verifying_key` (hex-decode then
+# require exactly 32 bytes).
+fn kv_verifying_key(kv): i64 {
+    var hexs = kv_public_key_hex(kv);
+    if (str_len(hexs) != 64) { return 0; }      # must be a 32-byte key
+    return hex_decode(str_data(hexs), str_len(hexs));   # 0 on non-hex digit
+}
+
+# ---------------------------------------------------------------------------
+# PublisherKeyring — trusted publisher keys, key_id -> [KeyVersion]
+# ---------------------------------------------------------------------------
+#
+# In-memory port (Str-keyed map of key_id -> Vec<KeyVersion>). The disk loader
+# (Rust `load()` — scans a directory of JSON key files) is deferred to the
+# fs-persistence milestone; everything else ports here. get_current_key takes
+# an explicit `now` (Rust used Utc::now() implicitly) for deterministic trust
+# decisions.
+
+fn keyring_new(): i64 { return map_new_str(); }
+
+# add_key — append a KeyVersion under its key_id (Rust `add_key`).
+fn keyring_add_key(kr, kv): i64 {
+    var kid = kv_key_id(kv);
+    var list = map_get(kr, kid);
+    if (list == 0) {
+        list = vec_new();
+        map_set(kr, kid, list);
+    }
+    vec_push(list, kv);
+    return 0;
+}
+
+# get_current_key(key_id, now) — first KeyVersion valid at `now`, or 0
+# (Rust `get_current_key`).
+fn keyring_get_current_key(kr, key_id, now): i64 {
+    var list = map_get(kr, key_id);
+    if (list == 0) { return 0; }
+    var n = vec_len(list);
+    var i = 0;
+    var found = 0;
+    while (i < n) {
+        if (found == 0) {
+            var kv = vec_get(list, i);
+            if (kv_is_valid_at(kv, now) == 1) { found = kv; }
+        }
+        i = i + 1;
+    }
+    return found;
+}
+
+# get_all_versions(key_id) — every KeyVersion (incl. expired), or an empty Vec
+# (Rust `get_all_versions`).
+fn keyring_get_all_versions(kr, key_id): i64 {
+    var list = map_get(kr, key_id);
+    if (list == 0) { return vec_new(); }
+    return list;
+}
+
+fn keyring_len(kr): i64      { return map_size(kr); }
+fn keyring_is_empty(kr): i64 { if (map_size(kr) == 0) { return 1; } return 0; }

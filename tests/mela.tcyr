@@ -6,6 +6,7 @@
 include "src/category.cyr"
 include "src/manifest.cyr"
 include "src/depgraph.cyr"
+include "src/trust.cyr"
 
 # MarketplaceCategory — parity with rust-old/src/lib.rs (Display + FromStr).
 fn test_category() {
@@ -294,6 +295,132 @@ fn test_json() {
     return 0;
 }
 
+# trust crypto — parity with rust-old/src/trust.rs + known-answer vectors.
+fn test_trust() {
+    test_group("trust");
+
+    # SHA-256 known-answer (rust-old test_hash_data / _empty)
+    assert_eq(str_eq_cstr(trust_hash_data("hello world", 11),
+        "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"), 1, "sha256 hello world");
+    assert_eq(str_eq_cstr(trust_hash_data("", 0),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"), 1, "sha256 empty");
+
+    # hex roundtrip + error (rust-old test_hex_roundtrip / _decode_error)
+    var raw[5];
+    store8(&raw, 0); store8(&raw + 1, 1); store8(&raw + 2, 15); store8(&raw + 3, 16); store8(&raw + 4, 255);
+    var enc = trust_hex_encode(&raw, 5);
+    assert_eq(str_eq_cstr(enc, "00010f10ff"), 1, "hex encode");
+    var dec = trust_hex_decode(enc);
+    assert_neq(dec, 0, "hex decode ok");
+    assert_eq(load8(dec), 0,       "hex dec[0]");
+    assert_eq(load8(dec + 2), 15,  "hex dec[2]");
+    assert_eq(load8(dec + 4), 255, "hex dec[4]");
+    assert_eq(trust_hex_decode(str_from("zz")),  0, "hex decode non-hex fails");
+    assert_eq(trust_hex_decode(str_from("abc")), 0, "hex decode odd length fails");
+
+    # Ed25519 RFC 8032 Test 1 known-answer vector
+    var seed = hex_decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", 64);
+    var sk[64];
+    var pk[32];
+    var key_id = trust_keypair_from_seed(seed, &sk, &pk);
+    assert_eq(str_eq_cstr(trust_hex_encode(&pk, 32),
+        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"), 1, "ed25519 pk KAT");
+    var sig_kat = trust_sign(&sk, "", 0);
+    assert_eq(str_eq_cstr(trust_hex_encode(sig_kat, 64),
+        "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"),
+        1, "ed25519 sig KAT");
+    assert_eq(trust_verify("", 0, sig_kat, 64, &pk), 1, "ed25519 KAT verify");
+
+    # key_id is 16 hex chars and matches key_id_from_pk; sk embeds pk
+    assert_eq(str_len(key_id), 16, "key_id is 16 hex chars");
+    assert_eq(str_eq(key_id, trust_key_id_from_pk(&pk)), 1, "key_id matches pk");
+    assert_eq(str_eq(trust_hex_encode(&sk + 32, 32), trust_hex_encode(&pk, 32)), 1, "sk embeds pk");
+
+    # sign/verify roundtrip (rust-old test_sign_and_verify)
+    var sig = trust_sign(&sk, "hello marketplace", 17);
+    assert_eq(trust_verify("hello marketplace", 17, sig, 64, &pk), 1, "sign/verify roundtrip");
+
+    # tampered data rejected (rust-old test_verify_wrong_data)
+    var sig_o = trust_sign(&sk, "original", 8);
+    assert_eq(trust_verify("tampered", 8, sig_o, 64, &pk), 0, "tampered data rejected");
+
+    # wrong key rejected (rust-old test_verify_wrong_key)
+    var seed2 = hex_decode("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb", 64);
+    var sk2[64];
+    var pk2[32];
+    trust_keypair_from_seed(seed2, &sk2, &pk2);
+    assert_eq(trust_verify("hello marketplace", 17, sig, 64, &pk2), 0, "wrong key rejected");
+
+    # invalid signature length rejected (rust-old test_verify_invalid_signature_length)
+    var shortsig[32];
+    assert_eq(trust_verify("hello marketplace", 17, &shortsig, 32, &pk), 0, "invalid sig length rejected");
+    return 0;
+}
+
+# KeyVersion validity windows + verifying_key — parity with rust-old.
+fn test_keyversion() {
+    test_group("keyversion");
+    var NOW = 1000;
+    var ZHEX = str_from("0000000000000000000000000000000000000000000000000000000000000000");
+
+    # bounded window [900, 1100]
+    var kv = kv_new(str_from("k"), 900, 1, 1100, ZHEX);
+    assert_eq(kv_is_valid_at(kv, NOW),       1, "valid within window");
+    assert_eq(kv_is_valid_at(kv, NOW - 200), 0, "before window invalid");
+    assert_eq(kv_is_valid_at(kv, NOW + 200), 0, "after window invalid");
+
+    # no expiry
+    var kv_noexp = kv_new(str_from("k"), 900, 0, 0, ZHEX);
+    assert_eq(kv_is_valid_at(kv_noexp, NOW),            1, "no-expiry valid now");
+    assert_eq(kv_is_valid_at(kv_noexp, NOW + 31536000), 1, "no-expiry valid far future");
+
+    # not yet valid
+    var kv_future = kv_new(str_from("k"), 1100, 0, 0, ZHEX);
+    assert_eq(kv_is_valid_at(kv_future, NOW), 0, "not-yet-valid invalid");
+
+    # verifying_key: real pubkey hex round-trips; bad hex / wrong length -> 0
+    var sk[64];
+    var pk[32];
+    trust_keypair_from_seed(hex_decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", 64), &sk, &pk);
+    var pkhex = trust_hex_encode(&pk, 32);
+    var kv_real = kv_new(str_from("k"), 900, 0, 0, pkhex);
+    var recovered = kv_verifying_key(kv_real);
+    assert_neq(recovered, 0, "verifying_key decodes");
+    assert_eq(str_eq(trust_hex_encode(recovered, 32), pkhex), 1, "verifying_key matches pk");
+    assert_eq(kv_verifying_key(kv_new(str_from("k"), 900, 0, 0, str_from("not-hex"))), 0, "invalid hex -> 0");
+    assert_eq(kv_verifying_key(kv_new(str_from("k"), 900, 0, 0, str_from("aabb"))),    0, "wrong length -> 0");
+    return 0;
+}
+
+# PublisherKeyring (in-memory) — parity with rust-old keyring tests.
+fn test_keyring() {
+    test_group("keyring");
+    var NOW = 1000;
+    var ZHEX = str_from("0000000000000000000000000000000000000000000000000000000000000000");
+
+    # empty
+    var kr = keyring_new();
+    assert_eq(keyring_is_empty(kr), 1, "empty keyring");
+    assert_eq(keyring_len(kr),      0, "empty keyring len 0");
+
+    # add + get current
+    keyring_add_key(kr, kv_new(str_from("alpha"), NOW - 100, 0, 0, ZHEX));
+    assert_eq(keyring_len(kr), 1, "keyring len 1 after add");
+    var cur = keyring_get_current_key(kr, str_from("alpha"), NOW);
+    assert_neq(cur, 0, "current key found");
+    assert_eq(str_eq_cstr(kv_key_id(cur), "alpha"), 1, "current key id matches");
+
+    # expired key: no current, but listed in all versions
+    keyring_add_key(kr, kv_new(str_from("expired"), NOW - 200, 1, NOW - 100, ZHEX));
+    assert_eq(keyring_get_current_key(kr, str_from("expired"), NOW), 0, "expired has no current");
+    assert_eq(vec_len(keyring_get_all_versions(kr, str_from("expired"))), 1, "expired listed in all versions");
+
+    # nonexistent
+    assert_eq(keyring_get_current_key(kr, str_from("nope"), NOW),    0, "nonexistent no current");
+    assert_eq(vec_len(keyring_get_all_versions(kr, str_from("nope"))), 0, "nonexistent no versions");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_category();
@@ -303,6 +430,9 @@ fn main() {
     test_depgraph_base();
     test_depgraph_resolve();
     test_json();
+    test_trust();
+    test_keyversion();
+    test_keyring();
     return assert_summary();
 }
 

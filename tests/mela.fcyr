@@ -1,31 +1,52 @@
 # mela fuzz harness
 #
-# Drives the manifest JSON parser (the external-data parse path) with arbitrary
-# bytes: a malformed manifest must return 0, never crash. Mirrors the v0.2.0
-# "malformed-manifest fuzz harness" done-when.
+# Drives the external-data parse paths with arbitrary bytes — none may fault:
+#   v0.2.0: the manifest / publisher JSON parsers (malformed -> 0).
+#   v0.3.0: the trust hex decoder, public-key decoder, and signature verifier
+#           (garbage keys/signatures -> 0, never a crash).
 
 include "src/category.cyr"
 include "src/manifest.cyr"
+include "src/trust.cyr"
 
 fn fuzz_main(data, len) {
     if (len == 0) { return 0; }
     var s = str_new(data, len);
-    manifest_from_json(s);     # parse error -> 0; must not fault
+
+    # manifest/publisher JSON (v0.2.0)
+    manifest_from_json(s);
     publisher_from_json(s);
+
+    # trust parsers (v0.3.0): hex decode + key-from-hex on arbitrary input
+    trust_hex_decode(s);
+    kv_verifying_key(kv_new(str_from("k"), 0, 0, 0, s));
+
+    # verify with arbitrary bytes as the public key + a signature derived from
+    # the input — must reject (0), never fault.
+    if (len >= 32) {
+        var sig = alloc(64);
+        var i = 0;
+        while (i < 64) {
+            store8(sig + i, load8(data + (i % len)));
+            i = i + 1;
+        }
+        trust_verify("msg", 3, sig, 64, data);
+    }
     return 0;
 }
 
 fn main() {
     alloc_init();
     # Smoke inputs (the fuzzer replaces these with mutations): valid, partial,
-    # and outright garbage all have to be survived.
+    # garbage, plus crypto-shaped blobs — all have to be survived.
     fuzz_main("{\"name\":\"x\",\"version\":\"1.0.0\",\"category\":\"Utility\"}",
               strlen("{\"name\":\"x\",\"version\":\"1.0.0\",\"category\":\"Utility\"}"));
     fuzz_main("{", strlen("{"));
-    fuzz_main("{\"publisher\":{", strlen("{\"publisher\":{"));
     fuzz_main("not json at all", strlen("not json at all"));
     fuzz_main("[]", strlen("[]"));
-    fuzz_main("{\"category\":12345}", strlen("{\"category\":12345}"));
+    fuzz_main("deadbeefnothex!!", strlen("deadbeefnothex!!"));
+    fuzz_main("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+              strlen("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"));
     println("fuzz: ok");
     return 0;
 }

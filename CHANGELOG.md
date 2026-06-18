@@ -6,6 +6,40 @@ include benchmark numbers; breaking changes get a **Breaking** section with a mi
 
 ## [Unreleased]
 
+## [0.3.0] — Trust gate (`trust.rs`)
+
+The load-bearing invariant: nothing is trusted without a valid signature, and
+download integrity is gated on a digest. Ports `rust-old/src/trust.rs` over the
+`sigil` crypto crate. **114/114 parity tests** green (was 76), including
+known-answer crypto vectors.
+
+### Added
+- **`src/trust.cyr` — Ed25519 + SHA-256 trust core.** `trust_hash_data`
+  (SHA-256 hex), `trust_sign` / `trust_verify` (Ed25519; a non-64-byte signature
+  is rejected), `trust_keypair_from_seed` / `trust_generate_keypair`,
+  `trust_key_id_from_pk`, and hex encode/decode.
+- **`KeyVersion` + in-memory `PublisherKeyring`** — `kv_is_valid_at`,
+  `kv_verifying_key` (hex→32-byte key, rejects bad hex / wrong length), and
+  `keyring_new` / `add_key` / `get_current_key` / `get_all_versions` / `len` /
+  `is_empty`. The disk `load()` is deferred to the fs-persistence milestone.
+- **Known-answer tests**: SHA-256 (`hello world`, empty) and the RFC 8032
+  Ed25519 Test 1 vector (seed → public key → signature). Plus sign/verify
+  round-trip and the tampered-data / wrong-key / bad-signature-length rejects.
+- **Fuzz** (`tests/mela.fcyr`) extended: the trust hex decoder, key-from-hex
+  decoder, and signature verifier survive arbitrary bytes (garbage → 0).
+- **ADR**: [0003](docs/adr/0003-trust-time-and-deferred-keyring-load.md) —
+  validity windows use `i64` epoch time (not chrono); `get_current_key` takes an
+  explicit `now` for deterministic trust decisions; the disk loader defers.
+
+### Dependencies
+- **`sigil`** (`dist/sigil.cyr`, tag 3.8.0) wired as the crypto provider —
+  Ed25519 + SHA-256 + hex. Added the stdlib modules its dist needs (`fs`,
+  `freelist`, `slice`, `process`, `sakshi`, `ct`, `keccak`, `thread`,
+  `thread_local`, `random`, `bench`). `trust.cyr` explicitly
+  `include`s `lib/thread_local.cyr` — sigil's constant-time crypto bank calls
+  `thread_local_*`, which the stdlib auto-resolver does not pull through a dist
+  bundle (would link undefined and SIGILL on first verify).
+
 ## [0.2.0] — Core manifest model (rest of `lib.rs`)
 
 The data model every other module consumes. Ports the remainder of

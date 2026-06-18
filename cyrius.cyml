@@ -1,6 +1,6 @@
 [package]
 name = "mela"
-version = "0.2.0"
+version = "0.3.0"
 description = "mela — Cyrius port (from 6208 lines of Rust)"
 license = "GPL-3.0-only"
 language = "cyrius"
@@ -17,6 +17,11 @@ output = "mela"
 stdlib = [
     "string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args", "assert",
     "hashmap", "tagged", "result", "fnptr", "trait", "bayan", "chrono",
+    # sigil's dist needs these transitively (crypto scratch + entropy + hashing
+    # + persistence) — mirrors the libro sigil-consumer recipe. sakshi is the
+    # 6.2.19 stdlib snapshot module (no separate git dep needed).
+    "fs", "freelist", "slice", "process", "sakshi", "ct", "keccak",
+    "thread", "thread_local", "random", "bench",
 ]
 
 # agnostik — the Cyrius shared-types crate; supplies the AgentManifest that
@@ -26,3 +31,12 @@ git = "https://github.com/MacCracken/agnostik.git"
 path = "../agnostik"
 tag = "1.3.1"
 modules = ["dist/agnostik.cyr"]
+
+# sigil — the Cyrius crypto crate; supplies Ed25519 (ed25519_keypair / _sign /
+# _verify) and SHA-256 (sha256 / sha256_hex) + hex_encode/decode for the trust
+# gate (src/trust.cyr).
+[deps.sigil]
+git = "https://github.com/MacCracken/sigil.git"
+path = "../sigil"
+tag = "3.8.0"
+modules = ["dist/sigil.cyr"]

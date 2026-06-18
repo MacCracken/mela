@@ -25,3 +25,6 @@ Decisions about mela — what we chose, the context, and the consequences we acc
 - [0002 — Agent version is a mela-owned Str descriptor](0002-agent-version-as-str-descriptor.md) —
   *Accepted* · agnostik is wired as the agent body, but version stays a validatable `Str` (its
   `Version` struct can't be empty/invalid), so `validate()` keeps the oracle's version checks.
+- [0003 — Trust: epoch-i64 time, explicit `now`, deferred keyring load](0003-trust-time-and-deferred-keyring-load.md) —
+  *Accepted* · key validity windows use `i64` epochs (not chrono); `get_current_key` takes an
+  explicit `now` for deterministic trust; the disk `load()` defers to the fs milestone.
