@@ -6,6 +6,28 @@ include benchmark numbers; breaking changes get a **Breaking** section with a mi
 
 ## [Unreleased]
 
+## [0.9.3] — Namespaced public API (co-bundle-safe with nous)
+
+### Breaking
+
+- **Public symbols that collided with consumer co-dependencies are now
+  `mela_`-prefixed.** When ark co-bundles mela with **nous** and **sigil** in one
+  Cyrius binary, 15 of mela's public function names clashed — most damagingly
+  `registry_new` (mela's raw struct vs nous's `Result`), which under
+  last-definition-wins silently rebound *nous's* resolver to mela's
+  implementation. Renamed across `src/` + tests:
+  - vs nous: `registry_new`→`mela_registry_new`, `registry_search`→`mela_registry_search`,
+    `manifest_new`→`mela_manifest_new`, `manifest_to_json`→`mela_manifest_to_json`,
+    `update_to_json`→`mela_update_to_json`
+  - vs sigil: `keyring_new`→`mela_keyring_new`, plus `keyring_add_key`,
+    `keyring_get_all_versions`, `keyring_is_empty`, `keyring_len`, `kv_key_id`,
+    `kv_valid_from`, `kv_valid_until`, `kv_public_key_hex`, `kv_is_valid_at`.
+
+  Migration: consumers call the `mela_`-prefixed names. mela ∩
+  {nous, sigil, agnostik, sankoch} public-symbol collisions are now **zero**, so
+  ark can consume `dist/mela.cyr` alongside nous without last-def-wins hazards.
+  472-test suite green; `dist/mela.cyr` regenerated.
+
 ## [0.9.2] — Consumable library + the deferred work, actually done
 
 Closes the gaps that were standing between 0.9.1 and a real v1.0: mela now ships

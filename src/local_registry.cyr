@@ -182,11 +182,11 @@ fn registry_load_index(r): i64 {
 }
 
 # new(root_dir) — file-backed registry; loads any existing index. Mirrors Rust `new`.
-fn registry_new(root_dir: Str): i64 {
+fn mela_registry_new(root_dir: Str): i64 {
     var r = alloc(40);
     store64(r,      root_dir);
     store64(r + 8,  map_new_str());
-    store64(r + 16, keyring_new());
+    store64(r + 16, mela_keyring_new());
     store64(r + 24, tlog_new());
     store64(r + 32, 0);
     registry_load_index(r);
@@ -198,7 +198,7 @@ fn registry_in_memory(): i64 {
     var r = alloc(40);
     store64(r,      str_from("/dev/null"));
     store64(r + 8,  map_new_str());
-    store64(r + 16, keyring_new());
+    store64(r + 16, mela_keyring_new());
     store64(r + 24, tlog_new());
     store64(r + 32, 0);
     return r;
@@ -327,7 +327,7 @@ fn _reg_matches(rec, ql: Str): i64 {
 
 # search(query) — case-insensitive match on name / description / tags. Mirrors
 # Rust `search`.
-fn registry_search(r, query: Str): i64 {
+fn mela_registry_search(r, query: Str): i64 {
     var ql = _reg_to_lower(query);
     var vals = map_values(registry_index(r));
     var n = vec_len(vals);

@@ -115,18 +115,18 @@ fn kv_new(key_id: Str, valid_from, has_until, valid_until, public_key_hex: Str):
     return kv;
 }
 
-fn kv_key_id(kv): Str         { return load64(kv); }
-fn kv_valid_from(kv): i64     { return load64(kv + 8); }
+fn mela_kv_key_id(kv): Str         { return load64(kv); }
+fn mela_kv_valid_from(kv): i64     { return load64(kv + 8); }
 fn kv_has_until(kv): i64      { return load64(kv + 16); }
-fn kv_valid_until(kv): i64    { return load64(kv + 24); }
-fn kv_public_key_hex(kv): Str { return load64(kv + 32); }
+fn mela_kv_valid_until(kv): i64    { return load64(kv + 24); }
+fn mela_kv_public_key_hex(kv): Str { return load64(kv + 32); }
 
 # is_valid_at(when) — Rust parity: false before valid_from, false after
 # valid_until (when set), else true.
-fn kv_is_valid_at(kv, when): i64 {
-    if (when < kv_valid_from(kv)) { return 0; }
+fn mela_kv_is_valid_at(kv, when): i64 {
+    if (when < mela_kv_valid_from(kv)) { return 0; }
     if (kv_has_until(kv) == 1) {
-        if (when > kv_valid_until(kv)) { return 0; }
+        if (when > mela_kv_valid_until(kv)) { return 0; }
     }
     return 1;
 }
@@ -135,7 +135,7 @@ fn kv_is_valid_at(kv, when): i64 {
 # (not 64 hex chars, or non-hex). Mirrors Rust `verifying_key` (hex-decode then
 # require exactly 32 bytes).
 fn kv_verifying_key(kv): i64 {
-    var hexs = kv_public_key_hex(kv);
+    var hexs = mela_kv_public_key_hex(kv);
     if (str_len(hexs) != 64) { return 0; }      # must be a 32-byte key
     return hex_decode(str_data(hexs), str_len(hexs));   # 0 on non-hex digit
 }
@@ -150,11 +150,11 @@ fn kv_verifying_key(kv): i64 {
 # an explicit `now` (Rust used Utc::now() implicitly) for deterministic trust
 # decisions.
 
-fn keyring_new(): i64 { return map_new_str(); }
+fn mela_keyring_new(): i64 { return map_new_str(); }
 
 # add_key — append a KeyVersion under its key_id (Rust `add_key`).
-fn keyring_add_key(kr, kv): i64 {
-    var kid = kv_key_id(kv);
+fn mela_keyring_add_key(kr, kv): i64 {
+    var kid = mela_kv_key_id(kv);
     var list = map_get(kr, kid);
     if (list == 0) {
         list = vec_new();
@@ -175,7 +175,7 @@ fn keyring_get_current_key(kr, key_id, now): i64 {
     while (i < n) {
         if (found == 0) {
             var kv = vec_get(list, i);
-            if (kv_is_valid_at(kv, now) == 1) { found = kv; }
+            if (mela_kv_is_valid_at(kv, now) == 1) { found = kv; }
         }
         i = i + 1;
     }
@@ -184,11 +184,11 @@ fn keyring_get_current_key(kr, key_id, now): i64 {
 
 # get_all_versions(key_id) — every KeyVersion (incl. expired), or an empty Vec
 # (Rust `get_all_versions`).
-fn keyring_get_all_versions(kr, key_id): i64 {
+fn mela_keyring_get_all_versions(kr, key_id): i64 {
     var list = map_get(kr, key_id);
     if (list == 0) { return vec_new(); }
     return list;
 }
 
-fn keyring_len(kr): i64      { return map_size(kr); }
-fn keyring_is_empty(kr): i64 { if (map_size(kr) == 0) { return 1; } return 0; }
+fn mela_keyring_len(kr): i64      { return map_size(kr); }
+fn mela_keyring_is_empty(kr): i64 { if (map_size(kr) == 0) { return 1; } return 0; }

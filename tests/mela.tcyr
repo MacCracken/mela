@@ -88,7 +88,7 @@ fn mk_agent(name: Str, desc: Str): i64 {
 fn mk_manifest(name: Str, desc: Str, ver: Str, pubname: Str, keyid: Str): i64 {
     var agent = mk_agent(name, desc);
     var publ = publisher_new(pubname, keyid, str_from("https://example.com"));
-    return manifest_new(agent, publ, CAT_UTILITY, ver);
+    return mela_manifest_new(agent, publ, CAT_UTILITY, ver);
 }
 
 # True (1) if any error message in `errs` contains the cstring `needle`.
@@ -284,13 +284,13 @@ fn test_json() {
     # MarketplaceManifest round-trip
     var agent = mk_agent(str_from("test-agent"), str_from("A test agent"));
     var publ = publisher_new(str_from("Test Publisher"), str_from("abc12345"), str_from("https://example.com"));
-    var m = manifest_new(agent, publ, CAT_UTILITY, str_from("1.0.0"));
+    var m = mela_manifest_new(agent, publ, CAT_UTILITY, str_from("1.0.0"));
     man_set_runtime(m, str_from("native"));
     man_set_changelog(m, str_from("Initial release"));
     man_set_min_agnos_version(m, str_from("2026.3.6"));
     vec_push(man_tags(m), str_from("test"));
 
-    var m2 = manifest_from_json(manifest_to_json(m));
+    var m2 = manifest_from_json(mela_manifest_to_json(m));
     assert_neq(m2, 0, "manifest json parses");
     assert_eq(str_eq_cstr(man_name(m2),        "test-agent"),   1, "json name");
     assert_eq(man_category(m2),                CAT_UTILITY,        "json category");
@@ -373,18 +373,18 @@ fn test_keyversion() {
 
     # bounded window [900, 1100]
     var kv = kv_new(str_from("k"), 900, 1, 1100, ZHEX);
-    assert_eq(kv_is_valid_at(kv, NOW),       1, "valid within window");
-    assert_eq(kv_is_valid_at(kv, NOW - 200), 0, "before window invalid");
-    assert_eq(kv_is_valid_at(kv, NOW + 200), 0, "after window invalid");
+    assert_eq(mela_kv_is_valid_at(kv, NOW),       1, "valid within window");
+    assert_eq(mela_kv_is_valid_at(kv, NOW - 200), 0, "before window invalid");
+    assert_eq(mela_kv_is_valid_at(kv, NOW + 200), 0, "after window invalid");
 
     # no expiry
     var kv_noexp = kv_new(str_from("k"), 900, 0, 0, ZHEX);
-    assert_eq(kv_is_valid_at(kv_noexp, NOW),            1, "no-expiry valid now");
-    assert_eq(kv_is_valid_at(kv_noexp, NOW + 31536000), 1, "no-expiry valid far future");
+    assert_eq(mela_kv_is_valid_at(kv_noexp, NOW),            1, "no-expiry valid now");
+    assert_eq(mela_kv_is_valid_at(kv_noexp, NOW + 31536000), 1, "no-expiry valid far future");
 
     # not yet valid
     var kv_future = kv_new(str_from("k"), 1100, 0, 0, ZHEX);
-    assert_eq(kv_is_valid_at(kv_future, NOW), 0, "not-yet-valid invalid");
+    assert_eq(mela_kv_is_valid_at(kv_future, NOW), 0, "not-yet-valid invalid");
 
     # verifying_key: real pubkey hex round-trips; bad hex / wrong length -> 0
     var sk[64];
@@ -407,25 +407,25 @@ fn test_keyring() {
     var ZHEX = str_from("0000000000000000000000000000000000000000000000000000000000000000");
 
     # empty
-    var kr = keyring_new();
-    assert_eq(keyring_is_empty(kr), 1, "empty keyring");
-    assert_eq(keyring_len(kr),      0, "empty keyring len 0");
+    var kr = mela_keyring_new();
+    assert_eq(mela_keyring_is_empty(kr), 1, "empty keyring");
+    assert_eq(mela_keyring_len(kr),      0, "empty keyring len 0");
 
     # add + get current
-    keyring_add_key(kr, kv_new(str_from("alpha"), NOW - 100, 0, 0, ZHEX));
-    assert_eq(keyring_len(kr), 1, "keyring len 1 after add");
+    mela_keyring_add_key(kr, kv_new(str_from("alpha"), NOW - 100, 0, 0, ZHEX));
+    assert_eq(mela_keyring_len(kr), 1, "keyring len 1 after add");
     var cur = keyring_get_current_key(kr, str_from("alpha"), NOW);
     assert_neq(cur, 0, "current key found");
-    assert_eq(str_eq_cstr(kv_key_id(cur), "alpha"), 1, "current key id matches");
+    assert_eq(str_eq_cstr(mela_kv_key_id(cur), "alpha"), 1, "current key id matches");
 
     # expired key: no current, but listed in all versions
-    keyring_add_key(kr, kv_new(str_from("expired"), NOW - 200, 1, NOW - 100, ZHEX));
+    mela_keyring_add_key(kr, kv_new(str_from("expired"), NOW - 200, 1, NOW - 100, ZHEX));
     assert_eq(keyring_get_current_key(kr, str_from("expired"), NOW), 0, "expired has no current");
-    assert_eq(vec_len(keyring_get_all_versions(kr, str_from("expired"))), 1, "expired listed in all versions");
+    assert_eq(vec_len(mela_keyring_get_all_versions(kr, str_from("expired"))), 1, "expired listed in all versions");
 
     # nonexistent
     assert_eq(keyring_get_current_key(kr, str_from("nope"), NOW),    0, "nonexistent no current");
-    assert_eq(vec_len(keyring_get_all_versions(kr, str_from("nope"))), 0, "nonexistent no versions");
+    assert_eq(vec_len(mela_keyring_get_all_versions(kr, str_from("nope"))), 0, "nonexistent no versions");
     return 0;
 }
 
@@ -564,7 +564,7 @@ fn test_registry() {
     var DIR = "/tmp/mela-test-reg";
     rclean(DIR);
 
-    var reg = registry_new(str_from(DIR));
+    var reg = mela_registry_new(str_from(DIR));
     assert_eq(registry_is_empty(reg), 1, "new registry empty");
     assert_eq(registry_len(reg),      0, "new registry len 0");
 
@@ -592,9 +592,9 @@ fn test_registry() {
     assert_eq(registry_len(reg), 1, "upgrade keeps len 1");
 
     # search (name / tag / miss)
-    assert_eq(vec_len(registry_search(reg, str_from("test"))),    1, "search name match");
-    assert_eq(vec_len(registry_search(reg, str_from("scanner"))), 1, "search tag match");
-    assert_eq(vec_len(registry_search(reg, str_from("zzz"))),     0, "search no match");
+    assert_eq(vec_len(mela_registry_search(reg, str_from("test"))),    1, "search name match");
+    assert_eq(vec_len(mela_registry_search(reg, str_from("scanner"))), 1, "search tag match");
+    assert_eq(vec_len(mela_registry_search(reg, str_from("zzz"))),     0, "search no match");
 
     # uninstall
     assert_eq(registry_uninstall(reg, str_from("test-pkg")), 1, "uninstall ok");
@@ -619,12 +619,12 @@ fn test_registry_persistence() {
     var DIR = "/tmp/mela-test-reg-persist";
     rclean(DIR);
 
-    var r1 = registry_new(str_from(DIR));
+    var r1 = mela_registry_new(str_from(DIR));
     registry_install(r1, mk_pkg("persist-pkg", "1.0.0"), str_from("hashX"), 512, 1000);
     assert_eq(registry_len(r1), 1, "installed in r1");
 
     # reopen: a fresh registry loads the index from disk
-    var r2 = registry_new(str_from(DIR));
+    var r2 = mela_registry_new(str_from(DIR));
     assert_eq(registry_len(r2), 1, "reopened len 1");
     var pkg = registry_get_package(r2, str_from("persist-pkg"));
     assert_neq(pkg, 0, "reopened get_package");
@@ -635,7 +635,7 @@ fn test_registry_persistence() {
 
     # uninstall persists too
     registry_uninstall(r2, str_from("persist-pkg"));
-    var r3 = registry_new(str_from(DIR));
+    var r3 = mela_registry_new(str_from(DIR));
     assert_eq(registry_is_empty(r3), 1, "reopened empty after uninstall");
     return 0;
 }
@@ -647,8 +647,8 @@ fn test_registry_signature() {
     var sk[64];
     var pk[32];
     var key_id = trust_keypair_from_seed(hex_decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", 64), &sk, &pk);
-    var kr = keyring_new();
-    keyring_add_key(kr, kv_new(key_id, NOW - 100, 0, 0, trust_hex_encode(&pk, 32)));
+    var kr = mela_keyring_new();
+    mela_keyring_add_key(kr, kv_new(key_id, NOW - 100, 0, 0, trust_hex_encode(&pk, 32)));
     var sig = trust_sign(&sk, "package bytes", 13);
 
     assert_eq(registry_verify_package(kr, key_id, "package bytes", 13, sig, 64, NOW), 1, "valid signature accepted");
@@ -659,8 +659,8 @@ fn test_registry_signature() {
     var sk2[64];
     var pk2[32];
     trust_keypair_from_seed(hex_decode("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb", 64), &sk2, &pk2);
-    var kr2 = keyring_new();
-    keyring_add_key(kr2, kv_new(key_id, NOW - 100, 0, 0, trust_hex_encode(&pk2, 32)));
+    var kr2 = mela_keyring_new();
+    mela_keyring_add_key(kr2, kv_new(key_id, NOW - 100, 0, 0, trust_hex_encode(&pk2, 32)));
     assert_eq(registry_verify_package(kr2, key_id, "package bytes", 13, sig, 64, NOW), 0, "wrong key rejected");
     return 0;
 }
@@ -746,7 +746,7 @@ fn test_remote_codec() {
     assert_eq(presp_replaced(pr), 0, "publish resp not replaced");
 
     # UpdateAvailable roundtrip
-    var up = update_from_json(update_to_json(update_new(str_from("test-pkg"), str_from("1.0.0"),
+    var up = update_from_json(mela_update_to_json(update_new(str_from("test-pkg"), str_from("1.0.0"),
                              str_from("2.0.0"), str_from("New features"))));
     assert_neq(up, 0, "update parse");
     assert_eq(str_eq_cstr(update_name(up), "test-pkg"), 1, "update name");
@@ -1101,7 +1101,7 @@ fn test_extraction() {
     sys_unlink(str_data(path_join(str_from(DIR), str_from("sandbox.json"))));
 
     var agent = mk_agent(str_from("extract-pkg"), str_from("d"));
-    var manifest = manifest_new(agent, publisher_new(str_from("P"), str_from("k"), str_from("")), CAT_UTILITY, str_from("1.0.0"));
+    var manifest = mela_manifest_new(agent, publisher_new(str_from("P"), str_from("k"), str_from("")), CAT_UTILITY, str_from("1.0.0"));
     var bundle = pipeline_package(manifest, generate_sandbox_profile(mk_pfconfig()));
 
     var n = agpkg_extract_to_dir(str_data(bundle), str_len(bundle), str_from(DIR));
@@ -1138,13 +1138,13 @@ fn test_pipeline() {
     var sk[64];
     var pk[32];
     var key_id = trust_keypair_from_seed(hex_decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", 64), &sk, &pk);
-    var keyring = keyring_new();
-    keyring_add_key(keyring, kv_new(key_id, NOW - 100, 0, 0, trust_hex_encode(&pk, 32)));
+    var keyring = mela_keyring_new();
+    mela_keyring_add_key(keyring, kv_new(key_id, NOW - 100, 0, 0, trust_hex_encode(&pk, 32)));
 
     # build a signed manifest (publisher key_id = signer key_id) + sandbox -> bundle
     var agent = mk_agent(str_from("test-pkg"), str_from("A test pkg"));
     var publisher = publisher_new(str_from("Test Publisher"), key_id, str_from(""));
-    var manifest = manifest_new(agent, publisher, CAT_UTILITY, str_from("1.0.0"));
+    var manifest = mela_manifest_new(agent, publisher, CAT_UTILITY, str_from("1.0.0"));
     var sandbox = generate_sandbox_profile(mk_pfconfig());
     var bundle = pipeline_package(manifest, sandbox);
     assert_neq(bundle, 0, "package builds bundle");
@@ -1171,7 +1171,7 @@ fn test_pipeline() {
 
     # reject: tampered bundle — sig was over the original; verifying a DIFFERENT
     # bundle with the same key fails gate 1.
-    var manifest2 = manifest_new(mk_agent(str_from("evil-pkg"), str_from("evil")), publisher, CAT_UTILITY, str_from("9.9.9"));
+    var manifest2 = mela_manifest_new(mk_agent(str_from("evil-pkg"), str_from("evil")), publisher, CAT_UTILITY, str_from("9.9.9"));
     var bundle2 = pipeline_package(manifest2, sandbox);
     var reg2 = registry_in_memory();
     assert_eq(pipeline_install(reg2, keyring, bundle2, &sig, 64, str_from(""), NOW), 0, "tampered bundle rejected");
@@ -1183,14 +1183,14 @@ fn test_pipeline() {
 
     # reject: unsigned / untrusted publisher — empty keyring fails gate 1
     var reg4 = registry_in_memory();
-    assert_eq(pipeline_install(reg4, keyring_new(), bundle, &sig, 64, str_from(""), NOW), 0, "untrusted publisher rejected");
+    assert_eq(pipeline_install(reg4, mela_keyring_new(), bundle, &sig, 64, str_from(""), NOW), 0, "untrusted publisher rejected");
 
     # reject: wrong key in keyring (different pubkey under the same key_id)
     var sk2[64];
     var pk2[32];
     trust_keypair_from_seed(hex_decode("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb", 64), &sk2, &pk2);
-    var kr_wrong = keyring_new();
-    keyring_add_key(kr_wrong, kv_new(key_id, NOW - 100, 0, 0, trust_hex_encode(&pk2, 32)));
+    var kr_wrong = mela_keyring_new();
+    mela_keyring_add_key(kr_wrong, kv_new(key_id, NOW - 100, 0, 0, trust_hex_encode(&pk2, 32)));
     var reg5 = registry_in_memory();
     assert_eq(pipeline_install(reg5, kr_wrong, bundle, &sig, 64, str_from(""), NOW), 0, "wrong key rejected");
     return 0;

@@ -221,7 +221,7 @@ fn generate_manifest(config): i64 {
     store64(agent + 8,  pfconfig_description(config));   # description
     store64(agent + 16, pfconfig_publisher(config));     # author
     var publisher = publisher_new(pfconfig_publisher(config), str_from(""), str_from(""));
-    var m = manifest_new(agent, publisher, pfconfig_category(config), pfconfig_version(config));
+    var m = mela_manifest_new(agent, publisher, pfconfig_category(config), pfconfig_version(config));
     man_set_runtime(m, str_from("flutter"));
     vec_push(man_tags(m), str_from("flutter"));
     vec_push(man_tags(m), str_from("desktop"));
@@ -476,7 +476,7 @@ fn pack_flutter_app(build_dir: Str, config, output_dir: Str): i64 {
         ai = ai + 1;
     }
 
-    var manifest_json = manifest_to_json(generate_manifest(config));
+    var manifest_json = mela_manifest_to_json(generate_manifest(config));
     vec_push(entries, tentry_new(str_from("manifest.json"), str_data(manifest_json), str_len(manifest_json)));
     var sandbox_json = sbprofile_to_json(generate_sandbox_profile(config));
     vec_push(entries, tentry_new(str_from("sandbox.json"), str_data(sandbox_json), str_len(sandbox_json)));

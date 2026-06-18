@@ -298,7 +298,7 @@ fn update_installed_version(p): Str { return load64(p + 8); }
 fn update_available_version(p): Str { return load64(p + 16); }
 fn update_changelog(p): Str         { return load64(p + 24); }
 
-fn update_to_json(p): Str {
+fn mela_update_to_json(p): Str {
     var o = json_v_obj_new();
     json_v_obj_set(o, str_from("name"),              json_v_str_new(update_name(p)));
     json_v_obj_set(o, str_from("installed_version"), json_v_str_new(update_installed_version(p)));
@@ -408,7 +408,7 @@ fn _rc_manifest_cache_path(c, name: Str, version: Str): Str {
 fn registry_cache_manifest(c, name: Str, version: Str, manifest): i64 {
     _rc_mkdir_p(path_join(path_join(client_cache_dir(c), str_from("manifests")), name));
     var path = _rc_manifest_cache_path(c, name, version);
-    var js = manifest_to_json(manifest);
+    var js = mela_manifest_to_json(manifest);
     return file_write_all(str_data(path), str_data(js), str_len(js));
 }
 

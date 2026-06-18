@@ -18,7 +18,7 @@
 # manifest + sandbox profile. The publishable/distributable artifact.
 fn pipeline_package(manifest, sandbox): i64 {
     var entries = vec_new();
-    var mjson = manifest_to_json(manifest);
+    var mjson = mela_manifest_to_json(manifest);
     vec_push(entries, tentry_new(str_from("manifest.json"), str_data(mjson), str_len(mjson)));
     var sjson = sbprofile_to_json(sandbox);
     vec_push(entries, tentry_new(str_from("sandbox.json"), str_data(sjson), str_len(sjson)));
