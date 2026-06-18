@@ -542,6 +542,40 @@ fn agpkg_inspect(path: Str): i64 {
     return agpkg_inspect_bytes(str_data(fb), str_len(fb));
 }
 
+# agpkg_read_entry — gunzip + find the entry named `name`, returning its content
+# bytes as a Str (or 0 if absent / on a decompress error). Bounds-checked. Used
+# to pull manifest.json / sandbox.json back out of a packed bundle (unblocks the
+# local_registry tarball extraction deferred in ADR-0005).
+fn agpkg_read_entry(data, len, name: Str): i64 {
+    var dst = alloc(AGPKG_BUF_MAXLEN);
+    var dlen = gzip_decompress(data, len, dst, AGPKG_BUF_MAXLEN);
+    if (dlen < 0) { return 0; }
+    var off = 0;
+    var go = 1;
+    var found = 0;
+    while (go == 1) {
+        if (off + 512 > dlen) { go = 0; }
+        else {
+            if (load8(dst + off) == 0) { go = 0; }
+            else {
+                var esize = _tar_read_size(dst, off);
+                if (str_eq(_tar_read_name(dst, off), name) == 1) {
+                    if (off + 512 + esize <= dlen) {
+                        var out = alloc(esize + 1);
+                        memcpy(out, dst + off + 512, esize);
+                        store8(out + esize, 0);
+                        found = str_new(out, esize);
+                    }
+                    go = 0;
+                } else {
+                    off = off + 512 + _roundup512(esize);
+                }
+            }
+        }
+    }
+    return found;
+}
+
 # Gunzip + parse a gzipped-ustar byte buffer; returns a Vec of entry-name Strs,
 # or 0 on a decompress error. Robust to arbitrary input (bounds-checked) — the
 # fuzz entry point.

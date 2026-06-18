@@ -1,0 +1,85 @@
+# pipeline.cyr — end-to-end marketplace flow (v0.8.1).
+#
+# Wires the full path across the ported modules:
+#   package (flutter_agpkg) -> sign (trust) -> log (transparency)
+#   -> distribute -> verify (trust) -> capability-surface (sandbox)
+#   -> install (local_registry).
+#
+# Both trust gates are ENFORCED at install, not merely present:
+#   gate 1 — Ed25519 signature over the bundle bytes, keyed by the manifest's
+#            publisher key_id resolved against the keyring;
+#   gate 2 — SHA-256 content digest (download integrity).
+#
+# Included last, so it can reference every module. Transport stays a seam
+# (ADR-0006): "distribute" here is local (the signed bundle bytes + signature
+# move as values), which is sufficient to enforce and test both gates.
+
+# package — build a gzipped-ustar `.agnos-agent` bundle (bytes Str) from a
+# manifest + sandbox profile. The publishable/distributable artifact.
+fn pipeline_package(manifest, sandbox): i64 {
+    var entries = vec_new();
+    var mjson = manifest_to_json(manifest);
+    vec_push(entries, tentry_new(str_from("manifest.json"), str_data(mjson), str_len(mjson)));
+    var sjson = sbprofile_to_json(sandbox);
+    vec_push(entries, tentry_new(str_from("sandbox.json"), str_data(sjson), str_len(sjson)));
+    return _gzip_str(_tar_build(entries));
+}
+
+# extract the MarketplaceManifest from a bundle, or 0.
+fn pipeline_extract_manifest(bundle): i64 {
+    var mjson = agpkg_read_entry(str_data(bundle), str_len(bundle), str_from("manifest.json"));
+    if (mjson == 0) { return 0; }
+    return manifest_from_json(mjson);
+}
+
+# extract the sandbox SandboxProfile from a bundle, or 0 (the capability surface
+# disclosed before install).
+fn pipeline_extract_sandbox(bundle): i64 {
+    var sjson = agpkg_read_entry(str_data(bundle), str_len(bundle), str_from("sandbox.json"));
+    if (sjson == 0) { return 0; }
+    return sbprofile_from_json(sjson);
+}
+
+# publish — sign the bundle and append it to the transparency log. Writes the
+# 64-byte signature to `sig_out` and returns the log entry.
+fn pipeline_publish(tlog, bundle, sk, sig_out, now): i64 {
+    ed25519_sign(sk, str_data(bundle), str_len(bundle), sig_out);
+    var content_hash = trust_hash_data(str_data(bundle), str_len(bundle));
+    var sig_hash = trust_hash_data(sig_out, 64);
+    var manifest = pipeline_extract_manifest(bundle);
+    var pkg = str_from("unknown");
+    var ver = str_from("0.0.0");
+    var kid = str_from("");
+    if (manifest != 0) {
+        pkg = manifest_qualified_name(manifest);
+        ver = man_version(manifest);
+        kid = pub_key_id(man_publisher(manifest));
+    }
+    return tlog_append(tlog, pkg, ver, kid, content_hash, sig_hash, now);
+}
+
+# install — verify a downloaded bundle and record it, enforcing BOTH gates.
+# Returns the install result, or 0 on any of: malformed bundle, unknown/invalid
+# publisher key, bad signature (gate 1), digest mismatch (gate 2), invalid
+# manifest. `expected_hash` of "" skips the digest comparison (compute + record
+# only); a non-empty value must match the bundle's SHA-256.
+fn pipeline_install(reg, keyring, bundle, sig, sig_len, expected_hash: Str, now): i64 {
+    var data = str_data(bundle);
+    var len = str_len(bundle);
+
+    var manifest = pipeline_extract_manifest(bundle);
+    if (manifest == 0) { return 0; }
+
+    # gate 1 — Ed25519 signature over the bundle, keyed by publisher key_id
+    var key_id = pub_key_id(man_publisher(manifest));
+    if (registry_verify_package(keyring, key_id, data, len, sig, sig_len, now) == 0) { return 0; }
+
+    # gate 2 — content digest
+    var package_hash = trust_hash_data(data, len);
+    if (str_len(expected_hash) != 0) {
+        if (str_eq(package_hash, expected_hash) == 0) { return 0; }
+    }
+
+    if (vec_len(manifest_validate(manifest)) != 0) { return 0; }
+    return registry_install(reg, manifest, package_hash, len, now);
+}

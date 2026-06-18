@@ -6,6 +6,37 @@ include benchmark numbers; breaking changes get a **Breaking** section with a mi
 
 ## [Unreleased]
 
+## [0.8.1] — Release run: end-to-end wiring + benchmarks
+
+The full marketplace flow, wired across all ported modules with **both trust
+gates enforced**. **457/457 parity tests** green (was 444).
+
+### Added
+- **`src/pipeline.cyr`** — end-to-end flow: `pipeline_package` (manifest+sandbox
+  → gzipped-ustar bundle), `pipeline_publish` (Ed25519 sign + transparency-log
+  append), `pipeline_extract_manifest`/`_sandbox`, and `pipeline_install` which
+  enforces **gate 1** (signature over the bundle, keyed by publisher key_id) and
+  **gate 2** (SHA-256 content digest) before recording into the local registry.
+- **End-to-end test** (`pipeline` group) — happy path installs and is logged;
+  a tampered bundle, a digest mismatch, an untrusted publisher, and a wrong
+  keyring key are each rejected with nothing installed.
+- **`agpkg_read_entry`** — pull a named entry's bytes back out of a bundle;
+  closes the deferred `local_registry` tarball extraction (ADR-0005).
+- **Benchmarks** — [`benches/hotpaths.cyr`](benches/hotpaths.cyr) +
+  [`docs/benchmarks-rust-v-cyrius.md`](docs/benchmarks-rust-v-cyrius.md): ns/op
+  for registry lookup, manifest validate, SHA-256, gzip+ustar inspect, and
+  Ed25519 verify. (`cyrius bench` SIGILLs with the crypto/compression deps
+  linked at this pin; a `cyrius run` timing loop is used instead. The
+  Rust-vs-Cyrius comparison is deferred — `rust-old` can't be built without
+  `agnos-common`.)
+- **ADR**: [0009](docs/adr/0009-end-to-end-pipeline-and-gate-enforcement.md) —
+  the pipeline wiring and gate enforcement (transport stays a local seam,
+  ADR-0006).
+
+### Notes
+- All 9 modules remain ported; this release ties them together. `rust-old/` is
+  retained (retired after v1.0, once coverage ≥ the Rust suite).
+
 ## [0.8.0] — Packaging (`flutter_packaging.rs`, `flutter_agpkg.rs`)
 
 Build and read the `.agnos-agent` package format — the **final port milestone**:

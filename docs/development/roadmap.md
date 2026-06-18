@@ -1,6 +1,6 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-06-17 (v0.8.0) · Live status: [`state.md`](state.md) · Per-version history:
+> **Last Updated**: 2026-06-17 (v0.8.1) · Live status: [`state.md`](state.md) · Per-version history:
 > [`../../CHANGELOG.md`](../../CHANGELOG.md)
 >
 > The path from the **v0.1.0 port scaffold** to a **v1.0 release**. mela is mid-port from Rust
@@ -31,6 +31,15 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 ---
 
 ## Completed
+
+### v0.8.1 — End-to-end wiring + benchmarks ✅ (2026-06-17)
+- **`src/pipeline.cyr`** wires the full flow: `pipeline_package` → `pipeline_publish` (Ed25519
+  sign + transparency-log append) → `pipeline_install` enforcing **both trust gates** (signature
+  over the bundle keyed by publisher key_id; SHA-256 content digest) before recording.
+- E2E test: happy path installs + is logged; tampered / digest-mismatch / untrusted / wrong-key
+  all rejected. `agpkg_read_entry` closed the ADR-0005 tarball-extraction gap.
+- **Benchmarks** captured (`benches/hotpaths.cyr` + `docs/benchmarks-rust-v-cyrius.md`); ADR-0009.
+  **457/457 tests**. (Rust-vs-Cyrius comparison deferred — `rust-old` unbuildable without agnos-common.)
 
 ### v0.8.0 — Packaging ✅ (2026-06-17) — **module port complete (9/9)**
 - **`flutter_packaging.rs` ported** → `src/flutter_packaging.cyr` (pure): manifest/layout/launch/
@@ -170,25 +179,37 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 
 ---
 
-## Release run (v0.9.0 → v1.0.0)
+## Release run (v0.8.1 → v1.0.0)
 
-### v0.9.0 — End-to-end wiring + hardening
-- **Wire the full flow**: publish → sign (`trust`) → log (`transparency`) → distribute
-  (`remote_client`) → verify (`trust`) → capability-surface (`sandbox_profiles`) → install
-  (`local_registry`). The two trust gates are **enforced**, not just present.
-- **Benchmarks** — `docs/benchmarks-rust-v-cyrius.md`: the Cyrius port vs `rust-old/` on the hot
-  paths (manifest validate, signature verify, registry query). Numbers, not adjectives.
-- **Security audit** — `docs/audit/YYYY-MM-DD-audit.md` + `docs/development/threat-model.md`
-  (mela is a supply-chain trust boundary; the bar is high). Fuzz every external-data parser.
-- **Retire the oracle** — delete `rust-old/` only once Cyrius parity holds **and** test coverage
-  ≥ the Rust suite (per the porting standard).
+> Re-sequenced 2026-06-17: the original v0.9.0 "wiring + hardening" is split —
+> wiring + benchmarks shipped in **v0.8.1**; the security audit is its own
+> **v0.9.0**; the API freeze + docs cleanup is **v0.9.1**. `rust-old/` is retired
+> after v1.0, not during the run.
+
+### v0.8.1 — End-to-end wiring + benchmarks ✅ (2026-06-17)
+- **Done.** Full flow wired in `src/pipeline.cyr` (package → sign → log → verify →
+  capability-surface → install) with **both trust gates enforced**; hot-path benchmarks captured.
+  See *Completed*. (Live `sandhi`/`tls` transport stays a local seam — ADR-0006/0009.)
+
+### v0.9.0 — Security audit + hardening
+- **Security audit** — `docs/audit/YYYY-MM-DD-audit.md` + `docs/development/threat-model.md`.
+  mela is a supply-chain trust boundary; the bar is high.
+- **Web research on 0-days / CVEs** relevant to the surface: Ed25519 signature-malleability and
+  verification pitfalls, gzip/tar decompression (zip-slip / path-traversal, decompression bombs),
+  JSON parser hardening, supply-chain (signing/transparency) attack classes — fold findings into
+  the threat model + concrete hardening.
+- **Fuzz every external-data parser** (already in place; extend with adversarial corpora).
+
+### v0.9.1 — API freeze + documentation cleanup
+- Freeze the public API; document it in `docs/api/` (hand-written ser/de roundtrip-tested, zero
+  panic paths). Refresh README / guides / examples; reconcile all ADRs with the shipped code.
 
 ### v1.0.0 — Release
-- Public API frozen + documented in `docs/api/` (`#[non_exhaustive]`-equivalent discipline,
-  hand-written ser/de roundtrip-tested, zero panic paths).
 - All parity + end-to-end + audit + benchmarks green; CI green.
-- **At least one downstream consumer green against mela** — `ark` (package pull) or `daimon`
-  (agent discovery).
+- **At least one downstream consumer green against mela** — **`ark`** (package pull) is the
+  intended consumer (daimon is the alternative).
+- **Retire the oracle** — delete `rust-old/` once Cyrius parity holds **and** test coverage ≥ the
+  Rust suite (per the porting standard).
 - The `mudra` / `vinimaya` boundary decision finalized (see *Out of scope* — paid distribution
   is post-1.0 unless those repos land first).
 
@@ -196,14 +217,15 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 
 ## v1.0 criteria (the gate)
 
-- [ ] All 9 Rust modules ported to Cyrius with **function-level parity** vs `rust-old/`.
-- [ ] End-to-end publish→verify→install flow wired; both trust gates **enforced**.
-- [ ] Test coverage ≥ the Rust suite; every parser fuzzed.
-- [ ] `docs/benchmarks-rust-v-cyrius.md` captured (Cyrius vs Rust, hot paths).
-- [ ] Pre-release security audit passed (`docs/audit/`).
-- [ ] ≥1 downstream consumer (ark / daimon) green against mela.
-- [ ] Public API frozen + `docs/api/`; CHANGELOG complete from 0.1.0.
-- [ ] `rust-old/` deleted (parity + coverage met).
+- [x] All 9 Rust modules ported to Cyrius with **function-level parity** vs `rust-old/`. *(v0.8.0)*
+- [x] End-to-end publish→verify→install flow wired; both trust gates **enforced**. *(v0.8.1)*
+- [x] Every external-data parser fuzzed. *(coverage ≥ Rust suite to confirm before v1.0)*
+- [~] `docs/benchmarks-rust-v-cyrius.md` captured — Cyrius baseline done; Rust column deferred
+  (`rust-old` needs `agnos-common` to build). *(v0.8.1)*
+- [ ] Pre-release security audit passed (`docs/audit/`). *(v0.9.0)*
+- [ ] Public API frozen + `docs/api/`; CHANGELOG complete from 0.1.0. *(v0.9.1)*
+- [ ] ≥1 downstream consumer (**ark**, package pull) green against mela. *(v1.0)*
+- [ ] `rust-old/` deleted (parity + coverage met). *(after v1.0)*
 
 ---
 

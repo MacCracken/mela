@@ -45,3 +45,6 @@ Decisions about mela — what we chose, the context, and the consequences we acc
 - [0008 — Packaging: sankoch gzip + hand-rolled ustar; system-tar cross-validation](0008-packaging-gzip-ustar-and-cross-validation.md) —
   *Accepted* · gzip via `sankoch`, ustar tar hand-rolled (sankoch is compression-only); the
   format is cross-validated against the system `tar` both directions (rust-old can't be built).
+- [0009 — End-to-end pipeline + trust-gate enforcement](0009-end-to-end-pipeline-and-gate-enforcement.md) —
+  *Accepted* · `src/pipeline.cyr` wires package→sign→log→verify→install; both trust gates
+  (signature + digest) are enforced at install; transport stays a local seam (ADR-0006).

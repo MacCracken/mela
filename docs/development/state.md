@@ -5,8 +5,9 @@
 
 ## Version
 
-**0.8.0** — Packaging (2026-06-17). **All 9 Rust modules ported to Cyrius.** 6208 lines of Rust
-preserved at `rust-old/` for parity reference (retired only once coverage ≥ Rust suite, per v1.0).
+**0.8.1** — Release run (2026-06-17). All 9 modules ported; the end-to-end flow is wired with
+both trust gates enforced; hot-path benchmarks captured. 6208 lines of Rust preserved at
+`rust-old/` (retired after v1.0, once coverage ≥ Rust suite).
 
 ## Toolchain
 
@@ -42,23 +43,23 @@ preserved at `rust-old/` for parity reference (retired only once coverage ≥ Ru
   - `src/flutter_agpkg.cyr` — `PackFlutterConfig`, build-dir validation, `generate_manifest`/
     `generate_sandbox_profile`, and the `.agnos-agent` packer/inspector (`sankoch` gzip +
     hand-rolled ustar, ADR-0008).
-  - `src/main.cyr` wires all eleven source modules.
-- Deferred pieces remaining for v0.9.0: **†** `remote_client` live `sandhi`/`tls` transport
-  (ADR-0006); `local_registry` tarball extraction (ADR-0005) — now unblocked by the v0.8.0
-  gzip+ustar reader. Next milestone: **v0.9.0 end-to-end wiring + hardening**.
+  - `src/pipeline.cyr` — **end-to-end flow**: `pipeline_package` / `pipeline_publish` (sign +
+    transparency log) / `pipeline_install` enforcing **both trust gates** (signature + digest)
+    before recording into the registry (ADR-0009). `agpkg_read_entry` closed the ADR-0005 gap.
+  - `src/main.cyr` wires all twelve source modules.
+- Deferred (remains a local seam): **†** `remote_client` live `sandhi`/`tls` transport (ADR-0006) —
+  "distribute" is in-process for now; `pipeline_install` is unchanged when it lands.
 
 ## Tests
 
-**444/444** parity tests green (`tests/mela.tcyr` — groups `category`, `semver`, `publisher`,
-`manifest`, `depgraph-base`, `depgraph-resolve`, `json`, `trust`, `keyversion`, `keyring`,
-`transparency`, `transparency-json`, `registry`, `registry-persist`, `registry-signature`,
-`remote`, `remote-codec`, `remote-client`, `sandbox`, `ratings`, `ratings-persist`, `fpackaging`,
-`agpkg`, `agpkg-archive`). `trust` has SHA-256 + RFC 8032 Ed25519 KAT vectors; `registry-persist`
+**457/457** parity tests green (`tests/mela.tcyr` — 25 groups across the 9 modules, plus the
+`pipeline` end-to-end group). `trust` has SHA-256 + RFC 8032 Ed25519 KAT vectors; `registry-persist`
 / `ratings-persist` do real on-disk round-trips; `agpkg-archive` packs + inspects a gzipped-ustar
-`.agnos-agent` (cross-validated against the system `tar` both directions). Fuzz harness at
-`tests/mela.fcyr` covers every external-data parser — manifest/trust/transparency/registry/remote/
-sandbox/ratings JSON and the gzip+ustar inspector (survive arbitrary bytes). `cyrius test` is the
-gate; each ported module adds its group.
+`.agnos-agent` (cross-validated against the system `tar` both directions); `pipeline` runs
+package→sign→log→verify→install and rejects tampered / digest-mismatch / untrusted / wrong-key.
+Fuzz harness at `tests/mela.fcyr` covers every external-data parser (survive arbitrary bytes).
+Benchmarks at [`benches/hotpaths.cyr`](../../benches/hotpaths.cyr) /
+[`docs/benchmarks-rust-v-cyrius.md`](../benchmarks-rust-v-cyrius.md). `cyrius test` is the gate.
 
 ## Dependencies
 
@@ -77,12 +78,13 @@ Direct (declared in `cyrius.cyml`):
 
 ## Consumers
 
-_None yet._
+- **ark** — intended first downstream consumer (package pull). A v1.0 gate is ≥1 consumer green
+  against mela; ark is the planned one (daimon is the alternative). Not yet wired.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). The module port is **complete (9/9)**. Next milestone: **v0.9.0 —
-End-to-end wiring + hardening**: wire publish→sign→log→distribute→verify→capability-surface→install
-with both trust gates enforced (wires the deferred `remote_client` transport, ADR-0006, and
-`local_registry` tarball extraction, ADR-0005); benchmarks vs `rust-old`; security audit + threat
-model; then retire `rust-old/` once coverage ≥ the Rust suite.
+See [`roadmap.md`](roadmap.md). Module port complete (9/9); end-to-end flow wired (0.8.1). Next:
+**v0.9.0 — Security audit + hardening** (`docs/audit/` + `docs/development/threat-model.md`), with
+web research on relevant 0-days / CVEs (Ed25519, gzip/tar zip-slip, supply-chain). Then **v0.9.1 —
+API freeze + documentation cleanup**. `rust-old/` retires after v1.0; **ark** is the intended
+downstream consumer for the v1.0 gate.

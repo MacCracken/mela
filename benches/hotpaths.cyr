@@ -1,0 +1,103 @@
+# mela hot-path benchmarks (v0.8.1) — run with `cyrius run benches/hotpaths.cyr`.
+#
+# Times the marketplace hot paths the roadmap calls out: manifest validation,
+# Ed25519 signature verification, SHA-256 hashing, registry lookup, and the
+# gzip+ustar pack/inspect. Uses clock_now_ns over N iterations (ns/op).
+#
+# `cyrius bench` is not used: at the current toolchain pin it SIGILLs once the
+# heavy crypto/compression deps are linked into the harness, independent of the
+# bench body. A plain `cyrius run` timing loop sidesteps that. Including the src
+# chain pulls trust.cyr -> lib/thread_local (sigil's crypto bank needs it).
+
+include "src/category.cyr"
+include "src/manifest.cyr"
+include "src/depgraph.cyr"
+include "src/trust.cyr"
+include "src/transparency.cyr"
+include "src/local_registry.cyr"
+include "src/remote_client.cyr"
+include "src/sandbox_profiles.cyr"
+include "src/ratings.cyr"
+include "src/flutter_packaging.cyr"
+include "src/flutter_agpkg.cyr"
+include "src/pipeline.cyr"
+
+fn _report(label, ns_per_op) {
+    print(label, strlen(label));
+    print(": ", 2);
+    var s = str_from_int(ns_per_op);
+    print(str_data(s), str_len(s));
+    println(" ns/op");
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+
+    # --- fixtures ---
+    var agent = agent_manifest_new(str_from("test-pkg"));
+    store64(agent + 8, str_from("A benchmark package"));
+    var publisher = publisher_new(str_from("Bench Publisher"), str_from("abc12345"), str_from(""));
+    var manifest = manifest_new(agent, publisher, CAT_UTILITY, str_from("1.0.0"));
+
+    var sk[64];
+    var pk[32];
+    trust_keypair_from_seed(hex_decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", 64), &sk, &pk);
+    var data = "the quick brown fox jumps over the lazy marketplace bundle";
+    var dlen = strlen(data);
+    var sig = trust_sign(&sk, data, dlen);
+
+    var reg = registry_in_memory();
+    registry_install(reg, manifest, str_from("hash"), 1024, 1000);
+    var key = str_from("test-pkg");
+
+    var sandbox = generate_sandbox_profile(mk_pfconfig_bench());
+    var bundle = pipeline_package(manifest, sandbox);
+
+    # --- manifest_validate ---
+    var n1 = 200000;
+    var t0 = clock_now_ns();
+    var i = 0;
+    while (i < n1) { manifest_validate(manifest); i = i + 1; }
+    _report("manifest_validate", (clock_now_ns() - t0) / n1);
+
+    # --- ed25519_verify ---
+    var n2 = 3000;
+    t0 = clock_now_ns();
+    i = 0;
+    while (i < n2) { trust_verify(data, dlen, sig, 64, &pk); i = i + 1; }
+    _report("ed25519_verify   ", (clock_now_ns() - t0) / n2);
+
+    # --- sha256_hash ---
+    var n3 = 200000;
+    t0 = clock_now_ns();
+    i = 0;
+    while (i < n3) { trust_hash_data(data, dlen); i = i + 1; }
+    _report("sha256_hash      ", (clock_now_ns() - t0) / n3);
+
+    # --- registry_get ---
+    var n4 = 200000;
+    t0 = clock_now_ns();
+    i = 0;
+    while (i < n4) { registry_get_package(reg, key); i = i + 1; }
+    _report("registry_get     ", (clock_now_ns() - t0) / n4);
+
+    # --- agpkg_inspect (gzip + ustar) ---
+    var n5 = 20000;
+    t0 = clock_now_ns();
+    i = 0;
+    while (i < n5) { agpkg_inspect_bytes(str_data(bundle), str_len(bundle)); i = i + 1; }
+    _report("agpkg_inspect    ", (clock_now_ns() - t0) / n5);
+
+    return 0;
+}
+
+# minimal pack config for the bundle fixture
+fn mk_pfconfig_bench() {
+    var wl = vec_new(); vec_push(wl, WL_CORE); vec_push(wl, WL_XDG_SHELL);
+    return pfconfig_new(str_from("bench-app"), str_from("1.0.0"), str_from("Pub"),
+                        str_from("desc"), CAT_DESKTOP_APP, wl, 0, 0, str_from(""));
+}
+
+var r = main();
+syscall(60, r);
