@@ -5,9 +5,8 @@
 
 ## Version
 
-**0.7.0** — Sandbox profiles + ratings (2026-06-17). `lib.rs` + `trust.rs` + `transparency.rs` +
-`local_registry.rs` + `remote_client.rs` (logic) + `sandbox_profiles.rs` + `ratings.rs` ported.
-6208 lines of Rust preserved at `rust-old/` for parity reference.
+**0.8.0** — Packaging (2026-06-17). **All 9 Rust modules ported to Cyrius.** 6208 lines of Rust
+preserved at `rust-old/` for parity reference (retired only once coverage ≥ Rust suite, per v1.0).
 
 ## Toolchain
 
@@ -17,8 +16,7 @@
 ## Source
 
 - Rust reference: 6208 lines at `rust-old/` (frozen, do not edit).
-- Cyrius port: **`lib.rs` + `trust.rs` + `transparency.rs` + `local_registry.rs`* +
-  `remote_client.rs`† + `sandbox_profiles.rs` + `ratings.rs` complete (7 of 9 modules)** —
+- Cyrius port: **all 9 modules complete** —
   - `src/category.cyr` — `MarketplaceCategory` (`cat_name` / `cat_parse`, Rust `Display`/`FromStr`).
   - `src/manifest.cyr` — `PublisherInfo`, `MarketplaceManifest` (`validate` / `qualified_name`),
     `is_valid_semver`, and the JSON codec (`*_to_json` / `*_from_json`, wire format = ADR-0001).
@@ -39,22 +37,28 @@
     Photis Nadi / Aequi / per-preset builders, `validate_profile`, JSON codec (ADR-0007).
   - `src/ratings.cyr` — `RatingStore` (dedup), `add_rating`/`get_ratings`/`get_stats` (f64 avg)/
     `top_rated`, filters, save/load JSON via `fs` (ADR-0007).
-  - `src/main.cyr` wires all nine source modules.
-- Remaining (2): `flutter_packaging` + `flutter_agpkg` (the v0.8.0 packaging milestone). Deferred
-  pieces: **\*** `local_registry` tarball extraction → **v0.8.0** (`sankoch`, ADR-0005); **†**
-  `remote_client` live `sandhi`/`tls` transport → **v0.9.0** end-to-end (ADR-0006).
-  Next milestone: **v0.8.0 packaging**.
+  - `src/flutter_packaging.cyr` — Flutter manifest/layout/launch/env + `validate_flutter_manifest`
+    + `determine_backend` (pure).
+  - `src/flutter_agpkg.cyr` — `PackFlutterConfig`, build-dir validation, `generate_manifest`/
+    `generate_sandbox_profile`, and the `.agnos-agent` packer/inspector (`sankoch` gzip +
+    hand-rolled ustar, ADR-0008).
+  - `src/main.cyr` wires all eleven source modules.
+- Deferred pieces remaining for v0.9.0: **†** `remote_client` live `sandhi`/`tls` transport
+  (ADR-0006); `local_registry` tarball extraction (ADR-0005) — now unblocked by the v0.8.0
+  gzip+ustar reader. Next milestone: **v0.9.0 end-to-end wiring + hardening**.
 
 ## Tests
 
-**355/355** parity tests green (`tests/mela.tcyr` — groups `category`, `semver`, `publisher`,
+**444/444** parity tests green (`tests/mela.tcyr` — groups `category`, `semver`, `publisher`,
 `manifest`, `depgraph-base`, `depgraph-resolve`, `json`, `trust`, `keyversion`, `keyring`,
 `transparency`, `transparency-json`, `registry`, `registry-persist`, `registry-signature`,
-`remote`, `remote-codec`, `remote-client`, `sandbox`, `ratings`, `ratings-persist`). `trust` has
-SHA-256 + RFC 8032 Ed25519 KAT vectors; `registry-persist` / `ratings-persist` do real on-disk
-round-trips. Fuzz harness at `tests/mela.fcyr` covers the manifest JSON, trust hex/key/signature,
-transparency-log, registry-index, remote response, sandbox-profile, and ratings-store parsers
-(survive arbitrary bytes). `cyrius test` is the gate; each ported module adds its group.
+`remote`, `remote-codec`, `remote-client`, `sandbox`, `ratings`, `ratings-persist`, `fpackaging`,
+`agpkg`, `agpkg-archive`). `trust` has SHA-256 + RFC 8032 Ed25519 KAT vectors; `registry-persist`
+/ `ratings-persist` do real on-disk round-trips; `agpkg-archive` packs + inspects a gzipped-ustar
+`.agnos-agent` (cross-validated against the system `tar` both directions). Fuzz harness at
+`tests/mela.fcyr` covers every external-data parser — manifest/trust/transparency/registry/remote/
+sandbox/ratings JSON and the gzip+ustar inspector (survive arbitrary bytes). `cyrius test` is the
+gate; each ported module adds its group.
 
 ## Dependencies
 
@@ -68,6 +72,8 @@ Direct (declared in `cyrius.cyml`):
 - **sigil** (`dist/sigil.cyr`, tag 3.8.0) — the crypto crate; Ed25519 + SHA-256 + hex for the
   trust gate. Its dist transitively pulls `agnosys` (used only in unexercised TPM paths, DCE'd);
   the resulting duplicate-symbol warnings on shared `ERR_*` / `LOG_*` constants are benign.
+- **sankoch** (`dist/sankoch.cyr`, tag 2.4.3) — gzip/deflate/lz4 compression for the `.agnos-agent`
+  packer (tar is hand-rolled ustar on top, ADR-0008).
 
 ## Consumers
 
@@ -75,7 +81,8 @@ _None yet._
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). Next milestone: **v0.8.0 — Packaging** (`flutter_packaging.rs` 561
-lines + `flutter_agpkg.rs` 660 lines; dep gate **`sankoch`** for LZ4/DEFLATE/gzip): build / inspect
-/ validate the `.agpkg` archive format. This also unblocks the deferred `local_registry` tarball
-extraction (ADR-0005) and unifies the `LandlockRule`/`NetworkRule` types (ADR-0007).
+See [`roadmap.md`](roadmap.md). The module port is **complete (9/9)**. Next milestone: **v0.9.0 —
+End-to-end wiring + hardening**: wire publish→sign→log→distribute→verify→capability-surface→install
+with both trust gates enforced (wires the deferred `remote_client` transport, ADR-0006, and
+`local_registry` tarball extraction, ADR-0005); benchmarks vs `rust-old`; security audit + threat
+model; then retire `rust-old/` once coverage ≥ the Rust suite.

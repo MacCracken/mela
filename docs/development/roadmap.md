@@ -1,6 +1,6 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-06-17 (v0.7.0) · Live status: [`state.md`](state.md) · Per-version history:
+> **Last Updated**: 2026-06-17 (v0.8.0) · Live status: [`state.md`](state.md) · Per-version history:
 > [`../../CHANGELOG.md`](../../CHANGELOG.md)
 >
 > The path from the **v0.1.0 port scaffold** to a **v1.0 release**. mela is mid-port from Rust
@@ -31,6 +31,14 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 ---
 
 ## Completed
+
+### v0.8.0 — Packaging ✅ (2026-06-17) — **module port complete (9/9)**
+- **`flutter_packaging.rs` ported** → `src/flutter_packaging.cyr` (pure): manifest/layout/launch/
+  env types, `validate_flutter_manifest`, `determine_backend`, `build_env_vars`.
+- **`flutter_agpkg.rs` ported** → `src/flutter_agpkg.cyr`: build-dir validation, manifest/sandbox
+  generation, and the `.agnos-agent` packer/inspector — **`sankoch` gzip + hand-rolled ustar tar**.
+- build→inspect round-trips in Cyrius; **cross-validated against the system `tar` both directions**
+  (the independent oracle, since `rust-old` can't be built); inspector fuzzed. ADR-0008. **444/444 tests**.
 
 ### v0.7.0 — Sandbox profiles + ratings ✅ (2026-06-17)
 - **`sandbox_profiles.rs` ported** → `src/sandbox_profiles.cyr`: `SandboxPreset`,

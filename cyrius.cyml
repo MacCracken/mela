@@ -1,6 +1,6 @@
 [package]
 name = "mela"
-version = "0.7.0"
+version = "0.8.0"
 description = "mela — Cyrius port (from 6208 lines of Rust)"
 license = "GPL-3.0-only"
 language = "cyrius"
@@ -40,3 +40,13 @@ git = "https://github.com/MacCracken/sigil.git"
 path = "../sigil"
 tag = "3.8.0"
 modules = ["dist/sigil.cyr"]
+
+# sankoch — the Cyrius compression crate (gzip/deflate/lz4); replaces Rust
+# flate2 for the `.agnos-agent` packer (src/flutter_agpkg.cyr). Tar archiving is
+# hand-rolled (ustar) on top — sankoch is compression only. Its stdlib deps are
+# already present.
+[deps.sankoch]
+git = "https://github.com/MacCracken/sankoch.git"
+path = "../sankoch"
+tag = "2.4.3"
+modules = ["dist/sankoch.cyr"]

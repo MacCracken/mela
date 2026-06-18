@@ -1,0 +1,286 @@
+# flutter_packaging.cyr — Flutter app packaging spec for `.agnos-agent` bundles.
+#
+# Ports rust-old/src/flutter_packaging.rs: the Flutter app manifest format,
+# package layout, launch configuration, backend determination, env-var
+# construction, and manifest validation. Pure logic — no deps.
+
+# ---------------------------------------------------------------------------
+# WaylandRequirement
+# ---------------------------------------------------------------------------
+
+var WL_CORE             = 0;
+var WL_XDG_SHELL        = 1;
+var WL_XDG_DECORATION   = 2;
+var WL_TEXT_INPUT_V3    = 3;
+var WL_DATA_DEVICE      = 4;
+var WL_VIEWPORTER       = 5;
+var WL_FRACTIONAL_SCALE = 6;
+var WL_XWAYLAND         = 7;
+
+fn wayland_req_name(w): Str {
+    if (w == WL_CORE)             { return str_from("core"); }
+    if (w == WL_XDG_SHELL)        { return str_from("xdg_shell"); }
+    if (w == WL_XDG_DECORATION)   { return str_from("xdg_decoration"); }
+    if (w == WL_TEXT_INPUT_V3)    { return str_from("text_input_v3"); }
+    if (w == WL_DATA_DEVICE)      { return str_from("data_device"); }
+    if (w == WL_VIEWPORTER)       { return str_from("viewporter"); }
+    if (w == WL_FRACTIONAL_SCALE) { return str_from("fractional_scale"); }
+    if (w == WL_XWAYLAND)         { return str_from("xwayland"); }
+    return str_from("");
+}
+
+# ---------------------------------------------------------------------------
+# DisplayBackend
+# ---------------------------------------------------------------------------
+
+var DB_WAYLAND  = 0;
+var DB_XWAYLAND = 1;
+
+fn display_backend_name(b): Str {
+    if (b == DB_WAYLAND)  { return str_from("wayland"); }
+    if (b == DB_XWAYLAND) { return str_from("xwayland"); }
+    return str_from("");
+}
+
+# ---------------------------------------------------------------------------
+# FlutterAppManifest
+# ---------------------------------------------------------------------------
+#
+#   0 runtime (Str)  8 engine_version (Str)  16 dart_version (Str)
+#   24 wayland_protocols (Vec<i64>)  32 platform_channels (Vec<Str>)  40 aot_compiled (i64)
+
+fn fmanifest_new(runtime: Str, engine_version: Str, dart_version: Str,
+                 wayland_protocols, platform_channels, aot_compiled): i64 {
+    var m = alloc(48);
+    store64(m,      runtime);
+    store64(m + 8,  engine_version);
+    store64(m + 16, dart_version);
+    store64(m + 24, wayland_protocols);
+    store64(m + 32, platform_channels);
+    store64(m + 40, aot_compiled);
+    return m;
+}
+fn fmanifest_runtime(m): Str        { return load64(m); }
+fn fmanifest_engine_version(m): Str { return load64(m + 8); }
+fn fmanifest_dart_version(m): Str   { return load64(m + 16); }
+fn fmanifest_wayland(m)             { return load64(m + 24); }
+fn fmanifest_channels(m)            { return load64(m + 32); }
+fn fmanifest_aot_compiled(m): i64   { return load64(m + 40); }
+
+# True if `vec` (of i64 requirement codes) contains `w`.
+fn _wl_contains(vec, w): i64 {
+    var n = vec_len(vec);
+    var i = 0;
+    var hit = 0;
+    while (i < n) {
+        if (vec_get(vec, i) == w) { hit = 1; }
+        i = i + 1;
+    }
+    return hit;
+}
+
+# True if any platform channel contains `needle`.
+fn _channel_contains(channels, needle: Str): i64 {
+    var n = vec_len(channels);
+    var i = 0;
+    var hit = 0;
+    while (i < n) {
+        if (str_contains(vec_get(channels, i), needle) == 1) { hit = 1; }
+        i = i + 1;
+    }
+    return hit;
+}
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+# `x.y.z` with three non-empty all-digit parts. Mirrors Rust `is_dotted_version`.
+fn is_dotted_version(v: Str): i64 {
+    var n = str_len(v);
+    var d = str_data(v);
+    var segs = 0;
+    var seg_len = 0;
+    var bad = 0;
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i) & 0xFF;
+        if (c == 46) {                       # '.'
+            if (seg_len == 0) { bad = 1; }
+            segs = segs + 1;
+            seg_len = 0;
+        } else {
+            if (c < 48) { bad = 1; }
+            if (c > 57) { bad = 1; }
+            seg_len = seg_len + 1;
+        }
+        i = i + 1;
+    }
+    if (seg_len == 0) { bad = 1; }
+    segs = segs + 1;
+    if (segs != 3) { return 0; }
+    if (bad == 1) { return 0; }
+    return 1;
+}
+
+# validate_flutter_manifest — Vec<Str> of errors (empty = valid). Mirrors Rust.
+fn validate_flutter_manifest(m): i64 {
+    var errors = vec_new();
+    if (str_eq_cstr(fmanifest_runtime(m), "flutter") == 0) {
+        vec_push(errors, str_from("runtime must be 'flutter'"));
+    }
+    var ev = fmanifest_engine_version(m);
+    if (str_len(ev) == 0) {
+        vec_push(errors, str_from("engine_version is required"));
+    } else {
+        if (is_dotted_version(ev) == 0) {
+            vec_push(errors, str_from("engine_version is not a valid version (expected x.y.z)"));
+        }
+    }
+    var dv = fmanifest_dart_version(m);
+    if (str_len(dv) == 0) {
+        vec_push(errors, str_from("dart_version is required"));
+    } else {
+        if (is_dotted_version(dv) == 0) {
+            vec_push(errors, str_from("dart_version is not a valid version (expected x.y.z)"));
+        }
+    }
+    if (_wl_contains(fmanifest_wayland(m), WL_CORE) == 0) {
+        vec_push(errors, str_from("wayland_protocols must include Core"));
+    }
+    if (_wl_contains(fmanifest_wayland(m), WL_XDG_SHELL) == 0) {
+        vec_push(errors, str_from("wayland_protocols must include XdgShell"));
+    }
+    return errors;
+}
+
+# ---------------------------------------------------------------------------
+# Backend determination + launch config
+# ---------------------------------------------------------------------------
+
+# determine_backend — Wayland if every required protocol is in caps, else
+# XWayland. Mirrors Rust `determine_backend`.
+fn determine_backend(m, caps): i64 {
+    var reqs = fmanifest_wayland(m);
+    var n = vec_len(reqs);
+    var i = 0;
+    var all_met = 1;
+    while (i < n) {
+        if (_wl_contains(caps, vec_get(reqs, i)) == 0) { all_met = 0; }
+        i = i + 1;
+    }
+    if (all_met == 1) { return DB_WAYLAND; }
+    return DB_XWAYLAND;
+}
+
+# FlutterLaunchConfig
+#   0 app_name (Str)  8 display_backend (i64)  16 compositor_socket (Str)
+#   24 has_theme (i64)  32 theme_channel (Str)  40 accessibility_enabled (i64)  48 scale_factor (f64)
+fn launch_app_name(c): Str          { return load64(c); }
+fn launch_display_backend(c): i64   { return load64(c + 8); }
+fn launch_compositor_socket(c): Str { return load64(c + 16); }
+fn launch_has_theme(c): i64         { return load64(c + 24); }
+fn launch_theme_channel(c): Str     { return load64(c + 32); }
+fn launch_accessibility(c): i64     { return load64(c + 40); }
+fn launch_scale_factor(c): i64      { return load64(c + 48); }   # f64 bits
+
+# build_launch_config — XWayland backend if XWayland is required, else Wayland;
+# theme channel if any channel mentions "theme"; accessibility if any mentions
+# "accessibility". `scale` is an f64. Mirrors Rust `build_launch_config`.
+fn build_launch_config(m, app_name: Str, compositor_socket: Str, scale): i64 {
+    var backend = DB_WAYLAND;
+    if (_wl_contains(fmanifest_wayland(m), WL_XWAYLAND) == 1) { backend = DB_XWAYLAND; }
+    var has_theme = 0;
+    var theme = str_from("");
+    if (_channel_contains(fmanifest_channels(m), str_from("theme")) == 1) {
+        has_theme = 1;
+        theme = str_from("flutter/theme");
+    }
+    var access = _channel_contains(fmanifest_channels(m), str_from("accessibility"));
+    var c = alloc(56);
+    store64(c,      app_name);
+    store64(c + 8,  backend);
+    store64(c + 16, compositor_socket);
+    store64(c + 24, has_theme);
+    store64(c + 32, theme);
+    store64(c + 40, access);
+    store64(c + 48, scale);
+    return c;
+}
+
+# ---------------------------------------------------------------------------
+# Environment variables
+# ---------------------------------------------------------------------------
+
+# build_env_vars — Str-keyed map of launch env vars. Mirrors Rust `build_env_vars`.
+fn build_env_vars(c): i64 {
+    var env = map_new_str();
+    if (launch_display_backend(c) == DB_WAYLAND) {
+        map_set(env, str_from("GDK_BACKEND"), str_from("wayland"));
+        map_set(env, str_from("WAYLAND_DISPLAY"), launch_compositor_socket(c));
+        map_set(env, str_from("FLUTTER_ENGINE_SWITCH_GL"), str_from("wayland"));
+    } else {
+        map_set(env, str_from("GDK_BACKEND"), str_from("x11"));
+        map_set(env, str_from("DISPLAY"), str_from(":0"));
+        map_set(env, str_from("FLUTTER_ENGINE_SWITCH_GL"), str_from("x11"));
+    }
+    # scale_factor formatted as a float string (matches Rust f64 to_string for the tested values)
+    var scbuf[32];
+    var sclen = fmt_float_buf(launch_scale_factor(c), &scbuf, 2);
+    map_set(env, str_from("FLUTTER_FORCE_SCALE_FACTOR"), _trim_trailing_zeros(str_new(&scbuf, sclen)));
+    if (launch_accessibility(c) == 1) {
+        map_set(env, str_from("FLUTTER_ACCESSIBILITY"), str_from("true"));
+    }
+    if (launch_has_theme(c) == 1) {
+        map_set(env, str_from("FLUTTER_THEME_CHANNEL"), launch_theme_channel(c));
+    }
+    map_set(env, str_from("AGNOS_APP_NAME"), launch_app_name(c));
+    return env;
+}
+
+# Trim trailing zeros (and a trailing '.') from a decimal Str: "1.50"->"1.5",
+# "1.00"->"1", "1.25"->"1.25". Rust's f64 to_string has no trailing zeros.
+fn _trim_trailing_zeros(s: Str): Str {
+    var n = str_len(s);
+    var d = str_data(s);
+    # only trim if there's a '.'
+    var has_dot = 0;
+    var i = 0;
+    while (i < n) { if (load8(d + i) == 46) { has_dot = 1; } i = i + 1; }
+    if (has_dot == 0) { return s; }
+    var end = n;
+    var go = 1;
+    while (go == 1) {
+        if (end == 0) { go = 0; }
+        else {
+            var c = load8(d + end - 1);
+            if (c == 48) { end = end - 1; }            # trailing '0'
+            else {
+                if (c == 46) { end = end - 1; go = 0; } # trailing '.'
+                else { go = 0; }
+            }
+        }
+    }
+    return str_sub(s, 0, end);
+}
+
+# ---------------------------------------------------------------------------
+# Package layout
+# ---------------------------------------------------------------------------
+#
+#   0 engine_path  8 app_binary_path  16 assets_path  24 manifest_path  32 sandbox_path
+
+fn layout_for_app(app_name: Str): i64 {
+    var l = alloc(40);
+    store64(l,      str_from("bin/flutter_engine.so"));
+    store64(l + 8,  str_cat(str_from("bin/"), app_name));
+    store64(l + 16, str_from("assets/flutter_assets/"));
+    store64(l + 24, str_from("manifest.json"));
+    store64(l + 32, str_from("sandbox.json"));
+    return l;
+}
+fn layout_engine_path(l): Str   { return load64(l); }
+fn layout_app_binary_path(l): Str { return load64(l + 8); }
+fn layout_assets_path(l): Str   { return load64(l + 16); }
+fn layout_manifest_path(l): Str { return load64(l + 24); }
+fn layout_sandbox_path(l): Str  { return load64(l + 32); }

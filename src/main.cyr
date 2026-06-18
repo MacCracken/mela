@@ -11,6 +11,8 @@ include "src/local_registry.cyr"  # file-backed installed-package registry (v0.5
 include "src/remote_client.cyr"  # remote registry client (v0.6.0)
 include "src/sandbox_profiles.cyr"  # curated sandbox profiles (v0.7.0)
 include "src/ratings.cyr"        # ratings & reviews (v0.7.0)
+include "src/flutter_packaging.cyr"  # Flutter packaging spec (v0.8.0)
+include "src/flutter_agpkg.cyr"  # Flutter .agnos-agent packer (v0.8.0)
 
 fn main() {
     alloc_init();

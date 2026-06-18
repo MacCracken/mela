@@ -1,0 +1,566 @@
+# flutter_agpkg.cyr — pack a Flutter build dir into a `.agnos-agent` bundle.
+#
+# Ports rust-old/src/flutter_agpkg.rs: build-directory validation, the pack
+# config, marketplace-manifest + sandbox-profile generation, and (in the archive
+# section, below) the gzip+tar packer. LandlockRule / NetworkRule are reused from
+# sandbox_profiles.cyr (ll_new / nr_new) — the unification ADR-0007 anticipated.
+
+# ---------------------------------------------------------------------------
+# PackFlutterConfig
+# ---------------------------------------------------------------------------
+#
+#   0 app_name (Str)  8 version (Str)  16 publisher (Str)  24 description (Str)
+#   32 category (i64)  40 wayland_requirements (Vec)  48 network_access (i64)
+#   56 has_data_dir (i64)  64 data_dir (Str)
+
+fn pfconfig_new(app_name: Str, version: Str, publisher: Str, description: Str,
+                category, wayland_requirements, network_access, has_data_dir, data_dir: Str): i64 {
+    var c = alloc(72);
+    store64(c,      app_name);
+    store64(c + 8,  version);
+    store64(c + 16, publisher);
+    store64(c + 24, description);
+    store64(c + 32, category);
+    store64(c + 40, wayland_requirements);
+    store64(c + 48, network_access);
+    store64(c + 56, has_data_dir);
+    store64(c + 64, data_dir);
+    return c;
+}
+fn pfconfig_app_name(c): Str     { return load64(c); }
+fn pfconfig_version(c): Str      { return load64(c + 8); }
+fn pfconfig_publisher(c): Str    { return load64(c + 16); }
+fn pfconfig_description(c): Str  { return load64(c + 24); }
+fn pfconfig_category(c): i64     { return load64(c + 32); }
+fn pfconfig_wayland(c)           { return load64(c + 40); }
+fn pfconfig_network_access(c): i64 { return load64(c + 48); }
+fn pfconfig_has_data_dir(c): i64 { return load64(c + 56); }
+fn pfconfig_data_dir(c): Str     { return load64(c + 64); }
+
+fn _ag_jstr(o, key): Str {
+    var v = json_v_obj_get(o, key);
+    if (v == 0) { return str_from(""); }
+    if (json_v_is_str(v) == 0) { return str_from(""); }
+    return json_v_str(v);
+}
+fn _ag_jbool(o, key): i64 {
+    var v = json_v_obj_get(o, key);
+    if (v == 0) { return 0; }
+    if (json_v_is_bool(v) == 0) { return 0; }
+    return json_v_bool(v);
+}
+
+# config_from_json — category defaults to DesktopApp; network_access false;
+# data_dir none (serde defaults). Mirrors Rust `PackFlutterConfig` deserialize.
+fn pfconfig_from_json(json: Str): i64 {
+    var root = json_v_parse_str(str_data(json), str_len(json));
+    if (root == 0) { return 0; }
+    if (json_v_is_obj(root) == 0) { return 0; }
+
+    var category = CAT_DESKTOP_APP;                 # default_category()
+    var cv = json_v_obj_get(root, "category");
+    if (json_v_is_str(cv) == 1) { category = cat_json_parse(json_v_str(cv)); }
+
+    var wl = vec_new();
+    var wv = json_v_obj_get(root, "wayland_requirements");
+    if (json_v_is_arr(wv) == 1) {
+        var n = json_v_arr_len(wv);
+        var i = 0;
+        while (i < n) {
+            var el = json_v_arr_get(wv, i);
+            if (json_v_is_str(el) == 1) { vec_push(wl, _wl_json_parse(json_v_str(el))); }
+            i = i + 1;
+        }
+    }
+
+    var has_dd = 0;
+    var dd = str_from("");
+    var ddv = json_v_obj_get(root, "data_dir");
+    if (json_v_is_str(ddv) == 1) { has_dd = 1; dd = json_v_str(ddv); }
+
+    return pfconfig_new(_ag_jstr(root, "app_name"), _ag_jstr(root, "version"),
+                        _ag_jstr(root, "publisher"), _ag_jstr(root, "description"),
+                        category, wl, _ag_jbool(root, "network_access"), has_dd, dd);
+}
+
+# WaylandRequirement serde variant name -> code (PascalCase).
+fn _wl_json_parse(s: Str): i64 {
+    if (str_eq_cstr(s, "Core") == 1)            { return WL_CORE; }
+    if (str_eq_cstr(s, "XdgShell") == 1)        { return WL_XDG_SHELL; }
+    if (str_eq_cstr(s, "XdgDecoration") == 1)   { return WL_XDG_DECORATION; }
+    if (str_eq_cstr(s, "TextInputV3") == 1)     { return WL_TEXT_INPUT_V3; }
+    if (str_eq_cstr(s, "DataDevice") == 1)      { return WL_DATA_DEVICE; }
+    if (str_eq_cstr(s, "Viewporter") == 1)      { return WL_VIEWPORTER; }
+    if (str_eq_cstr(s, "FractionalScale") == 1) { return WL_FRACTIONAL_SCALE; }
+    if (str_eq_cstr(s, "XWayland") == 1)        { return WL_XWAYLAND; }
+    return WL_CORE;
+}
+
+# ---------------------------------------------------------------------------
+# SandboxProfile (agpkg flavour: { landlock_paths, seccomp_mode, network })
+# ---------------------------------------------------------------------------
+
+fn sbprofile_new(landlock_paths, seccomp_mode: Str, network): i64 {
+    var s = alloc(24);
+    store64(s,      landlock_paths);
+    store64(s + 8,  seccomp_mode);
+    store64(s + 16, network);
+    return s;
+}
+fn sbprofile_landlock_paths(s)     { return load64(s); }
+fn sbprofile_seccomp_mode(s): Str  { return load64(s + 8); }
+fn sbprofile_network(s)            { return load64(s + 16); }
+
+fn sbprofile_has_rule(s, path: Str, access: Str): i64 {
+    var rules = sbprofile_landlock_paths(s);
+    var n = vec_len(rules);
+    var i = 0;
+    var hit = 0;
+    while (i < n) {
+        if (hit == 0) {
+            var r = vec_get(rules, i);
+            if (str_eq(ll_path(r), path) == 1) {
+                if (str_eq(ll_access(r), access) == 1) { hit = 1; }
+            }
+        }
+        i = i + 1;
+    }
+    return hit;
+}
+
+# ---------------------------------------------------------------------------
+# Build directory validation
+# ---------------------------------------------------------------------------
+
+# True if `path` is an existing regular file (exists but not a directory).
+fn _is_file(path: Str): i64 {
+    if (file_exists(str_data(path)) == 0) { return 0; }
+    if (is_dir(path) == 1) { return 0; }
+    return 1;
+}
+
+# find_aot_binary — relative path Str of app.so / libapp.so in root or lib/, or 0.
+fn _find_aot(root: Str): i64 {
+    if (_is_file(path_join(root, str_from("app.so"))) == 1)        { return str_from("app.so"); }
+    if (_is_file(path_join(root, str_from("libapp.so"))) == 1)     { return str_from("libapp.so"); }
+    if (_is_file(path_join(root, str_from("lib/app.so"))) == 1)    { return str_from("lib/app.so"); }
+    if (_is_file(path_join(root, str_from("lib/libapp.so"))) == 1) { return str_from("lib/libapp.so"); }
+    return 0;
+}
+
+# FlutterBuildDir: 0 root  8 engine_lib  16 has_aot  24 aot_binary  32 assets_dir
+fn fbuild_root(b): Str       { return load64(b); }
+fn fbuild_engine_lib(b): Str { return load64(b + 8); }
+fn fbuild_has_aot(b): i64    { return load64(b + 16); }
+fn fbuild_aot_binary(b): Str { return load64(b + 24); }
+fn fbuild_assets_dir(b): Str { return load64(b + 32); }
+
+# validate result: 0 ok (i64)  8 error (Str)  16 build (FlutterBuildDir* or 0)
+fn fbres_ok(r): i64      { return load64(r); }
+fn fbres_error(r): Str   { return load64(r + 8); }
+fn fbres_build(r)        { return load64(r + 16); }
+
+# FlutterBuildDir::validate — checks the engine lib, AOT binary, and
+# flutter_assets/ dir. Mirrors Rust `FlutterBuildDir::validate`.
+fn fbuild_validate(root: Str): i64 {
+    var res = alloc(24);
+    store64(res,      0);
+    store64(res + 8,  str_from(""));
+    store64(res + 16, 0);
+
+    if (is_dir(root) == 0) {
+        store64(res + 8, str_from("build directory does not exist"));
+        return res;
+    }
+
+    var engine = str_from("");
+    var has_engine = 0;
+    if (_is_file(path_join(root, str_from("lib/libflutter_engine.so"))) == 1) {
+        engine = str_from("lib/libflutter_engine.so");
+        has_engine = 1;
+    } else {
+        if (_is_file(path_join(root, str_from("lib/libflutter_linux_gtk.so"))) == 1) {
+            engine = str_from("lib/libflutter_linux_gtk.so");
+            has_engine = 1;
+        }
+    }
+    if (has_engine == 0) {
+        store64(res + 8, str_from("missing Flutter engine shared library"));
+        return res;
+    }
+
+    var aot = _find_aot(root);
+    var has_aot = 0;
+    var aot_s = str_from("");
+    if (aot != 0) { has_aot = 1; aot_s = aot; }
+
+    if (is_dir(path_join(root, str_from("flutter_assets"))) == 0) {
+        store64(res + 8, str_from("missing flutter_assets/ directory"));
+        return res;
+    }
+
+    var build = alloc(40);
+    store64(build,      root);
+    store64(build + 8,  engine);
+    store64(build + 16, has_aot);
+    store64(build + 24, aot_s);
+    store64(build + 32, str_from("flutter_assets"));
+    store64(res, 1);
+    store64(res + 16, build);
+    return res;
+}
+
+# ---------------------------------------------------------------------------
+# Manifest + sandbox-profile generation
+# ---------------------------------------------------------------------------
+
+# generate_manifest — MarketplaceManifest from the pack config (runtime
+# "flutter", tags [flutter, desktop]). Mirrors Rust `generate_manifest`.
+fn generate_manifest(config): i64 {
+    var agent = agent_manifest_new(pfconfig_app_name(config));
+    store64(agent + 8,  pfconfig_description(config));   # description
+    store64(agent + 16, pfconfig_publisher(config));     # author
+    var publisher = publisher_new(pfconfig_publisher(config), str_from(""), str_from(""));
+    var m = manifest_new(agent, publisher, pfconfig_category(config), pfconfig_version(config));
+    man_set_runtime(m, str_from("flutter"));
+    vec_push(man_tags(m), str_from("flutter"));
+    vec_push(man_tags(m), str_from("desktop"));
+    return m;
+}
+
+# generate_sandbox_profile — landlock data/tmp/fonts (+/run/user/ if any wayland
+# requirement), desktop seccomp, network per network_access. Mirrors Rust.
+fn generate_sandbox_profile(config): i64 {
+    var data_dir = str_from("");
+    if (pfconfig_has_data_dir(config) == 1) {
+        data_dir = pfconfig_data_dir(config);
+    } else {
+        data_dir = str_cat(str_cat(str_from("~/.local/share/"), pfconfig_app_name(config)), str_from("/"));
+    }
+    var rules = vec_new();
+    vec_push(rules, ll_new(data_dir, str_from("rw")));
+    vec_push(rules, ll_new(str_from("/tmp"), str_from("rw")));
+    vec_push(rules, ll_new(str_from("/usr/share/fonts"), str_from("ro")));
+    if (vec_len(pfconfig_wayland(config)) != 0) {
+        vec_push(rules, ll_new(str_from("/run/user/"), str_from("ro")));
+    }
+    var network = nr_new(0, vec_new());
+    if (pfconfig_network_access(config) == 1) {
+        var hosts = vec_new();
+        vec_push(hosts, str_from("*"));
+        network = nr_new(1, hosts);
+    }
+    return sbprofile_new(rules, str_from("desktop"), network);
+}
+
+# sandbox-profile JSON (landlock_paths / seccomp_mode / network).
+fn sbprofile_to_json(s): Str {
+    var o = json_v_obj_new();
+    var arr = json_v_arr_new();
+    var rules = sbprofile_landlock_paths(s);
+    var n = vec_len(rules);
+    var i = 0;
+    while (i < n) {
+        var r = vec_get(rules, i);
+        var ro = json_v_obj_new();
+        json_v_obj_set(ro, str_from("path"),   json_v_str_new(ll_path(r)));
+        json_v_obj_set(ro, str_from("access"), json_v_str_new(ll_access(r)));
+        json_v_arr_push(arr, ro);
+        i = i + 1;
+    }
+    json_v_obj_set(o, str_from("landlock_paths"), arr);
+    json_v_obj_set(o, str_from("seccomp_mode"),   json_v_str_new(sbprofile_seccomp_mode(s)));
+    var net = sbprofile_network(s);
+    var no = json_v_obj_new();
+    json_v_obj_set(no, str_from("enabled"), json_v_bool_new(nr_enabled(net)));
+    var ha = json_v_arr_new();
+    var hosts = nr_hosts(net);
+    var hn = vec_len(hosts);
+    var hi = 0;
+    while (hi < hn) { json_v_arr_push(ha, json_v_str_new(vec_get(hosts, hi))); hi = hi + 1; }
+    json_v_obj_set(no, str_from("allowed_hosts"), ha);
+    json_v_obj_set(o, str_from("network"), no);
+    return json_v_build(o);
+}
+
+fn sbprofile_from_json(json: Str): i64 {
+    var root = json_v_parse_str(str_data(json), str_len(json));
+    if (root == 0) { return 0; }
+    if (json_v_is_obj(root) == 0) { return 0; }
+    var rules = vec_new();
+    var arr = json_v_obj_get(root, "landlock_paths");
+    if (json_v_is_arr(arr) == 1) {
+        var n = json_v_arr_len(arr);
+        var i = 0;
+        while (i < n) {
+            var ro = json_v_arr_get(arr, i);
+            vec_push(rules, ll_new(_ag_jstr(ro, "path"), _ag_jstr(ro, "access")));
+            i = i + 1;
+        }
+    }
+    var hosts = vec_new();
+    var enabled = 0;
+    var net_in = json_v_obj_get(root, "network");
+    if (json_v_is_obj(net_in) == 1) {
+        enabled = _ag_jbool(net_in, "enabled");
+        var ha = json_v_obj_get(net_in, "allowed_hosts");
+        if (json_v_is_arr(ha) == 1) {
+            var hn = json_v_arr_len(ha);
+            var hi = 0;
+            while (hi < hn) {
+                var el = json_v_arr_get(ha, hi);
+                if (json_v_is_str(el) == 1) { vec_push(hosts, json_v_str(el)); }
+                hi = hi + 1;
+            }
+        }
+    }
+    return sbprofile_new(rules, _ag_jstr(root, "seccomp_mode"), nr_new(enabled, hosts));
+}
+
+# ---------------------------------------------------------------------------
+# Archive: ustar tar (hand-rolled) over sankoch gzip
+# ---------------------------------------------------------------------------
+#
+# sankoch is compression-only, so the tar container is implemented here. Output
+# is a standard gzipped ustar archive — readable by GNU tar, and able to read
+# GNU-tar-built archives (cross-validation, ADR-0008). Replaces Rust tar+flate2.
+
+var AGPKG_BUF_MAXLEN = 8388608;     # 8 MiB working buffers
+
+# Round n up to a 512-byte multiple.
+fn _roundup512(n): i64 { return ((n + 511) / 512) * 512; }
+
+# tar entry: 0 name (Str)  8 data (ptr)  16 len (i64)
+fn tentry_new(name: Str, data, len): i64 {
+    var e = alloc(24);
+    store64(e,      name);
+    store64(e + 8,  data);
+    store64(e + 16, len);
+    return e;
+}
+fn tentry_name(e): Str { return load64(e); }
+fn tentry_data(e)      { return load64(e + 8); }
+fn tentry_len(e): i64  { return load64(e + 16); }
+
+# Write `val` as a NUL-terminated octal field of `width` bytes (width-1 digits,
+# zero-padded) at buf+off.
+fn _tar_octal(buf, off, width, val): i64 {
+    var k = 0;
+    while (k < width - 1) { store8(buf + off + k, 48); k = k + 1; }   # '0'
+    store8(buf + off + width - 1, 0);                                  # NUL
+    var v = val;
+    var i = width - 2;
+    while (i >= 0) {
+        if (v > 0) {
+            store8(buf + off + i, 48 + (v & 7));
+            v = v >> 3;
+            i = i - 1;
+        } else {
+            i = 0 - 1;
+        }
+    }
+    return 0;
+}
+
+# Write a 512-byte ustar header for a regular file at buf+off.
+fn _tar_header(buf, off, name: Str, size): i64 {
+    var i = 0;
+    while (i < 512) { store8(buf + off + i, 0); i = i + 1; }
+    var nlen = str_len(name);
+    if (nlen > 100) { nlen = 100; }
+    memcpy(buf + off, str_data(name), nlen);
+    _tar_octal(buf, off + 100, 8, 0x1A4);   # mode 0o644
+    _tar_octal(buf, off + 108, 8, 0);        # uid
+    _tar_octal(buf, off + 116, 8, 0);        # gid
+    _tar_octal(buf, off + 124, 12, size);    # size
+    _tar_octal(buf, off + 136, 12, 0);       # mtime
+    store8(buf + off + 156, 48);             # typeflag '0' (regular file)
+    # magic "ustar\0" + version "00"
+    store8(buf + off + 257, 117); store8(buf + off + 258, 115); store8(buf + off + 259, 116);
+    store8(buf + off + 260, 97);  store8(buf + off + 261, 114); store8(buf + off + 262, 0);
+    store8(buf + off + 263, 48);  store8(buf + off + 264, 48);
+    # checksum over header with chksum field as 8 spaces
+    var c = 0;
+    while (c < 8) { store8(buf + off + 148 + c, 32); c = c + 1; }
+    var sum = 0;
+    var j = 0;
+    while (j < 512) { sum = sum + (load8(buf + off + j) & 0xFF); j = j + 1; }
+    _tar_octal(buf, off + 148, 7, sum);      # 6 octal digits + NUL
+    store8(buf + off + 148 + 7, 32);         # trailing space
+    return 0;
+}
+
+# Build a ustar archive (Str) from a Vec of tar entries.
+fn _tar_build(entries): Str {
+    var n = vec_len(entries);
+    var total = 0;
+    var i = 0;
+    while (i < n) {
+        total = total + 512 + _roundup512(tentry_len(vec_get(entries, i)));
+        i = i + 1;
+    }
+    total = total + 1024;                    # two zero blocks (EOF)
+    var buf = alloc(total);
+    var z = 0;
+    while (z < total) { store8(buf + z, 0); z = z + 1; }
+    var off = 0;
+    i = 0;
+    while (i < n) {
+        var e = vec_get(entries, i);
+        var len = tentry_len(e);
+        _tar_header(buf, off, tentry_name(e), len);
+        memcpy(buf + off + 512, tentry_data(e), len);
+        off = off + 512 + _roundup512(len);
+        i = i + 1;
+    }
+    return str_new(buf, total);
+}
+
+# gzip a Str -> Str (or 0 on error).
+fn _gzip_str(s: Str): i64 {
+    var cap = str_len(s) + 65536;
+    var dst = alloc(cap);
+    var clen = gzip_compress(str_data(s), str_len(s), dst, cap);
+    if (clen < 0) { return 0; }
+    return str_new(dst, clen);
+}
+
+# Read an entire file into a Str, or 0 on error.
+fn _read_file(path: Str): i64 {
+    if (file_exists(str_data(path)) == 0) { return 0; }
+    var buf = alloc(AGPKG_BUF_MAXLEN);
+    var n = file_read_all(str_data(path), buf, AGPKG_BUF_MAXLEN);
+    if (n < 0) { return 0; }
+    return str_new(buf, n);
+}
+
+# pack_flutter_app — validate the build dir, then write
+# <output_dir>/<app>-<version>.agnos-agent (gzipped ustar) containing
+# bin/flutter_engine.so, bin/<app> (if AOT), assets/flutter_assets/<files>,
+# manifest.json, sandbox.json. Returns the tarball path Str, or 0 on failure.
+# Mirrors Rust `pack_flutter_app` (asset walk is one level — the build layout).
+fn pack_flutter_app(build_dir: Str, config, output_dir: Str): i64 {
+    var res = fbuild_validate(build_dir);
+    if (fbres_ok(res) == 0) { return 0; }
+    var b = fbres_build(res);
+
+    var entries = vec_new();
+
+    var engine_bytes = _read_file(path_join(build_dir, fbuild_engine_lib(b)));
+    if (engine_bytes == 0) { return 0; }
+    vec_push(entries, tentry_new(str_from("bin/flutter_engine.so"),
+                                 str_data(engine_bytes), str_len(engine_bytes)));
+
+    if (fbuild_has_aot(b) == 1) {
+        var aot_bytes = _read_file(path_join(build_dir, fbuild_aot_binary(b)));
+        if (aot_bytes != 0) {
+            vec_push(entries, tentry_new(str_cat(str_from("bin/"), pfconfig_app_name(config)),
+                                         str_data(aot_bytes), str_len(aot_bytes)));
+        }
+    }
+
+    var assets_src = path_join(build_dir, fbuild_assets_dir(b));
+    var names = dir_list(assets_src);
+    var an = vec_len(names);
+    var ai = 0;
+    while (ai < an) {
+        var nm = vec_get(names, ai);
+        var fpath = path_join(assets_src, nm);
+        if (_is_file(fpath) == 1) {
+            var fb = _read_file(fpath);
+            if (fb != 0) {
+                vec_push(entries, tentry_new(str_cat(str_from("assets/flutter_assets/"), nm),
+                                             str_data(fb), str_len(fb)));
+            }
+        }
+        ai = ai + 1;
+    }
+
+    var manifest_json = manifest_to_json(generate_manifest(config));
+    vec_push(entries, tentry_new(str_from("manifest.json"), str_data(manifest_json), str_len(manifest_json)));
+    var sandbox_json = sbprofile_to_json(generate_sandbox_profile(config));
+    vec_push(entries, tentry_new(str_from("sandbox.json"), str_data(sandbox_json), str_len(sandbox_json)));
+
+    var gz = _gzip_str(_tar_build(entries));
+    if (gz == 0) { return 0; }
+    _rc_mkdir_p(output_dir);
+    var tarball_name = str_cat(str_cat(str_cat(pfconfig_app_name(config), str_from("-")),
+                                       pfconfig_version(config)), str_from(".agnos-agent"));
+    var out_path = path_join(output_dir, tarball_name);
+    if (file_write_all(str_data(out_path), str_data(gz), str_len(gz)) < 0) { return 0; }
+    return out_path;
+}
+
+# --- tar reading (for inspect) ---
+
+fn _tar_field_len(buf, off, max): i64 {
+    var i = 0;
+    var done = 0;
+    var len = max;
+    while (i < max) {
+        if (done == 0) {
+            if (load8(buf + off + i) == 0) { done = 1; len = i; }
+        }
+        i = i + 1;
+    }
+    return len;
+}
+
+fn _tar_read_name(buf, off): Str {
+    var len = _tar_field_len(buf, off, 100);
+    var nb = alloc(len + 1);
+    memcpy(nb, buf + off, len);
+    store8(nb + len, 0);
+    return str_new(nb, len);
+}
+
+# Parse the octal size field (offset 124, 12 bytes; stops at NUL/space).
+fn _tar_read_size(buf, off): i64 {
+    var v = 0;
+    var i = 0;
+    var done = 0;
+    while (i < 12) {
+        if (done == 0) {
+            var c = load8(buf + off + 124 + i) & 0xFF;
+            if (c == 0) { done = 1; }
+            else {
+                if (c == 32) { done = 1; }
+                else { v = v * 8 + (c - 48); }
+            }
+        }
+        i = i + 1;
+    }
+    return v;
+}
+
+# agpkg_inspect — gunzip + parse the ustar archive at `path`, returning a Vec of
+# entry-name Strs (or 0 on read/decompress error). The validate half of
+# build→inspect→validate, and the reader used for GNU-tar cross-validation.
+fn agpkg_inspect(path: Str): i64 {
+    var fb = _read_file(path);
+    if (fb == 0) { return 0; }
+    return agpkg_inspect_bytes(str_data(fb), str_len(fb));
+}
+
+# Gunzip + parse a gzipped-ustar byte buffer; returns a Vec of entry-name Strs,
+# or 0 on a decompress error. Robust to arbitrary input (bounds-checked) — the
+# fuzz entry point.
+fn agpkg_inspect_bytes(data, len): i64 {
+    var dst = alloc(AGPKG_BUF_MAXLEN);
+    var dlen = gzip_decompress(data, len, dst, AGPKG_BUF_MAXLEN);
+    if (dlen < 0) { return 0; }
+    var names = vec_new();
+    var off = 0;
+    var go = 1;
+    while (go == 1) {
+        if (off + 512 > dlen) { go = 0; }
+        else {
+            if (load8(dst + off) == 0) { go = 0; }     # zero block => EOF
+            else {
+                vec_push(names, _tar_read_name(dst, off));
+                off = off + 512 + _roundup512(_tar_read_size(dst, off));
+            }
+        }
+    }
+    return names;
+}

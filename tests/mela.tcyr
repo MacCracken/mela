@@ -12,6 +12,8 @@ include "src/local_registry.cyr"
 include "src/remote_client.cyr"
 include "src/sandbox_profiles.cyr"
 include "src/ratings.cyr"
+include "src/flutter_packaging.cyr"
+include "src/flutter_agpkg.cyr"
 
 # MarketplaceCategory — parity with rust-old/src/lib.rs (Display + FromStr).
 fn test_category() {
@@ -919,6 +921,257 @@ fn test_ratings() {
     return 0;
 }
 
+# valid Flutter manifest: flutter / 3.22.0 / 3.4.0 / [Core,XdgShell,XdgDecoration,TextInputV3] /
+# channels [flutter/textinput, flutter/theme].
+fn mk_fmanifest() {
+    var wl = vec_new();
+    vec_push(wl, WL_CORE); vec_push(wl, WL_XDG_SHELL); vec_push(wl, WL_XDG_DECORATION); vec_push(wl, WL_TEXT_INPUT_V3);
+    var ch = vec_new();
+    vec_push(ch, str_from("flutter/textinput")); vec_push(ch, str_from("flutter/theme"));
+    return fmanifest_new(str_from("flutter"), str_from("3.22.0"), str_from("3.4.0"), wl, ch, 1);
+}
+fn wlvec(a, b) { var v = vec_new(); if (a >= 0) { vec_push(v, a); } if (b >= 0) { vec_push(v, b); } return v; }
+
+# sample pack config: my-flutter-app / 1.0.0 / Test Publisher / DesktopApp / [Core,XdgShell] / no net.
+fn mk_pfconfig() {
+    var wl = vec_new(); vec_push(wl, WL_CORE); vec_push(wl, WL_XDG_SHELL);
+    return pfconfig_new(str_from("my-flutter-app"), str_from("1.0.0"), str_from("Test Publisher"),
+                        str_from("A test Flutter application"), CAT_DESKTOP_APP, wl, 0, 0, str_from(""));
+}
+
+# Create a Flutter build-dir variant on disk (each variant has its own dir, so
+# contents are deterministic across runs without cleanup).
+fn setup_build(dir, engine_rel, with_aot, with_assets) {
+    _rc_mkdir_p(path_join(str_from(dir), str_from("lib")));
+    if (with_assets == 1) { _rc_mkdir_p(path_join(str_from(dir), str_from("flutter_assets"))); }
+    if (str_len(str_from(engine_rel)) > 0) {
+        file_write_all(str_data(path_join(str_from(dir), str_from(engine_rel))), "x", 1);
+    }
+    if (with_aot == 1) {
+        file_write_all(str_data(path_join(str_from(dir), str_from("lib/app.so"))), "x", 1);
+    }
+    return 0;
+}
+
+# flutter_agpkg non-archive — parity with rust-old/src/flutter_agpkg.rs.
+fn test_agpkg() {
+    test_group("agpkg");
+
+    # build-dir validation
+    setup_build("/tmp/mela-fb-valid", "lib/libflutter_engine.so", 1, 1);
+    var v = fbuild_validate(str_from("/tmp/mela-fb-valid"));
+    assert_eq(fbres_ok(v), 1, "valid build ok");
+    assert_eq(str_eq_cstr(fbuild_engine_lib(fbres_build(v)), "lib/libflutter_engine.so"), 1, "engine lib path");
+    assert_eq(fbuild_has_aot(fbres_build(v)), 1, "has aot");
+    assert_eq(str_eq_cstr(fbuild_assets_dir(fbres_build(v)), "flutter_assets"), 1, "assets dir");
+
+    setup_build("/tmp/mela-fb-noeng", "", 0, 1);
+    var ve = fbuild_validate(str_from("/tmp/mela-fb-noeng"));
+    assert_eq(fbres_ok(ve), 0, "no engine fails");
+    assert_eq(str_contains(fbres_error(ve), str_from("missing Flutter engine")), 1, "no engine msg");
+
+    setup_build("/tmp/mela-fb-noassets", "lib/libflutter_engine.so", 0, 0);
+    var va = fbuild_validate(str_from("/tmp/mela-fb-noassets"));
+    assert_eq(fbres_ok(va), 0, "no assets fails");
+    assert_eq(str_contains(fbres_error(va), str_from("flutter_assets")), 1, "no assets msg");
+
+    var vn = fbuild_validate(str_from("/tmp/mela-fb-nonexistent-zzz"));
+    assert_eq(fbres_ok(vn), 0, "nonexistent fails");
+    assert_eq(str_contains(fbres_error(vn), str_from("does not exist")), 1, "nonexistent msg");
+
+    setup_build("/tmp/mela-fb-gtk", "lib/libflutter_linux_gtk.so", 0, 1);
+    var vg = fbuild_validate(str_from("/tmp/mela-fb-gtk"));
+    assert_eq(fbres_ok(vg), 1, "gtk engine ok");
+    assert_eq(str_eq_cstr(fbuild_engine_lib(fbres_build(vg)), "lib/libflutter_linux_gtk.so"), 1, "gtk engine path");
+
+    setup_build("/tmp/mela-fb-noaot", "lib/libflutter_engine.so", 0, 1);
+    var vno = fbuild_validate(str_from("/tmp/mela-fb-noaot"));
+    assert_eq(fbres_ok(vno), 1, "no-aot still ok");
+    assert_eq(fbuild_has_aot(fbres_build(vno)), 0, "no-aot has_aot 0");
+
+    # generate_manifest
+    var m = generate_manifest(mk_pfconfig());
+    assert_eq(str_eq_cstr(man_name(m),        "my-flutter-app"),            1, "manifest name");
+    assert_eq(str_eq_cstr(man_version(m),     "1.0.0"),                     1, "manifest version");
+    assert_eq(str_eq_cstr(man_description(m), "A test Flutter application"), 1, "manifest description");
+    assert_eq(str_eq_cstr(pub_name(man_publisher(m)), "Test Publisher"),    1, "manifest publisher");
+    assert_eq(man_category(m),                CAT_DESKTOP_APP,                 "manifest category");
+    assert_eq(str_eq_cstr(man_runtime(m),     "flutter"),                   1, "manifest runtime");
+    assert_eq(str_eq_cstr(vec_get(man_tags(m), 0), "flutter"),              1, "manifest tag flutter");
+
+    # generate_sandbox_profile — no network
+    var sb = generate_sandbox_profile(mk_pfconfig());
+    assert_eq(str_eq_cstr(sbprofile_seccomp_mode(sb), "desktop"), 1, "sandbox desktop");
+    assert_eq(nr_enabled(sbprofile_network(sb)), 0, "sandbox no network");
+    assert_eq(vec_len(nr_hosts(sbprofile_network(sb))), 0, "sandbox no hosts");
+    assert_eq(sbprofile_has_rule(sb, str_from("~/.local/share/my-flutter-app/"), str_from("rw")), 1, "sandbox data rule");
+    assert_eq(sbprofile_has_rule(sb, str_from("/tmp"), str_from("rw")), 1, "sandbox tmp rule");
+    assert_eq(sbprofile_has_rule(sb, str_from("/usr/share/fonts"), str_from("ro")), 1, "sandbox fonts rule");
+
+    # with network
+    var wl2 = vec_new(); vec_push(wl2, WL_CORE); vec_push(wl2, WL_XDG_SHELL);
+    var cnet = pfconfig_new(str_from("app"), str_from("1.0.0"), str_from("P"), str_from("d"), CAT_DESKTOP_APP, wl2, 1, 0, str_from(""));
+    var sbn = generate_sandbox_profile(cnet);
+    assert_eq(nr_enabled(sbprofile_network(sbn)), 1, "sandbox network on");
+    assert_neq(vec_len(nr_hosts(sbprofile_network(sbn))), 0, "sandbox hosts non-empty");
+
+    # custom data dir
+    var ccustom = pfconfig_new(str_from("app"), str_from("1.0.0"), str_from("P"), str_from("d"), CAT_DESKTOP_APP, vec_new(), 0, 1, str_from("/custom/data"));
+    var sbc = generate_sandbox_profile(ccustom);
+    assert_eq(sbprofile_has_rule(sbc, str_from("/custom/data"), str_from("rw")), 1, "sandbox custom data rule");
+
+    # sandbox serialization roundtrip
+    var sbj = sbprofile_from_json(sbprofile_to_json(sb));
+    assert_neq(sbj, 0, "sandbox json parses");
+    assert_eq(str_eq_cstr(sbprofile_seccomp_mode(sbj), "desktop"), 1, "sandbox ser seccomp");
+    assert_eq(nr_enabled(sbprofile_network(sbj)), nr_enabled(sbprofile_network(sb)), "sandbox ser network");
+    assert_eq(vec_len(sbprofile_landlock_paths(sbj)), vec_len(sbprofile_landlock_paths(sb)), "sandbox ser rules len");
+
+    # config default category
+    var cfg = pfconfig_from_json(str_from("{\"app_name\":\"test\",\"version\":\"0.1.0\",\"publisher\":\"pub\",\"description\":\"desc\"}"));
+    assert_neq(cfg, 0, "config json parses");
+    assert_eq(pfconfig_category(cfg),        CAT_DESKTOP_APP, "config default category");
+    assert_eq(pfconfig_network_access(cfg),  0,                "config default no network");
+    assert_eq(pfconfig_has_data_dir(cfg),    0,                "config default no data_dir");
+    return 0;
+}
+
+# True if any Str in `vec` equals cstring `needle`.
+fn names_contain(vec, needle) {
+    var n = vec_len(vec);
+    var i = 0;
+    var hit = 0;
+    while (i < n) { if (str_eq_cstr(vec_get(vec, i), needle) == 1) { hit = 1; } i = i + 1; }
+    return hit;
+}
+# True if any Str in `vec` starts with cstring `prefix`.
+fn names_have_prefix(vec, prefix) {
+    var p = str_from(prefix);
+    var plen = str_len(p);
+    var n = vec_len(vec);
+    var i = 0;
+    var hit = 0;
+    while (i < n) {
+        var s = vec_get(vec, i);
+        if (str_len(s) >= plen) {
+            if (str_eq(str_sub(s, 0, plen), p) == 1) { hit = 1; }
+        }
+        i = i + 1;
+    }
+    return hit;
+}
+
+# Archive pack -> inspect round-trip (build->inspect->validate done-when).
+fn test_agpkg_archive() {
+    test_group("agpkg-archive");
+    var DIR = "/tmp/mela-pack-build";
+    # set up a valid build dir with engine, aot, and two asset files
+    setup_build(DIR, "lib/libflutter_engine.so", 1, 1);
+    file_write_all(str_data(path_join(str_from(DIR), str_from("flutter_assets/AssetManifest.json"))), "{}", 2);
+    file_write_all(str_data(path_join(str_from(DIR), str_from("flutter_assets/FontManifest.json"))), "[]", 2);
+
+    var out = pack_flutter_app(str_from(DIR), mk_pfconfig(), str_from("/tmp/mela-pack-out"));
+    assert_neq(out, 0, "pack returns path");
+    assert_eq(str_eq_cstr(out, "/tmp/mela-pack-out/my-flutter-app-1.0.0.agnos-agent"), 1, "pack tarball name");
+    assert_eq(file_exists(str_data(out)), 1, "tarball exists");
+
+    var names = agpkg_inspect(out);
+    assert_neq(names, 0, "inspect ok");
+    assert_eq(names_contain(names, "bin/flutter_engine.so"), 1, "has engine entry");
+    assert_eq(names_contain(names, "bin/my-flutter-app"),    1, "has aot entry");
+    assert_eq(names_contain(names, "manifest.json"),         1, "has manifest entry");
+    assert_eq(names_contain(names, "sandbox.json"),          1, "has sandbox entry");
+    assert_eq(names_have_prefix(names, "assets/flutter_assets/"), 1, "has assets entries");
+    return 0;
+}
+
+# flutter_packaging — parity with rust-old/src/flutter_packaging.rs (pure).
+fn test_fpackaging() {
+    test_group("fpackaging");
+
+    # Display names
+    assert_eq(str_eq_cstr(wayland_req_name(WL_CORE),             "core"),             1, "wl core");
+    assert_eq(str_eq_cstr(wayland_req_name(WL_FRACTIONAL_SCALE), "fractional_scale"), 1, "wl fractional");
+    assert_eq(str_eq_cstr(wayland_req_name(WL_XWAYLAND),         "xwayland"),         1, "wl xwayland");
+    assert_eq(str_eq_cstr(display_backend_name(DB_WAYLAND),  "wayland"),  1, "db wayland");
+    assert_eq(str_eq_cstr(display_backend_name(DB_XWAYLAND), "xwayland"), 1, "db xwayland");
+
+    # is_dotted_version
+    assert_eq(is_dotted_version(str_from("3.22.0")),   1, "dotted 3.22.0");
+    assert_eq(is_dotted_version(str_from("0.0.1")),    1, "dotted 0.0.1");
+    assert_eq(is_dotted_version(str_from("3.22")),     0, "dotted 3.22 invalid");
+    assert_eq(is_dotted_version(str_from("abc")),      0, "dotted abc invalid");
+    assert_eq(is_dotted_version(str_from("3.22.0.1")), 0, "dotted 4-part invalid");
+    assert_eq(is_dotted_version(str_from("")),         0, "dotted empty invalid");
+
+    # validate
+    assert_eq(vec_len(validate_flutter_manifest(mk_fmanifest())), 0, "valid manifest no errors");
+    var me = mk_fmanifest(); store64(me + 8, str_from(""));    # engine_version @ 8
+    assert_eq(errors_contain(validate_flutter_manifest(me), "engine_version is required"), 1, "missing engine");
+    var mb = mk_fmanifest(); store64(mb + 8, str_from("not-a-version"));
+    assert_eq(errors_contain(validate_flutter_manifest(mb), "engine_version"), 1, "bad engine");
+    var md = mk_fmanifest(); store64(md + 16, str_from(""));   # dart_version @ 16
+    assert_eq(errors_contain(validate_flutter_manifest(md), "dart_version is required"), 1, "missing dart");
+    var mr = mk_fmanifest(); store64(mr, str_from("native"));  # runtime @ 0
+    assert_eq(errors_contain(validate_flutter_manifest(mr), "runtime must be 'flutter'"), 1, "wrong runtime");
+    var mc = mk_fmanifest(); store64(mc + 24, wlvec(WL_XDG_SHELL, 0 - 1));   # only XdgShell
+    assert_eq(errors_contain(validate_flutter_manifest(mc), "Core"), 1, "missing Core");
+    var mx = mk_fmanifest(); store64(mx + 24, wlvec(WL_CORE, 0 - 1));        # only Core
+    assert_eq(errors_contain(validate_flutter_manifest(mx), "XdgShell"), 1, "missing XdgShell");
+
+    # determine_backend
+    var caps_all = vec_new();
+    vec_push(caps_all, WL_CORE); vec_push(caps_all, WL_XDG_SHELL); vec_push(caps_all, WL_XDG_DECORATION);
+    vec_push(caps_all, WL_TEXT_INPUT_V3); vec_push(caps_all, WL_VIEWPORTER);
+    assert_eq(determine_backend(mk_fmanifest(), caps_all), DB_WAYLAND, "backend all met");
+    assert_eq(determine_backend(mk_fmanifest(), wlvec(WL_CORE, 0 - 1)), DB_XWAYLAND, "backend missing");
+    assert_eq(determine_backend(mk_fmanifest(), vec_new()), DB_XWAYLAND, "backend empty caps");
+    var m_noreq = mk_fmanifest(); store64(m_noreq + 24, vec_new());
+    assert_eq(determine_backend(m_noreq, vec_new()), DB_WAYLAND, "backend no reqs");
+
+    # launch config
+    var cfg = build_launch_config(mk_fmanifest(), str_from("my-app"), str_from("wayland-0"), f64_div(f64_from(3), f64_from(2)));
+    assert_eq(str_eq_cstr(launch_app_name(cfg), "my-app"), 1, "launch app_name");
+    assert_eq(launch_display_backend(cfg), DB_WAYLAND, "launch wayland");
+    assert_eq(launch_has_theme(cfg), 1, "launch has theme");
+    assert_eq(str_eq_cstr(launch_theme_channel(cfg), "flutter/theme"), 1, "launch theme channel");
+    var mxw = mk_fmanifest(); var wl2 = fmanifest_wayland(mxw); vec_push(wl2, WL_XWAYLAND);
+    var cfgx = build_launch_config(mxw, str_from("x-app"), str_from("wayland-1"), f64_from(2));
+    assert_eq(launch_display_backend(cfgx), DB_XWAYLAND, "launch xwayland");
+
+    # env vars — wayland (with theme + accessibility channels, scale 1.25)
+    var wlw = vec_new(); vec_push(wlw, WL_CORE); vec_push(wlw, WL_XDG_SHELL);
+    var chw = vec_new(); vec_push(chw, str_from("flutter/theme")); vec_push(chw, str_from("flutter/accessibility"));
+    var mw = fmanifest_new(str_from("flutter"), str_from("3.22.0"), str_from("3.4.0"), wlw, chw, 1);
+    var cw = build_launch_config(mw, str_from("test-app"), str_from("wayland-0"), f64_div(f64_from(5), f64_from(4)));
+    var ew = build_env_vars(cw);
+    assert_eq(str_eq_cstr(map_get(ew, str_from("GDK_BACKEND")), "wayland"), 1, "env wayland GDK");
+    assert_eq(str_eq_cstr(map_get(ew, str_from("WAYLAND_DISPLAY")), "wayland-0"), 1, "env WAYLAND_DISPLAY");
+    assert_eq(str_eq_cstr(map_get(ew, str_from("FLUTTER_FORCE_SCALE_FACTOR")), "1.25"), 1, "env scale 1.25");
+    assert_eq(str_eq_cstr(map_get(ew, str_from("FLUTTER_ACCESSIBILITY")), "true"), 1, "env accessibility");
+    assert_eq(str_eq_cstr(map_get(ew, str_from("FLUTTER_THEME_CHANNEL")), "flutter/theme"), 1, "env theme");
+    assert_eq(str_eq_cstr(map_get(ew, str_from("AGNOS_APP_NAME")), "test-app"), 1, "env app name");
+
+    # env vars — xwayland (no theme, no accessibility)
+    var wlx = vec_new(); vec_push(wlx, WL_CORE); vec_push(wlx, WL_XDG_SHELL); vec_push(wlx, WL_XWAYLAND);
+    var mx2 = fmanifest_new(str_from("flutter"), str_from("3.22.0"), str_from("3.4.0"), wlx, vec_new(), 1);
+    var cx = build_launch_config(mx2, str_from("x-app"), str_from("wayland-0"), f64_from(1));
+    var ex = build_env_vars(cx);
+    assert_eq(str_eq_cstr(map_get(ex, str_from("GDK_BACKEND")), "x11"), 1, "env xwayland GDK");
+    assert_eq(str_eq_cstr(map_get(ex, str_from("DISPLAY")), ":0"), 1, "env DISPLAY");
+    assert_eq(map_has(ex, str_from("FLUTTER_ACCESSIBILITY")), 0, "env no accessibility");
+    assert_eq(map_has(ex, str_from("FLUTTER_THEME_CHANNEL")), 0, "env no theme");
+
+    # layout
+    var lay = layout_for_app(str_from("my-flutter-app"));
+    assert_eq(str_eq_cstr(layout_engine_path(lay),     "bin/flutter_engine.so"),   1, "layout engine");
+    assert_eq(str_eq_cstr(layout_app_binary_path(lay), "bin/my-flutter-app"),      1, "layout app binary");
+    assert_eq(str_eq_cstr(layout_assets_path(lay),     "assets/flutter_assets/"),  1, "layout assets");
+    assert_eq(str_eq_cstr(layout_manifest_path(lay),   "manifest.json"),           1, "layout manifest");
+    assert_eq(str_eq_cstr(layout_sandbox_path(lay),    "sandbox.json"),            1, "layout sandbox");
+    return 0;
+}
+
 # ratings persistence + serialization — parity with rust-old.
 fn test_ratings_persist() {
     test_group("ratings-persist");
@@ -1093,6 +1346,9 @@ fn main() {
     test_sandbox();
     test_ratings();
     test_ratings_persist();
+    test_fpackaging();
+    test_agpkg();
+    test_agpkg_archive();
     return assert_summary();
 }
 

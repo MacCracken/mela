@@ -13,6 +13,8 @@ include "src/local_registry.cyr"
 include "src/remote_client.cyr"
 include "src/sandbox_profiles.cyr"
 include "src/ratings.cyr"
+include "src/flutter_packaging.cyr"
+include "src/flutter_agpkg.cyr"
 
 fn fuzz_main(data, len) {
     if (len == 0) { return 0; }
@@ -40,6 +42,11 @@ fn fuzz_main(data, len) {
     # sandbox profile + ratings store importers (v0.7.0)
     profile_from_json(s);
     rstore_from_json(s);
+
+    # packaging config + sandbox importers + the gzip/ustar inspector (v0.8.0)
+    pfconfig_from_json(s);
+    sbprofile_from_json(s);
+    agpkg_inspect_bytes(data, len);   # arbitrary bytes -> 0, never a crash
 
     # verify with arbitrary bytes as the public key + a signature derived from
     # the input — must reject (0), never fault.

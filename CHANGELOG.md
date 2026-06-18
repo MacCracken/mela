@@ -6,6 +6,36 @@ include benchmark numbers; breaking changes get a **Breaking** section with a mi
 
 ## [Unreleased]
 
+## [0.8.0] — Packaging (`flutter_packaging.rs`, `flutter_agpkg.rs`)
+
+Build and read the `.agnos-agent` package format — the **final port milestone**:
+all 9 Rust modules are now in Cyrius. **444/444 parity tests** green (was 355).
+
+### Added
+- **`src/flutter_packaging.cyr`** (pure) — `WaylandRequirement` / `DisplayBackend`
+  (+Display), `FlutterAppManifest` / `FlutterPackageLayout` / `FlutterLaunchConfig`,
+  `validate_flutter_manifest`, `determine_backend`, `build_launch_config`,
+  `build_env_vars`, `layout_for_app`.
+- **`src/flutter_agpkg.cyr`** — `PackFlutterConfig`, build-dir validation
+  (`FlutterBuildDir::validate` over `fs`), `generate_manifest` /
+  `generate_sandbox_profile`, and the packer: **`pack_flutter_app`** writes a
+  gzipped-ustar `.agnos-agent`; **`agpkg_inspect`** reads it back.
+- **Archive support** — gzip via the new **`sankoch`** dep; a hand-rolled POSIX
+  **ustar** tar writer/reader (sankoch is compression-only). The in-Cyrius
+  build→inspect round-trip is parity-tested.
+- **Cross-validation** — verified interoperable with the system `tar`/`gzip`
+  both directions (GNU `tar` reads/extracts a Cyrius-built archive; Cyrius
+  `agpkg_inspect` reads a `tar czf`-built archive). The independent oracle for
+  "format identical, not self-consistent" (`rust-old` can't be built locally).
+- **Fuzz** (`tests/mela.fcyr`) extended: the packaging config / sandbox importers
+  and the gzip+ustar inspector survive arbitrary bytes.
+- **ADR**: [0008](docs/adr/0008-packaging-gzip-ustar-and-cross-validation.md) —
+  gzip+ustar approach and system-tar cross-validation.
+
+### Dependencies
+- **`sankoch`** (`dist/sankoch.cyr`, tag 2.4.3) — gzip/deflate/lz4 compression
+  (replaces Rust `flate2`). Its stdlib deps were already present.
+
 ## [0.7.0] — Sandbox profiles + ratings (`sandbox_profiles.rs`, `ratings.rs`)
 
 Capability disclosure before install, and a ratings/reviews system. Ports two

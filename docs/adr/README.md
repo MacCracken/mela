@@ -42,3 +42,6 @@ Decisions about mela — what we chose, the context, and the consequences we acc
   *Accepted* · `average_score` uses real f64 builtins (store persists integer scores, recomputes
   stats); `created_at` is an i64 epoch; `LandlockRule`/`NetworkRule` defined in `sandbox_profiles`
   until `flutter_agpkg` (v0.8.0).
+- [0008 — Packaging: sankoch gzip + hand-rolled ustar; system-tar cross-validation](0008-packaging-gzip-ustar-and-cross-validation.md) —
+  *Accepted* · gzip via `sankoch`, ustar tar hand-rolled (sankoch is compression-only); the
+  format is cross-validated against the system `tar` both directions (rust-old can't be built).
