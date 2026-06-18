@@ -6,6 +6,29 @@ include benchmark numbers; breaking changes get a **Breaking** section with a mi
 
 ## [Unreleased]
 
+## [0.9.1] — API freeze + documentation cleanup
+
+Freezes the public surface and reconciles the docs with the shipped port.
+Docs-only — no code change; **463/463 parity tests** unchanged.
+
+### Added
+- **`docs/api/`** — the **frozen public API reference**: the v1.0-bound surface downstream
+  consumers (ark) build against, with conventions (`Str`, `0` = error/absent, `i64` epochs,
+  JSON wire = ADR-0001, `_`-prefixed = internal) and per-module stable function listings.
+  Signature/semantic changes to a listed function now require an ADR.
+- **`docs/examples/publish-and-install.md`** — worked end-to-end example (package → sign → log →
+  verify → install) with the rejection table.
+
+### Changed
+- **README** — status `v0.1.0`/"early scaffolding" → `v0.9.x`/"port complete; hardening for 1.0";
+  module table all ✅; trust properties marked shipped+tested; added links to `docs/api/`, the
+  audit, threat model, and benchmarks; quick-start notes `rust-old` isn't built locally.
+- **`docs/architecture/overview.md`** — maturity, per-module status (all ported), gate
+  enforcement, and the dependency list updated to the Cyrius deps (sigil / agnostik / sankoch).
+- **`docs/guides/getting-started.md`** — layout (the real `src/` module chain), the end-to-end
+  flow, and an "Extending mela" workflow that points at the frozen API + ADR discipline.
+- **CLAUDE.md** — filled the project `Goal` (mela = the marketplace trust boundary).
+
 ## [0.9.0] — Security audit + hardening
 
 A pre-release security audit of the supply-chain trust boundary, informed by

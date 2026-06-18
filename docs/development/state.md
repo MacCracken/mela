@@ -5,9 +5,10 @@
 
 ## Version
 
-**0.9.0** — Security audit + hardening (2026-06-17). All 9 modules ported; end-to-end flow wired
-(both gates enforced); pre-release audit + threat model done with tar zip-slip hardening. 6208
-lines of Rust preserved at `rust-old/` (retired after v1.0, once coverage ≥ Rust suite).
+**0.9.1** — API freeze + documentation cleanup (2026-06-17). All 9 modules ported; end-to-end flow
+wired (both gates enforced); audit + threat model done; **public API frozen** ([`../api/`](../api/))
+and docs reconciled. 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once
+coverage ≥ Rust suite).
 
 ## Toolchain
 
@@ -83,9 +84,8 @@ Direct (declared in `cyrius.cyml`):
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). Module port complete (9/9); end-to-end flow wired (0.8.1); security
-audit + threat model done with tar zip-slip hardening (0.9.0, see
-[`../audit/2026-06-17-audit.md`](../audit/2026-06-17-audit.md) +
-[`threat-model.md`](threat-model.md)). Next: **v0.9.1 — API freeze + documentation cleanup**
-(`docs/api/`). `rust-old/` retires after v1.0; **ark** is the intended downstream consumer for the
-v1.0 gate.
+See [`roadmap.md`](roadmap.md). Module port complete (9/9); end-to-end flow wired (0.8.1); audit +
+threat model done (0.9.0); public API frozen + docs reconciled (0.9.1, [`../api/`](../api/)).
+Remaining for **v1.0**: confirm test coverage ≥ the Rust suite, get **ark** green against mela as
+the downstream consumer, then retire `rust-old/`. Deferred seams to wire at/by v1.0: live
+`remote_client` transport (ADR-0006) and on-disk tarball extraction (ADR-0005).

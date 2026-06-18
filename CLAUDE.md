@@ -18,7 +18,11 @@
 
 ## Goal
 
-_TODO: one-or-two-sentence mission statement. What does mela OWN in the stack? Durable — doesn't change per release._
+mela is AGNOS's **marketplace trust boundary**: it owns the distribution, verification, and
+on-device installation of apps and agents — deciding what is allowed to install. Every artifact
+is Ed25519-signed, SHA-256-integrity-gated, and recorded in an append-only transparency log;
+nothing installs without passing both trust gates. (Discovery and capability surfacing ride
+along; paid distribution is out of scope until `mudra`/`vinimaya` exist.)
 
 ## Current State
 

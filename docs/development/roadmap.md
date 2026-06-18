@@ -1,6 +1,6 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-06-17 (v0.9.0) · Live status: [`state.md`](state.md) · Per-version history:
+> **Last Updated**: 2026-06-17 (v0.9.1) · Live status: [`state.md`](state.md) · Per-version history:
 > [`../../CHANGELOG.md`](../../CHANGELOG.md)
 >
 > The path from the **v0.1.0 port scaffold** to a **v1.0 release**. mela is mid-port from Rust
@@ -31,6 +31,13 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 ---
 
 ## Completed
+
+### v0.9.1 — API freeze + documentation cleanup ✅ (2026-06-17)
+- **`docs/api/`** — the frozen, v1.0-bound public surface (conventions + per-module stable
+  functions); changes to a listed function now require an ADR. `docs/examples/` end-to-end example.
+- **Docs reconciled** to the shipped port: README (status / module table / shipped trust
+  properties / api+audit+benchmarks links), `architecture/overview.md` (statuses + Cyrius deps),
+  `getting-started.md` (module chain + workflow), CLAUDE.md `Goal` filled. Docs-only; 463/463 tests.
 
 ### v0.9.0 — Security audit + hardening ✅ (2026-06-17)
 - **Audit** (`docs/audit/2026-06-17-audit.md`) + **threat model**
@@ -207,9 +214,10 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
   the ustar reader's `_tar_entry_safe` zip-slip guard. See *Completed*. Follow-ups (on-disk
   extractor path-confinement, live-transport TLS, keyring provenance) tracked in the audit.
 
-### v0.9.1 — API freeze + documentation cleanup
-- Freeze the public API; document it in `docs/api/` (hand-written ser/de roundtrip-tested, zero
-  panic paths). Refresh README / guides / examples; reconcile all ADRs with the shipped code.
+### v0.9.1 — API freeze + documentation cleanup ✅ (2026-06-17)
+- **Done.** Public API frozen in `docs/api/` (conventions + per-module stable surface; ser/de
+  roundtrip-tested in the parity suite; `0`-sentinel error model, no panics). README / guides /
+  examples / architecture refreshed; ADRs reconciled. See *Completed*.
 
 ### v1.0.0 — Release
 - All parity + end-to-end + audit + benchmarks green; CI green.
@@ -230,7 +238,7 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 - [~] `docs/benchmarks-rust-v-cyrius.md` captured — Cyrius baseline done; Rust column deferred
   (`rust-old` needs `agnos-common` to build). *(v0.8.1)*
 - [x] Pre-release security audit passed (`docs/audit/`). *(v0.9.0)*
-- [ ] Public API frozen + `docs/api/`; CHANGELOG complete from 0.1.0. *(v0.9.1)*
+- [x] Public API frozen + `docs/api/`; CHANGELOG complete from 0.1.0. *(v0.9.1)*
 - [ ] ≥1 downstream consumer (**ark**, package pull) green against mela. *(v1.0)*
 - [ ] `rust-old/` deleted (parity + coverage met). *(after v1.0)*
 

@@ -1,25 +1,27 @@
 # Mela — Architecture Overview
 
-> **Last Updated**: 2026-06-17 · **Maturity**: early scaffolding (module surfaces in place;
-> end-to-end flows not yet wired — see [`../development/state.md`](../development/state.md)).
+> **Last Updated**: 2026-06-17 (v0.9.1) · **Maturity**: port complete (all 9 modules in Cyrius;
+> end-to-end flow wired with both trust gates enforced; pre-1.0 hardening — see
+> [`../development/state.md`](../development/state.md)).
 
 Mela is the marketplace layer for AGNOS: discovery, distribution, and trust verification for
-desktop apps *and* AI agents. This doc maps the modules and the intended data flow. It
-describes the **target architecture**; per-module implementation status lives in
+desktop apps *and* AI agents. This doc maps the modules and the data flow; the frozen public
+surface is in [`../api/`](../api/), per-module status in
 [`../development/state.md`](../development/state.md).
 
 ## Module map
 
-| Module | Owns | Status |
+| Module (Cyrius) | Owns | Status |
 |--------|------|--------|
-| `lib.rs` | Marketplace core types — `MarketplaceManifest`, `MarketplaceCategory`, `PublisherInfo`; the `DependencyGraph` / `DepNode` resolver | scaffolded |
-| `local_registry` | The on-device registry — installed/cached artifacts, local index, query | scaffolded |
-| `remote_client` | Remote marketplace HTTP client (reqwest, **rustls-only**) — search / fetch / download / publish | scaffolded |
-| `trust` | Ed25519 publisher-signature verification; SHA-256 download integrity gating | scaffolded |
-| `transparency` | Append-only, verifiable transparency log of published artifacts | scaffolded |
-| `ratings` | Ratings & reviews | scaffolded |
-| `sandbox_profiles` | Per-app capability/sandbox profiles, surfaced before install | scaffolded |
-| `flutter_packaging` / `flutter_agpkg` | Flutter app → `.agpkg` (AGNOS package) build pipeline + archive format | scaffolded |
+| `category` + `manifest` + `depgraph` | Core types — `MarketplaceManifest`, `MarketplaceCategory`, `PublisherInfo`; the `DependencyGraph` / `DepNode` resolver | ✅ ported |
+| `local_registry` | The on-device registry — installed/cached artifacts, `index.json`, query | ✅ ported (fs-backed) |
+| `remote_client` | Remote marketplace client — search / fetch / download / publish | ✅ ported (HTTP/TLS transport = deferred seam, ADR-0006) |
+| `trust` | Ed25519 publisher-signature verification; SHA-256 download integrity gating | ✅ ported (via `sigil`) |
+| `transparency` | Append-only, hash-chained transparency log of published artifacts | ✅ ported |
+| `ratings` | Ratings & reviews | ✅ ported |
+| `sandbox_profiles` | Per-app capability/sandbox profiles, surfaced before install | ✅ ported |
+| `flutter_packaging` / `flutter_agpkg` | Flutter app → `.agnos-agent` build + gzip/ustar archive | ✅ ported (via `sankoch`) |
+| `pipeline` *(wiring)* | End-to-end publish→sign→log→verify→install, both trust gates enforced | ✅ ADR-0009 |
 
 ## Intended data flow
 
@@ -43,20 +45,26 @@ install:   remote_client (search/fetch) ──▶ trust (verify sig + SHA-256)
 The two trust gates are the load-bearing invariants: **nothing is installed without a valid
 Ed25519 signature and a matching SHA-256 digest** (`trust`), and **every publication is
 recorded in the append-only `transparency` log** so the record can't be silently rewritten.
-These are design targets at the scaffolding stage, not yet enforced end-to-end.
+Both gates are **enforced end-to-end** at `pipeline_install` (ADR-0009): a tampered bundle,
+digest mismatch, untrusted publisher, or wrong key each install nothing. The signature is
+non-malleable (RFC 8032 §5.1.7, via `sigil`); see [`../development/threat-model.md`](../development/threat-model.md).
 
 ## Consumers
 
 - **[`ark`](https://github.com/MacCracken/ark)** — pulls marketplace packages.
 - **[`daimon`](https://github.com/MacCracken/daimon)** — agent discovery.
 
-## Dependencies
+## Dependencies (Cyrius port)
 
-- **[`sigil`](https://github.com/MacCracken/sigil)** — the trust/crypto boundary (signatures,
-  key handling).
-- **`agnos-common`** — shared AGNOS types (path dep).
-- Rust crates: `ed25519-dalek`, `reqwest`(rustls), `sha2`, `tar`, `flate2`, `tokio`,
-  `serde`, `uuid`, `chrono`, `tracing`.
+- **[`sigil`](https://github.com/MacCracken/sigil)** — crypto boundary: Ed25519 + SHA-256 + hex
+  (replaces `ed25519-dalek` + `sha2`).
+- **[`agnostik`](https://github.com/MacCracken/agnostik)** — shared AGNOS types; supplies the
+  `AgentManifest` the manifest flattens (replaces `agnos-common`).
+- **[`sankoch`](https://github.com/MacCracken/sankoch)** — gzip/deflate/lz4 compression for the
+  `.agnos-agent` packer (replaces `flate2`; tar is hand-rolled ustar, ADR-0008).
+- stdlib `bayan` (JSON), `fs`, `hashmap`, etc. The Rust oracle's crates
+  (`reqwest`/rustls, `tar`, `tokio`, `serde`, `uuid`, `chrono`, `tracing`) are replaced by the
+  Cyrius stdlib + the deps above; the live HTTP/TLS transport is a deferred seam (ADR-0006).
 
 ## Planned boundaries
 
