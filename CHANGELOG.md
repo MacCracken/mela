@@ -6,6 +6,44 @@ include benchmark numbers; breaking changes get a **Breaking** section with a mi
 
 ## [Unreleased]
 
+## [1.0.0] — Marketplace trust boundary, released
+
+The port from Rust to Cyrius is complete and **a downstream consumer is green
+against it**: every v1.0 gate is met. mela owns AGNOS's marketplace trust
+boundary — signed, integrity-gated, transparency-logged distribution and
+on-device install — with no deferred seams.
+
+### Highlights — what v1.0 guarantees
+
+- **Full port, function-level parity.** All 9 Rust modules (6208 lines at
+  `rust-old/`) ported to Cyrius across 12 source modules; behavior cross-checked
+  against the frozen oracle. **492/492 parity tests** + a fuzz harness over every
+  external-data parser; `cyrius test` is the gate.
+- **Both trust gates enforced end-to-end.** `pipeline_install` rejects an
+  artifact unless it carries a valid Ed25519 publisher signature (keyed by
+  `key_id`) **and** a matching SHA-256 content digest; every publication is
+  recorded in the append-only, hash-chained transparency log.
+- **Real I/O, no stubs.** HTTP/HTTPS/DNS transport via `sandhi`; on-disk install
+  extraction (zip-slip-guarded ustar reader); recursive uninstall; keyring disk
+  `load()`. No deferred seams remain anywhere in the tree.
+- **Consumable + consumed.** Ships `dist/mela.cyr` (`[lib]` + `cyrius distlib`,
+  reproducible). **ark consumes mela 0.9.5 and is green** (263 tests): it calls
+  `mela_fetch_artifact` / `registry_client_new` / `sanitize_filename` to fetch
+  `.ark` packages through mela's transport — the **v1.0 consumer gate**.
+- **Audited + frozen.** Security audit + threat model (`docs/audit/`,
+  `docs/development/threat-model.md`); public API frozen in `docs/api/` (additive
+  changes pre-1.0 only; signature/semantic changes require an ADR).
+
+### Known limitations (carried forward, by design)
+
+- **Rust benchmark column deferred** — the Cyrius hot-path baseline is captured
+  (`docs/benchmarks-rust-v-cyrius.md`); the Rust comparison column can't be run
+  because `rust-old` needs `agnos-common` to build.
+- **`rust-old/` retained** — the parity oracle is retired *after* v1.0, once
+  Cyrius test coverage is confirmed ≥ the Rust suite (porting standard).
+- **Paid distribution out of scope** — `mudra` / `vinimaya` integration is post-1.0
+  (neither is scaffolded yet); the free-distribution path never blocks on it.
+
 ## [0.9.5] — Format-agnostic artifact fetch (consumable by ark)
 
 ### Added

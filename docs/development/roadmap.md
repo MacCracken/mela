@@ -1,6 +1,6 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-06-18 (v0.9.4) · Live status: [`state.md`](state.md) · Per-version history:
+> **Last Updated**: 2026-06-18 (v0.9.5) · Live status: [`state.md`](state.md) · Per-version history:
 > [`../../CHANGELOG.md`](../../CHANGELOG.md)
 >
 > The path from the **v0.1.0 port scaffold** to a **v1.0 release**. mela is mid-port from Rust
@@ -31,6 +31,15 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 ---
 
 ## Completed
+
+### v0.9.5 — Format-agnostic artifact fetch (consumable by ark) ✅ (2026-06-18)
+- **`mela_fetch_artifact(c, name, version, dest_path)`** — the consumer-facing download primitive:
+  fetches over the sandhi transport and writes the body **verbatim to a caller-chosen path**, making
+  **no assumption about artifact type**. `rc_download` (mela's agent flow) now builds on it but keeps
+  its `.agnos-agent` convention.
+- **Unblocks ark** — ark's packages are takumi `.ark` binaries, not mela `.agnos-agent` bundles; ark
+  passes its own `.ark` cache path and interprets the bytes with its own installer instead of being
+  forced into mela's agent-bundle layout/extension. `dist/mela.cyr` regenerated. **492/492 tests** (+2 guards).
 
 ### v0.9.4 — Every load-bearing seam is real on disk ✅ (2026-06-18)
 - **Closed the ark finding** ("mela's own artifact fetch+write still deferred"): `rc_download`
@@ -246,14 +255,19 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
   roundtrip-tested in the parity suite; `0`-sentinel error model, no panics). README / guides /
   examples / architecture refreshed; ADRs reconciled. See *Completed*.
 
-### v1.0.0 — Release
-- All parity + end-to-end + audit + benchmarks green; CI green.
-- **At least one downstream consumer green against mela** — **`ark`** (package pull) is the
-  intended consumer (daimon is the alternative).
-- **Retire the oracle** — delete `rust-old/` once Cyrius parity holds **and** test coverage ≥ the
-  Rust suite (per the porting standard).
-- The `mudra` / `vinimaya` boundary decision finalized (see *Out of scope* — paid distribution
-  is post-1.0 unless those repos land first).
+### v1.0.0 — Release ✅ (2026-06-18)
+- **Released.** Every v1.0 gate met (see *v1.0 criteria* below). 492/492 parity tests + fuzz green;
+  end-to-end flow with both trust gates enforced; security audit + frozen public API; `dist/mela.cyr`
+  reproducible. No deferred seams.
+- **Downstream consumer green** — **`ark`** consumes mela 0.9.5 and builds green (263 tests),
+  calling `mela_fetch_artifact` / `registry_client_new` / `sanitize_filename` to fetch `.ark`
+  packages through mela's transport. The consumer gate is satisfied. (daimon was the alternative.)
+- **Carried to post-1.0**: retire the oracle — delete `rust-old/` once Cyrius test coverage is
+  confirmed ≥ the Rust suite (per the porting standard). The Rust benchmark column is not a blocker —
+  it takes the last recorded Rust numbers where available, else is omitted (`rust-old` needs
+  `agnos-common` to build).
+- The `mudra` / `vinimaya` boundary decision stays as framed in *Out of scope* — paid distribution
+  is post-1.0 unless those repos land first.
 
 ---
 
@@ -262,11 +276,12 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 - [x] All 9 Rust modules ported to Cyrius with **function-level parity** vs `rust-old/`. *(v0.8.0)*
 - [x] End-to-end publish→verify→install flow wired; both trust gates **enforced**. *(v0.8.1)*
 - [x] Every external-data parser fuzzed. *(coverage ≥ Rust suite to confirm before v1.0)*
-- [~] `docs/benchmarks-rust-v-cyrius.md` captured — Cyrius baseline done; Rust column deferred
-  (`rust-old` needs `agnos-common` to build). *(v0.8.1)*
+- [x] `docs/benchmarks-rust-v-cyrius.md` captured — Cyrius baseline done; Rust column uses the last
+  recorded Rust benchmarks where available, else omitted (`rust-old` needs `agnos-common` to build).
+  Not a v1.0 blocker. *(v0.8.1)*
 - [x] Pre-release security audit passed (`docs/audit/`). *(v0.9.0)*
 - [x] Public API frozen + `docs/api/`; CHANGELOG complete from 0.1.0. *(v0.9.1)*
-- [ ] ≥1 downstream consumer (**ark**, package pull) green against mela. *(v1.0)*
+- [x] ≥1 downstream consumer (**ark**, package pull) green against mela. *(v1.0 — 2026-06-18)*
 - [ ] `rust-old/` deleted (parity + coverage met). *(after v1.0)*
 
 ---

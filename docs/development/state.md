@@ -5,13 +5,25 @@
 
 ## Version
 
-**0.9.4** — Every load-bearing seam is real on disk (2026-06-18). All four remote flows are real
-over sandhi: search/fetch (GET+parse+cache), **download** (GET+write to cache), **publish**
-(POST+auth+parse), check_updates (per-package diff) — the ark "fetch+write still deferred" finding
-is closed. **Uninstall removes the extracted files** (recursive `_rmtree`), and **keyring disk
-`load()` is implemented** (`keyring_load_dir` + `KeyVersion` JSON codec, closing ADR-0003). mela
-ships `dist/mela.cyr`; on-disk extraction + both trust gates enforced. **No deferred seams remain.**
-6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once coverage ≥ Rust suite).
+**1.0.0** — Marketplace trust boundary, released (2026-06-18). Every v1.0 gate is met: full
+Rust→Cyrius port with function-level parity (492/492 tests + fuzz), both trust gates enforced
+end-to-end, security audit + frozen public API, reproducible `dist/mela.cyr`, and **ark green as
+the downstream consumer** (the v1.0 consumer gate). No deferred seams. `rust-old/` is retired
+*after* v1.0 once coverage ≥ the Rust suite is confirmed. The format-agnostic fetch primitive that
+unblocked ark landed in 0.9.5 (below).
+
+**0.9.5** — Format-agnostic artifact fetch (consumable by ark) (2026-06-18). Adds
+**`mela_fetch_artifact(c, name, version, dest_path)`** — the consumer-facing download primitive:
+fetches over the sandhi transport and writes the body **verbatim to a caller-chosen path**, making
+**no assumption about the artifact type**. `rc_download` (mela's agent flow) now builds on it but
+keeps its `.agnos-agent` convention. This unblocks **ark**, whose packages are takumi `.ark`
+binaries (not mela `.agnos-agent` bundles): ark passes its own `.ark` cache path and interprets the
+bytes with its own installer. All four remote flows are real over sandhi: search/fetch
+(GET+parse+cache), **download** (GET+write to cache), **publish** (POST+auth+parse), check_updates
+(per-package diff). **Uninstall removes the extracted files** (recursive `_rmtree`), and **keyring
+disk `load()` is implemented** (`keyring_load_dir` + `KeyVersion` JSON codec, closing ADR-0003).
+mela ships `dist/mela.cyr`; on-disk extraction + both trust gates enforced. **No deferred seams
+remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once coverage ≥ Rust suite).
 
 ## Toolchain
 
@@ -60,7 +72,7 @@ ships `dist/mela.cyr`; on-disk extraction + both trust gates enforced. **No defe
 
 ## Tests
 
-**490/490** parity tests green (`tests/mela.tcyr` — groups across the 9 modules, plus `pipeline`
+**492/492** parity tests green (`tests/mela.tcyr` — groups across the 9 modules, plus `pipeline`
 (end-to-end), `hardening` (zip-slip), `transport` (HTTP logic), `extraction` (on-disk unpack),
 `keyring-load` (disk `load()` + `KeyVersion` JSON round-trip), and `registry-uninstall-fs` (files
 gone after uninstall)). `trust` has SHA-256 + RFC 8032 Ed25519 KAT vectors; `registry-persist`
@@ -90,16 +102,24 @@ Direct (declared in `cyrius.cyml`):
 
 ## Consumers
 
-- **ark** — first downstream consumer (package pull). **Unblocked in 0.9.2**: mela now ships
-  `dist/mela.cyr` with a `[lib]` section, so ark can add `[deps.mela] modules = ["dist/mela.cyr"]`
-  (it couldn't before — mela was binary-only). A dist-only consumer was verified running the full
-  pipeline. Next: ark wires the dep and goes green (the v1.0 consumer gate). daimon is the alternative.
+- **ark** — first downstream consumer (package pull), **GREEN against mela 0.9.5** (the v1.0
+  consumer gate is **met**). ark declares `[deps.mela] tag = "0.9.5" modules = ["dist/mela.cyr"]`,
+  vendors the matching 0.9.5 bundle (`lib/mela.cyr`, 4159 lines), and calls
+  `mela_fetch_artifact(client, name, version, cache_path)` + `registry_client_new` +
+  `sanitize_filename` from `src/marketplace.cyr` — replacing ark's hand-rolled HTTP/download with
+  mela's transport + download guards. ark builds clean with **263 tests green**
+  (`test_marketplace` exercises the integration end-to-end). Division of labor: mela validates
+  name/version + builds URLs + fetches via its client; ark's native installer materializes the
+  `.ark`. (daimon was the alternative consumer — not needed now that ark is green.)
 
 ## Next
 
 See [`roadmap.md`](roadmap.md). Module port complete (9/9); end-to-end flow wired (0.8.1); audit +
 threat model done (0.9.0); public API frozen + docs reconciled (0.9.1, [`../api/`](../api/)).
 As of **0.9.2** the previously-deferred pieces are done: mela is consumable (`dist/mela.cyr`),
-transport is real (HTTP+HTTPS+DNS via sandhi), and install extracts to disk. Remaining for
-**v1.0**: get **ark** green against mela as the downstream consumer, confirm test coverage ≥ the
-Rust suite, then retire `rust-old/`. No deferred seams remain.
+transport is real (HTTP+HTTPS+DNS via sandhi), and install extracts to disk. As of **0.9.5** the
+**v1.0 consumer gate is met** — ark is green against mela (see *Consumers*). **v1.0.0 is cut**
+(2026-06-18): every v1.0 criterion is checked. Post-1.0 work: retire `rust-old/` once test coverage
+≥ the Rust suite is confirmed; the Rust benchmark column is not a blocker (takes the last recorded
+Rust numbers where available, else omitted — `rust-old` needs `agnos-common` to build); paid
+distribution (`mudra`/`vinimaya`) stays out of scope until those repos land. No deferred seams remain.

@@ -142,6 +142,12 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   path); **`rc_publish`** (POST bundle + Bearer auth → `PublishResponse`); `rc_check_updates`
   (per-package latest diff → `UpdateAvailable[]`). Guards: `rc_download_allowed` /
   `rc_publish_allowed`.
+- **`mela_fetch_artifact(c, name, version, dest_path: Str): i64`** *(added v0.9.5)* — the
+  consumer-facing download primitive. GETs the artifact over the sandhi transport and writes the
+  body **verbatim to the caller-chosen `dest_path`**, making **no assumption about artifact type**
+  (no `.agnos-agent` extension/layout). `rc_download` now builds on it but keeps mela's agent-bundle
+  convention. This is **ark's** download entry point (ark's packages are takumi `.ark` binaries):
+  ark passes its own `.ark` cache path and interprets the bytes with its own installer.
 - Constants: `DEFAULT_REGISTRY_URL`, `REQUEST_TIMEOUT_SECS`, `DOWNLOAD_TIMEOUT_SECS`.
 
 ## sandbox_profiles — `src/sandbox_profiles.cyr`
