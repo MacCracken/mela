@@ -1,6 +1,6 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-06-17 (v0.3.0) · Live status: [`state.md`](state.md) · Per-version history:
+> **Last Updated**: 2026-06-17 (v0.4.0) · Live status: [`state.md`](state.md) · Per-version history:
 > [`../../CHANGELOG.md`](../../CHANGELOG.md)
 >
 > The path from the **v0.1.0 port scaffold** to a **v1.0 release**. mela is mid-port from Rust
@@ -31,6 +31,14 @@ Order is **foundation-up**: pure types → crypto gate → log → store → net
 ---
 
 ## Completed
+
+### v0.4.0 — Transparency log ✅ (2026-06-17)
+- **`transparency.rs` ported** → `src/transparency.cyr`: `LogEntry` (`compute_hash` /
+  `verify_self`) + `TransparencyLog` (`append` / `verify_chain` / `find` /
+  `entries_for_package` / `latest` / `len` / `is_empty`), SHA-256 hash-chained.
+- JSON codec re-verifies the chain on import (tampered entry rejected, invalid JSON rejected);
+  append + full-log verify pass; a mutated entry is detected. Import parser fuzzed.
+- No new dep (hashing reuses `sigil`); timestamp as `i64` epoch (ADR-0004). **147/147 tests** green.
 
 ### v0.3.0 — Trust gate ✅ (2026-06-17)
 - **`trust.rs` ported** → `src/trust.cyr` over **sigil** (`dist/sigil.cyr`): Ed25519

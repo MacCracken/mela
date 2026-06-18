@@ -7,6 +7,7 @@ include "src/category.cyr"
 include "src/manifest.cyr"
 include "src/depgraph.cyr"
 include "src/trust.cyr"
+include "src/transparency.cyr"
 
 # MarketplaceCategory — parity with rust-old/src/lib.rs (Display + FromStr).
 fn test_category() {
@@ -421,6 +422,119 @@ fn test_keyring() {
     return 0;
 }
 
+# append with a fixed timestamp (tests pin time for determinism — ADR-0004).
+fn tlog_add(log, pkg, ver, kid, ch, sh) {
+    return tlog_append(log, str_from(pkg), str_from(ver), str_from(kid),
+                       str_from(ch), str_from(sh), 1000);
+}
+
+# TransparencyLog core — parity with rust-old/src/transparency.rs.
+fn test_transparency() {
+    test_group("transparency");
+
+    # empty log
+    var e0 = tlog_new();
+    assert_eq(tlog_is_empty(e0),     1, "empty log is_empty");
+    assert_eq(tlog_len(e0),          0, "empty log len 0");
+    assert_eq(tlog_latest(e0),       0, "empty log no latest");
+    assert_eq(tlog_verify_chain(e0), 1, "empty log verifies");
+
+    # append single
+    var s1 = tlog_new();
+    var ent = tlog_add(s1, "acme/scanner", "1.0.0", "key123", "contenthash", "sighash");
+    assert_eq(log_seq(ent),                       0, "single seq 0");
+    assert_eq(str_len(log_previous_hash(ent)),    0, "single previous_hash empty");
+    assert_neq(str_len(log_entry_hash(ent)),      0, "single entry_hash set");
+    assert_eq(tlog_len(s1),                       1, "single len 1");
+    assert_eq(log_entry_verify_self(ent),         1, "single verify_self");
+
+    # deterministic hash
+    assert_eq(str_eq(log_entry_compute_hash(ent), log_entry_compute_hash(ent)), 1, "hash deterministic");
+
+    # append chain of 3, links + verify
+    var c = tlog_new();
+    tlog_add(c, "a/b", "1.0.0", "k1", "h1", "s1");
+    tlog_add(c, "a/b", "1.1.0", "k1", "h2", "s2");
+    tlog_add(c, "c/d", "0.1.0", "k2", "h3", "s3");
+    assert_eq(tlog_len(c),          3, "chain len 3");
+    assert_eq(tlog_verify_chain(c), 1, "chain verifies");
+    assert_eq(str_eq(log_previous_hash(vec_get(c, 1)), log_entry_hash(vec_get(c, 0))), 1, "entry1 links entry0");
+    assert_eq(str_eq(log_previous_hash(vec_get(c, 2)), log_entry_hash(vec_get(c, 1))), 1, "entry2 links entry1");
+
+    # tampered entry_hash -> chain invalid
+    var t1 = tlog_new();
+    tlog_add(t1, "a/b", "1.0.0", "k1", "h1", "s1");
+    tlog_add(t1, "a/b", "1.1.0", "k1", "h2", "s2");
+    log_set_entry_hash(vec_get(t1, 0), str_from("tampered"));
+    assert_eq(tlog_verify_chain(t1), 0, "tampered hash detected");
+
+    # broken chain link (previous_hash @ offset 56) -> invalid
+    var t2 = tlog_new();
+    tlog_add(t2, "a/b", "1.0.0", "k1", "h1", "s1");
+    tlog_add(t2, "a/b", "1.1.0", "k1", "h2", "s2");
+    store64(vec_get(t2, 1) + 56, str_from("wrong"));
+    assert_eq(tlog_verify_chain(t2), 0, "broken link detected");
+
+    # wrong sequence (sequence @ offset 0) -> invalid (self-hash breaks)
+    var t3 = tlog_new();
+    tlog_add(t3, "a/b", "1.0.0", "k1", "h1", "s1");
+    store64(vec_get(t3, 0), 5);
+    assert_eq(tlog_verify_chain(t3), 0, "wrong sequence detected");
+
+    # find
+    var f = tlog_new();
+    tlog_add(f, "a/b", "1.0.0", "k1", "h1", "s1");
+    tlog_add(f, "c/d", "2.0.0", "k2", "h2", "s2");
+    assert_neq(tlog_find(f, str_from("a/b"), str_from("1.0.0")), 0, "find a/b 1.0.0");
+    assert_neq(tlog_find(f, str_from("c/d"), str_from("2.0.0")), 0, "find c/d 2.0.0");
+    assert_eq(tlog_find(f, str_from("a/b"), str_from("9.9.9")),  0, "find missing version");
+    assert_eq(tlog_find(f, str_from("x/y"), str_from("1.0.0")),  0, "find missing package");
+
+    # entries_for_package
+    var g = tlog_new();
+    tlog_add(g, "a/b", "1.0.0", "k1", "h1", "s1");
+    tlog_add(g, "a/b", "1.1.0", "k1", "h2", "s2");
+    tlog_add(g, "c/d", "0.1.0", "k2", "h3", "s3");
+    assert_eq(vec_len(tlog_entries_for_package(g, str_from("a/b"))), 2, "a/b has 2 entries");
+    assert_eq(vec_len(tlog_entries_for_package(g, str_from("c/d"))), 1, "c/d has 1 entry");
+    assert_eq(vec_len(tlog_entries_for_package(g, str_from("x/y"))), 0, "x/y has 0 entries");
+
+    # latest
+    var l = tlog_new();
+    assert_eq(tlog_latest(l), 0, "latest empty is 0");
+    tlog_add(l, "a/b", "1.0.0", "k1", "h1", "s1");
+    assert_eq(str_eq_cstr(log_version(tlog_latest(l)), "1.0.0"), 1, "latest is 1.0.0");
+    tlog_add(l, "a/b", "2.0.0", "k1", "h2", "s2");
+    assert_eq(str_eq_cstr(log_version(tlog_latest(l)), "2.0.0"), 1, "latest is 2.0.0");
+    return 0;
+}
+
+# TransparencyLog JSON codec — parity with rust-old (roundtrip / tampered / invalid).
+fn test_transparency_json() {
+    test_group("transparency-json");
+
+    # roundtrip preserves entries + chain
+    var log = tlog_new();
+    tlog_add(log, "a/b", "1.0.0", "k1", "h1", "s1");
+    tlog_add(log, "c/d", "2.0.0", "k2", "h2", "s2");
+    var rec = tlog_from_json(tlog_to_json(log));
+    assert_neq(rec, 0, "json roundtrip parses");
+    assert_eq(tlog_len(rec),          2, "roundtrip len 2");
+    assert_eq(tlog_verify_chain(rec), 1, "roundtrip chain verifies");
+    assert_eq(str_eq_cstr(log_package(vec_get(rec, 1)), "c/d"), 1, "roundtrip entry1 package");
+
+    # tampered import rejected: corrupt content_hash in-place (entry_hash now
+    # stale), re-serialize, re-import -> verify_chain fails -> 0.
+    var bad = tlog_new();
+    tlog_add(bad, "a/b", "1.0.0", "k1", "h1", "s1");
+    store64(vec_get(bad, 0) + 40, str_from("tampered"));   # content_hash @ offset 40
+    assert_eq(tlog_from_json(tlog_to_json(bad)), 0, "tampered import rejected");
+
+    # invalid JSON rejected
+    assert_eq(tlog_from_json(str_from("not json")), 0, "invalid json rejected");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_category();
@@ -433,6 +547,8 @@ fn main() {
     test_trust();
     test_keyversion();
     test_keyring();
+    test_transparency();
+    test_transparency_json();
     return assert_summary();
 }
 

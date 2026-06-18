@@ -6,6 +6,29 @@ include benchmark numbers; breaking changes get a **Breaking** section with a mi
 
 ## [Unreleased]
 
+## [0.4.0] — Transparency log (`transparency.rs`)
+
+Every publication recorded in an append-only, hash-chained log: each entry is
+SHA-256 chained to the previous one, so a silent edit anywhere breaks the chain.
+Ports `rust-old/src/transparency.rs`. **147/147 parity tests** green (was 114).
+No new dependency — hashing reuses the v0.3.0 `sigil` integration.
+
+### Added
+- **`src/transparency.cyr` — `LogEntry` + `TransparencyLog`.** `compute_hash`
+  (SHA-256 over sequence‖timestamp‖package‖version‖key_id‖content_hash‖
+  signature_hash‖previous_hash) and `verify_self`; `tlog_append` (chains
+  `previous_hash`, stamps `sequence`, computes `entry_hash`), `tlog_verify_chain`
+  (self-hash + link + sequence checks), `find`, `entries_for_package`, `latest`,
+  `len`, `is_empty`.
+- **JSON codec** — `tlog_to_json` / `tlog_from_json` (array of entry objects);
+  `from_json` re-verifies the chain, so a tampered import is rejected. Parity
+  with the Rust serde round-trip + tamper/invalid tests.
+- **Fuzz** (`tests/mela.fcyr`) extended: `tlog_from_json` survives arbitrary
+  bytes (garbage → 0).
+- **ADR**: [0004](docs/adr/0004-transparency-timestamp-epoch.md) — `timestamp`
+  is an explicit `i64` epoch (not chrono), hashed as its decimal form and
+  serialized as a JSON int; the chain stays self-consistent and tamper-evident.
+
 ## [0.3.0] — Trust gate (`trust.rs`)
 
 The load-bearing invariant: nothing is trusted without a valid signature, and

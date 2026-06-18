@@ -1,0 +1,266 @@
+# transparency.cyr — append-only, hash-chained publication log.
+#
+# Ports rust-old/src/transparency.rs: each LogEntry is SHA-256 hash-chained to
+# the previous one, so a silent edit anywhere breaks the chain (cf. certificate
+# transparency / Go's sum database). Hashing is via sigil (reused through
+# trust_hash_data); the JSON codec rides bayan (ADR-0001).
+#
+# timestamp is an i64 epoch, not chrono DateTime — explicit at append() and
+# hashed/serialized as the epoch (ADR-0004), consistent with the trust gate
+# (ADR-0003). The Rust entry_hash preimage used timestamp.to_rfc3339(); the port
+# uses the epoch's decimal form. The chain is self-consistent (mela computes and
+# verifies both sides); there is no cross-language entry-hash vector to match.
+
+# ---------------------------------------------------------------------------
+# LogEntry
+# ---------------------------------------------------------------------------
+#
+# Layout (8-byte fields):
+#   0  sequence          (i64, 0-indexed)
+#   8  timestamp         (i64 epoch)
+#   16 package           (Str; publisher/name)
+#   24 version           (Str)
+#   32 publisher_key_id  (Str)
+#   40 content_hash      (Str; SHA-256 hex of package content)
+#   48 signature_hash    (Str; SHA-256 hex of the signature)
+#   56 previous_hash     (Str; "" for entry 0)
+#   64 entry_hash        (Str; SHA-256 hex over fields 0..56)
+
+fn log_entry_new(sequence, timestamp, package: Str, version: Str, key_id: Str,
+                 content_hash: Str, signature_hash: Str, previous_hash: Str,
+                 entry_hash: Str): i64 {
+    var e = alloc(72);
+    store64(e,      sequence);
+    store64(e + 8,  timestamp);
+    store64(e + 16, package);
+    store64(e + 24, version);
+    store64(e + 32, key_id);
+    store64(e + 40, content_hash);
+    store64(e + 48, signature_hash);
+    store64(e + 56, previous_hash);
+    store64(e + 64, entry_hash);
+    return e;
+}
+
+fn log_seq(e): i64               { return load64(e); }
+fn log_timestamp(e): i64         { return load64(e + 8); }
+fn log_package(e): Str           { return load64(e + 16); }
+fn log_version(e): Str           { return load64(e + 24); }
+fn log_key_id(e): Str            { return load64(e + 32); }
+fn log_content_hash(e): Str      { return load64(e + 40); }
+fn log_signature_hash(e): Str    { return load64(e + 48); }
+fn log_previous_hash(e): Str     { return load64(e + 56); }
+fn log_entry_hash(e): Str        { return load64(e + 64); }
+fn log_set_entry_hash(e, h: Str) { store64(e + 64, h); return 0; }
+
+# Write i64 `n` as 8 big-endian bytes to `out` (Rust: sequence.to_be_bytes()).
+fn _be64(n, out): i64 {
+    var i = 0;
+    while (i < 8) {
+        store8(out + i, (n >> ((7 - i) * 8)) & 0xFF);
+        i = i + 1;
+    }
+    return 0;
+}
+
+# memcpy `s`'s bytes into buf+off; return the new offset.
+fn _append_str(buf, off, s: Str): i64 {
+    memcpy(buf + off, str_data(s), str_len(s));
+    return off + str_len(s);
+}
+
+# compute_hash() — SHA-256 hex over sequence(BE8) || timestamp(decimal) ||
+# package || version || publisher_key_id || content_hash || signature_hash ||
+# previous_hash. Excludes entry_hash itself. Mirrors Rust `compute_hash` (with
+# the ADR-0004 timestamp representation).
+fn log_entry_compute_hash(e): Str {
+    var ts = str_from_int(log_timestamp(e));
+    var pkg = log_package(e);
+    var ver = log_version(e);
+    var kid = log_key_id(e);
+    var ch  = log_content_hash(e);
+    var sh  = log_signature_hash(e);
+    var ph  = log_previous_hash(e);
+
+    var total = 8 + str_len(ts) + str_len(pkg) + str_len(ver) + str_len(kid)
+              + str_len(ch) + str_len(sh) + str_len(ph);
+    var buf = alloc(total);
+    _be64(log_seq(e), buf);
+    var off = 8;
+    off = _append_str(buf, off, ts);
+    off = _append_str(buf, off, pkg);
+    off = _append_str(buf, off, ver);
+    off = _append_str(buf, off, kid);
+    off = _append_str(buf, off, ch);
+    off = _append_str(buf, off, sh);
+    off = _append_str(buf, off, ph);
+    return trust_hash_data(buf, total);
+}
+
+# verify_self() — entry_hash matches the recomputed hash. Mirrors Rust.
+fn log_entry_verify_self(e): i64 {
+    return str_eq(log_entry_hash(e), log_entry_compute_hash(e));
+}
+
+# ---------------------------------------------------------------------------
+# TransparencyLog — a Vec<LogEntry>
+# ---------------------------------------------------------------------------
+
+fn tlog_new(): i64 { return vec_new(); }
+
+# append() — add an entry: sequence = current len, previous_hash = last entry's
+# entry_hash (or ""), entry_hash = compute_hash. Returns the new entry. Takes an
+# explicit `timestamp` (Rust used Utc::now()) — ADR-0004. Mirrors Rust `append`.
+fn tlog_append(log, package: Str, version: Str, key_id: Str,
+               content_hash: Str, signature_hash: Str, timestamp): i64 {
+    var seq = vec_len(log);
+    var prev = str_from("");
+    if (seq > 0) { prev = log_entry_hash(vec_get(log, seq - 1)); }
+    var e = log_entry_new(seq, timestamp, package, version, key_id,
+                          content_hash, signature_hash, prev, str_from(""));
+    log_set_entry_hash(e, log_entry_compute_hash(e));
+    vec_push(log, e);
+    return e;
+}
+
+# verify_chain() — 1 if every entry self-verifies, links to its predecessor, and
+# carries the right sequence; 0 otherwise. Mirrors Rust `verify_chain` (Ok->1,
+# Err->0).
+fn tlog_verify_chain(log): i64 {
+    var n = vec_len(log);
+    var i = 0;
+    var ok = 1;
+    while (i < n) {
+        if (ok == 1) {
+            var e = vec_get(log, i);
+            if (log_entry_verify_self(e) == 0) { ok = 0; }
+            else {
+                if (i == 0) {
+                    if (str_len(log_previous_hash(e)) != 0) { ok = 0; }
+                } else {
+                    var prev = vec_get(log, i - 1);
+                    if (str_eq(log_previous_hash(e), log_entry_hash(prev)) == 0) { ok = 0; }
+                }
+                if (log_seq(e) != i) { ok = 0; }
+            }
+        }
+        i = i + 1;
+    }
+    return ok;
+}
+
+# find(package, version) — first matching entry, or 0. Mirrors Rust `find`.
+fn tlog_find(log, package: Str, version: Str): i64 {
+    var n = vec_len(log);
+    var i = 0;
+    var found = 0;
+    while (i < n) {
+        if (found == 0) {
+            var e = vec_get(log, i);
+            if (str_eq(log_package(e), package) == 1) {
+                if (str_eq(log_version(e), version) == 1) { found = e; }
+            }
+        }
+        i = i + 1;
+    }
+    return found;
+}
+
+# entries_for_package(package) — Vec of every entry for the package. Mirrors Rust.
+fn tlog_entries_for_package(log, package: Str): i64 {
+    var out = vec_new();
+    var n = vec_len(log);
+    var i = 0;
+    while (i < n) {
+        var e = vec_get(log, i);
+        if (str_eq(log_package(e), package) == 1) { vec_push(out, e); }
+        i = i + 1;
+    }
+    return out;
+}
+
+# latest() — last entry, or 0. Mirrors Rust `latest`.
+fn tlog_latest(log): i64 {
+    var n = vec_len(log);
+    if (n == 0) { return 0; }
+    return vec_get(log, n - 1);
+}
+
+fn tlog_len(log): i64      { return vec_len(log); }
+fn tlog_is_empty(log): i64 { if (vec_len(log) == 0) { return 1; } return 0; }
+
+# ---------------------------------------------------------------------------
+# JSON codec (wire format per ADR-0001; timestamp as int epoch per ADR-0004)
+# ---------------------------------------------------------------------------
+
+# String value of object field `key`, or "" if absent / not a string.
+fn _log_jstr(obj, key): Str {
+    var v = json_v_obj_get(obj, key);
+    if (v == 0) { return str_from(""); }
+    if (json_v_is_str(v) == 0) { return str_from(""); }
+    return json_v_str(v);
+}
+
+# Integer value of object field `key`, or 0 if absent / not an integer.
+fn _log_jint(obj, key): i64 {
+    var v = json_v_obj_get(obj, key);
+    if (v == 0) { return 0; }
+    if (json_v_is_int(v) == 0) { return 0; }
+    return json_v_int(v);
+}
+
+fn _log_entry_to_jv(e): i64 {
+    var o = json_v_obj_new();
+    json_v_obj_set(o, str_from("sequence"),         json_v_int_new(log_seq(e)));
+    json_v_obj_set(o, str_from("timestamp"),        json_v_int_new(log_timestamp(e)));
+    json_v_obj_set(o, str_from("package"),          json_v_str_new(log_package(e)));
+    json_v_obj_set(o, str_from("version"),          json_v_str_new(log_version(e)));
+    json_v_obj_set(o, str_from("publisher_key_id"), json_v_str_new(log_key_id(e)));
+    json_v_obj_set(o, str_from("content_hash"),     json_v_str_new(log_content_hash(e)));
+    json_v_obj_set(o, str_from("signature_hash"),   json_v_str_new(log_signature_hash(e)));
+    json_v_obj_set(o, str_from("previous_hash"),    json_v_str_new(log_previous_hash(e)));
+    json_v_obj_set(o, str_from("entry_hash"),       json_v_str_new(log_entry_hash(e)));
+    return o;
+}
+
+# to_json() — the log as a JSON array of entry objects. Mirrors Rust `to_json`.
+fn tlog_to_json(log): Str {
+    var arr = json_v_arr_new();
+    var n = vec_len(log);
+    var i = 0;
+    while (i < n) {
+        json_v_arr_push(arr, _log_entry_to_jv(vec_get(log, i)));
+        i = i + 1;
+    }
+    return json_v_build(arr);
+}
+
+# from_json() — rebuild a log from JSON, then verify the chain. Returns 0 on a
+# JSON parse error, a non-array root, OR a chain that fails verification (a
+# tampered entry, like the Rust `from_json` which calls verify_chain). Mirrors
+# Rust `from_json`.
+fn tlog_from_json(json: Str): i64 {
+    var root = json_v_parse_str(str_data(json), str_len(json));   # explicit buf+len (see trust.cyr)
+    if (root == 0) { return 0; }
+    if (json_v_is_arr(root) == 0) { return 0; }
+    var log = tlog_new();
+    var n = json_v_arr_len(root);
+    var i = 0;
+    while (i < n) {
+        var o = json_v_arr_get(root, i);
+        var e = log_entry_new(
+            _log_jint(o, "sequence"),
+            _log_jint(o, "timestamp"),
+            _log_jstr(o, "package"),
+            _log_jstr(o, "version"),
+            _log_jstr(o, "publisher_key_id"),
+            _log_jstr(o, "content_hash"),
+            _log_jstr(o, "signature_hash"),
+            _log_jstr(o, "previous_hash"),
+            _log_jstr(o, "entry_hash"));
+        vec_push(log, e);
+        i = i + 1;
+    }
+    if (tlog_verify_chain(log) == 0) { return 0; }
+    return log;
+}

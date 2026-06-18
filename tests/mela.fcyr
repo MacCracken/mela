@@ -8,6 +8,7 @@
 include "src/category.cyr"
 include "src/manifest.cyr"
 include "src/trust.cyr"
+include "src/transparency.cyr"
 
 fn fuzz_main(data, len) {
     if (len == 0) { return 0; }
@@ -20,6 +21,9 @@ fn fuzz_main(data, len) {
     # trust parsers (v0.3.0): hex decode + key-from-hex on arbitrary input
     trust_hex_decode(s);
     kv_verifying_key(kv_new(str_from("k"), 0, 0, 0, s));
+
+    # transparency log import (v0.4.0): arbitrary bytes -> 0, never a crash
+    tlog_from_json(s);
 
     # verify with arbitrary bytes as the public key + a signature derived from
     # the input — must reject (0), never fault.

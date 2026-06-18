@@ -28,3 +28,6 @@ Decisions about mela — what we chose, the context, and the consequences we acc
 - [0003 — Trust: epoch-i64 time, explicit `now`, deferred keyring load](0003-trust-time-and-deferred-keyring-load.md) —
   *Accepted* · key validity windows use `i64` epochs (not chrono); `get_current_key` takes an
   explicit `now` for deterministic trust; the disk `load()` defers to the fs milestone.
+- [0004 — Transparency log timestamp is an i64 epoch](0004-transparency-timestamp-epoch.md) —
+  *Accepted* · `LogEntry.timestamp` is an explicit `i64` epoch (not chrono), hashed as its
+  decimal form and serialized as a JSON int; the chain stays self-consistent + tamper-evident.
