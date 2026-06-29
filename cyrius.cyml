@@ -63,7 +63,7 @@ modules = ["dist/agnostik.cyr"]
 [deps.sigil]
 git = "https://github.com/MacCracken/sigil.git"
 path = "../sigil"
-tag = "3.8.0"
+tag = "3.9.7"
 modules = ["dist/sigil.cyr"]
 
 # sankoch — the Cyrius compression crate (gzip/deflate/lz4); replaces Rust
@@ -73,7 +73,7 @@ modules = ["dist/sigil.cyr"]
 [deps.sankoch]
 git = "https://github.com/MacCracken/sankoch.git"
 path = "../sankoch"
-tag = "2.4.3"
+tag = "2.4.6"
 modules = ["dist/sankoch.cyr"]
 
 # sandhi — the Cyrius HTTP client (HTTP/1.1 + H2, TLS, and a real DNS resolver).
@@ -82,5 +82,5 @@ modules = ["dist/sankoch.cyr"]
 [deps.sandhi]
 git = "https://github.com/MacCracken/sandhi.git"
 path = "../sandhi"
-tag = "1.6.7"
+tag = "1.7.0"
 modules = ["dist/sandhi.cyr"]

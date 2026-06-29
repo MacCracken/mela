@@ -11,14 +11,14 @@ a package manager's convenience with a supply-chain auditor's guarantees.
   Cyrius port under `src/`)
 - **License**: GPL-3.0-only
 - **Genesis repo**: [agnosticos](https://github.com/MacCracken/agnosticos)
-- **Status**: pre-1.0 (**v0.9.x**) — binary **and** library (`dist/mela.cyr`) — see [`docs/development/state.md`](docs/development/state.md)
+- **Status**: **v1.0.0** (released) — binary **and** library (`dist/mela.cyr`) — see [`docs/development/state.md`](docs/development/state.md)
 
-> **Port complete; hardening for 1.0.** All 9 Rust modules are ported to Cyrius (the 6208-line
+> **v1.0 — released.** All 9 Rust modules are ported to Cyrius (the 6208-line
 > Rust implementation stays frozen at [`rust-old/`](rust-old/) as the **parity oracle**, retired
 > after v1.0). The end-to-end publish→verify→install flow is wired with **both trust gates
 > enforced**, a pre-release [security audit](docs/audit/) + [threat model](docs/development/threat-model.md)
 > are in place, and the public API is frozen ([`docs/api/`](docs/api/)). The trust properties below
-> are **shipped and tested** (472 parity tests), not aspirations.
+> are **shipped and tested** (492 parity tests), not aspirations.
 > [`docs/development/state.md`](docs/development/state.md) tracks live status.
 
 ## Why Mela
@@ -54,7 +54,7 @@ Cyrius under `src/`:
 | `flutter_packaging` / `flutter_agpkg` | Flutter app → `.agnos-agent` build + gzip/ustar archive | ✅ `src/flutter_{packaging,agpkg}.cyr` (sankoch) |
 | *(wiring)* `pipeline` | End-to-end publish→sign→log→verify→install, both gates enforced | ✅ `src/pipeline.cyr` |
 
-All 9 Rust modules ported; **472 parity tests** green, every external-data parser fuzzed. See
+All 9 Rust modules ported; **492 parity tests** green, every external-data parser fuzzed. See
 [`docs/api/`](docs/api/) for the frozen public surface and
 [`docs/benchmarks-rust-v-cyrius.md`](docs/benchmarks-rust-v-cyrius.md) for hot-path numbers.
 

@@ -6,6 +6,18 @@ include benchmark numbers; breaking changes get a **Breaking** section with a mi
 
 ## [Unreleased]
 
+## [1.0.1] — Transitive dependency refresh for cyrius 6.3.5 consumers
+
+### Changed
+
+- **Bumped transitive pins** so downstream consumers resolve cleanly against the
+  cyrius 6.3.5 toolchain: **sigil `3.8.0` → `3.9.7`** (provides `sha384_init_into`,
+  which the 6.3.5 stdlib TLS now requires, and drops the external **agnosys**
+  dependency via the agnosys→agnodrm decomposition — sigil internalized the trust
+  primitives it needs), **sandhi `1.6.7` → `1.7.0`**, **sankoch `2.4.3` → `2.4.6`**.
+  No mela API or behavior change; mela's bundle is unchanged and already builds
+  green against sigil 3.9.x.
+
 ## [1.0.0] — Marketplace trust boundary, released
 
 The port from Rust to Cyrius is complete and **a downstream consumer is green

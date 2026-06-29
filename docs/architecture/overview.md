@@ -1,7 +1,7 @@
 # Mela — Architecture Overview
 
-> **Last Updated**: 2026-06-17 (v0.9.1) · **Maturity**: port complete (all 9 modules in Cyrius;
-> end-to-end flow wired with both trust gates enforced; pre-1.0 hardening — see
+> **Last Updated**: 2026-06-18 (v1.0.0) · **Maturity**: **v1.0 — released** (all 9 modules in Cyrius;
+> end-to-end flow wired with both trust gates enforced; security audit + frozen API — see
 > [`../development/state.md`](../development/state.md)).
 
 Mela is the marketplace layer for AGNOS: discovery, distribution, and trust verification for
