@@ -295,9 +295,12 @@ fn publisher_to_json(p): Str {
 }
 
 fn publisher_from_json(json: Str): i64 {
-    # json_v_parse_str (explicit buf+len) — the Str-arg wrapper mis-marshals
+    # json_v_parse_buf (explicit buf+len) — the Str-arg wrapper mis-marshals
     # the fat pointer through its untyped param (reads len 0 -> spurious EOF).
-    var root = json_v_parse_str(str_data(json), str_len(json));
+    # ⚠ Renamed from `json_v_parse_str` in bayan's own 6.6 value-form migration
+    # (bayan 97bdc73): the buf+len variant is `_buf`, not `_str`. mela sat four
+    # minors behind, so the call had gone stale and the test would not compile.
+    var root = json_v_parse_buf(str_data(json), str_len(json));
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
     return publisher_new(_man_jstr(root, "name"), _man_jstr(root, "key_id"),
@@ -392,7 +395,7 @@ fn mela_manifest_to_json(m): Str {
 }
 
 fn manifest_from_json(json: Str): i64 {
-    var root = json_v_parse_str(str_data(json), str_len(json));   # see publisher_from_json
+    var root = json_v_parse_buf(str_data(json), str_len(json));   # see publisher_from_json
     if (root == 0) { return 0; }
     return manifest_from_jv(root);
 }

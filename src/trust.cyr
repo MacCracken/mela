@@ -227,7 +227,7 @@ fn kv_from_jv(o): i64 {
 }
 fn kv_to_json(kv): Str { return json_v_build(kv_to_jv(kv)); }
 fn kv_from_json(json: Str): i64 {
-    var root = json_v_parse_str(str_data(json), str_len(json));
+    var root = json_v_parse_buf(str_data(json), str_len(json));
     if (root == 0) { return 0; }
     return kv_from_jv(root);
 }
@@ -255,7 +255,7 @@ fn keyring_load_dir(kr, dir: Str): i64 {
             var buf = alloc(KEYRING_MAXLEN);
             var rn = file_read_all(str_data(full), buf, KEYRING_MAXLEN);
             if (rn > 0) {
-                var root = json_v_parse_str(buf, rn);
+                var root = json_v_parse_buf(buf, rn);
                 if (root != 0) {
                     if (json_v_is_arr(root) == 1) {
                         var an = json_v_arr_len(root);

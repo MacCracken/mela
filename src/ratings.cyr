@@ -325,7 +325,7 @@ fn _rating_from_jv(o): i64 {
 
 fn rating_to_json(r): Str { return json_v_build(_rating_to_jv(r)); }
 fn rating_from_json(json: Str): i64 {
-    var root = json_v_parse_str(str_data(json), str_len(json));
+    var root = json_v_parse_buf(str_data(json), str_len(json));
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
     return _rating_from_jv(root);
@@ -354,7 +354,7 @@ fn stats_to_json(s): Str {
 }
 
 fn stats_from_json(json: Str): i64 {
-    var root = json_v_parse_str(str_data(json), str_len(json));
+    var root = json_v_parse_buf(str_data(json), str_len(json));
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
     var dist = _dist_new();
@@ -419,7 +419,7 @@ fn rstore_to_json(store): Str {
 }
 
 fn rstore_from_json(json: Str): i64 {
-    var root = json_v_parse_str(str_data(json), str_len(json));
+    var root = json_v_parse_buf(str_data(json), str_len(json));
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
     var store = rstore_new();

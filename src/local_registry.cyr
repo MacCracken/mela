@@ -125,7 +125,7 @@ fn registry_index_to_json(index): Str {
 # Parse a JSON index object string into `index`. Returns 1 on success, 0 on a
 # parse error / non-object root (entries that fail to rebuild are skipped).
 fn registry_index_from_json_into(js: Str, index): i64 {
-    var root = json_v_parse_str(str_data(js), str_len(js));   # explicit buf+len (see trust.cyr)
+    var root = json_v_parse_buf(str_data(js), str_len(js));   # explicit buf+len (see trust.cyr)
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
     var n = json_v_obj_len(root);

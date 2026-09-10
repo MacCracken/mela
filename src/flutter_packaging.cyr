@@ -227,7 +227,17 @@ fn build_env_vars(c): i64 {
     # scale_factor formatted as a float string (matches Rust f64 to_string for the tested values)
     var scbuf[32];
     var sclen = fmt_float_buf(launch_scale_factor(c), &scbuf, 2);
-    map_set(env, str_from("FLUTTER_FORCE_SCALE_FACTOR"), _trim_trailing_zeros(str_new(&scbuf, sclen)));
+    # ⛔ str_clone IS LOAD-BEARING — a USE-AFTER-RETURN without it.
+    # `str_new(data, len)` ALIASES: it stores the pointer, it does not copy (lib/str.cyr:51).
+    # `scbuf` is a stack local of THIS function, so the Str handed to the map pointed into a
+    # frame that dies on return, and `_trim_trailing_zeros` does not help — `str_sub` also
+    # shares data with its parent (lib/str.cyr:199, "shares data with parent").
+    # It "worked" for years by luck: the dead frame happened not to be overwritten before the
+    # map was read. Surfaced by the 6.2.21 -> 6.6.2 bump, which changed the stack layout —
+    # measured `str_len` = 4 (correct) with the bytes read back as four SPACES.
+    # str_clone copies into heap memory, which outlives the frame.
+    map_set(env, str_from("FLUTTER_FORCE_SCALE_FACTOR"),
+            _trim_trailing_zeros(str_clone(str_new(&scbuf, sclen))));
     if (launch_accessibility(c) == 1) {
         map_set(env, str_from("FLUTTER_ACCESSIBILITY"), str_from("true"));
     }

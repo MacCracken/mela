@@ -4,6 +4,39 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
+## [1.0.2] - 2026-09-10
+
+**cyrius 6.2.21 → 6.6.2**, plus two real defects the bump surfaced. 492 assertions, 0 failures.
+
+### Fixed — ⛔ use-after-return in `build_env_vars` (latent for years, surfaced by the bump)
+
+`FLUTTER_FORCE_SCALE_FACTOR` was built with `str_new(&scbuf, sclen)` where `scbuf` is a **stack
+local** of `build_env_vars`. `str_new` **aliases** — it stores the pointer and does not copy
+(`lib/str.cyr:51`) — so the `Str` handed to the env map pointed into a frame that dies on return.
+`_trim_trailing_zeros` did not help: `str_sub` also *"shares data with parent"* (`lib/str.cyr:199`).
+
+It had "worked" by luck — the dead frame simply had not been overwritten before the map was read.
+The 6.2.21 → 6.6.2 bump changed the stack layout and it stopped working: measured `str_len` = 4
+(correct) with the four bytes reading back as **spaces**. Now `str_clone`d into heap memory, which
+outlives the frame. ⚠ The `str_clone` is load-bearing and commented as such so it is not tidied away.
+
+⭐ Swept for the shape rather than the site: this is the only `str_new(&local, …)` in `src/`.
+
+### Fixed — stale bayan API: `json_v_parse_str` → `json_v_parse_buf` (13 sites, 7 files)
+
+bayan renamed its explicit buf+len JSON entry point `_str` → `_buf` during **its own** 6.6
+value-form migration (bayan `97bdc73`). mela sat four minors behind, so every call had gone stale
+and the test suite would not compile. `flutter_agpkg` 2, `local_registry` 1, `manifest` 2,
+`ratings` 3, `remote_client` 3, `sandbox_profiles` 1, `transparency` 1, `trust` 2.
+
+### Changed — cyrius pin **6.2.21 → 6.6.2**, agnostik bundle refreshed to **1.6.0**
+
+No first-party `payload()`/`tagged_new()`/`tag()` sites, so the value-form flip required no source
+change here. `lib/agnostik.cyr` refreshed 120,192 B → 160,515 B (it was from 2026-06-18, ~40 KB
+behind) and now carries agnostik 1.6.0's `boxed_*` reads.
+
+`dist/mela.cyr` regenerated (4,133 lines).
+
 ## [Unreleased]
 
 ## [1.0.1] — Transitive dependency refresh for cyrius 6.3.5 consumers

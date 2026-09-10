@@ -237,7 +237,7 @@ fn sresults_to_json(p): Str {
 
 # Parse a SearchResults JSON document, or 0 on a parse error / non-object root.
 fn sresults_from_json(json: Str): i64 {
-    var root = json_v_parse_str(str_data(json), str_len(json));   # explicit buf+len (see trust.cyr)
+    var root = json_v_parse_buf(str_data(json), str_len(json));   # explicit buf+len (see trust.cyr)
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
     var pkgs = vec_new();
@@ -278,7 +278,7 @@ fn presp_to_json(p): Str {
     return json_v_build(o);
 }
 fn presp_from_json(json: Str): i64 {
-    var root = json_v_parse_str(str_data(json), str_len(json));
+    var root = json_v_parse_buf(str_data(json), str_len(json));
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
     return presp_new(_rc_jstr(root, "name"), _rc_jstr(root, "version"),
@@ -308,7 +308,7 @@ fn mela_update_to_json(p): Str {
     return json_v_build(o);
 }
 fn update_from_json(json: Str): i64 {
-    var root = json_v_parse_str(str_data(json), str_len(json));
+    var root = json_v_parse_buf(str_data(json), str_len(json));
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
     return update_new(_rc_jstr(root, "name"), _rc_jstr(root, "installed_version"),

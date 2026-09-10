@@ -240,7 +240,7 @@ fn tlog_to_json(log): Str {
 # tampered entry, like the Rust `from_json` which calls verify_chain). Mirrors
 # Rust `from_json`.
 fn tlog_from_json(json: Str): i64 {
-    var root = json_v_parse_str(str_data(json), str_len(json));   # explicit buf+len (see trust.cyr)
+    var root = json_v_parse_buf(str_data(json), str_len(json));   # explicit buf+len (see trust.cyr)
     if (root == 0) { return 0; }
     if (json_v_is_arr(root) == 0) { return 0; }
     var log = tlog_new();

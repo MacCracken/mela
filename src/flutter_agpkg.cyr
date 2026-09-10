@@ -53,7 +53,7 @@ fn _ag_jbool(o, key): i64 {
 # config_from_json — category defaults to DesktopApp; network_access false;
 # data_dir none (serde defaults). Mirrors Rust `PackFlutterConfig` deserialize.
 fn pfconfig_from_json(json: Str): i64 {
-    var root = json_v_parse_str(str_data(json), str_len(json));
+    var root = json_v_parse_buf(str_data(json), str_len(json));
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
 
@@ -284,7 +284,7 @@ fn sbprofile_to_json(s): Str {
 }
 
 fn sbprofile_from_json(json: Str): i64 {
-    var root = json_v_parse_str(str_data(json), str_len(json));
+    var root = json_v_parse_buf(str_data(json), str_len(json));
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
     var rules = vec_new();
