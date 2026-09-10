@@ -54,7 +54,7 @@ stdlib = [
 [deps.agnostik]
 git = "https://github.com/MacCracken/agnostik.git"
 path = "../agnostik"
-tag = "1.3.1"
+tag = "1.6.0"
 modules = ["dist/agnostik.cyr"]
 
 # sigil — the Cyrius crypto crate; supplies Ed25519 (ed25519_keypair / _sign /
@@ -63,7 +63,7 @@ modules = ["dist/agnostik.cyr"]
 [deps.sigil]
 git = "https://github.com/MacCracken/sigil.git"
 path = "../sigil"
-tag = "3.9.7"
+tag = "3.12.16"
 modules = ["dist/sigil.cyr"]
 
 # sankoch — the Cyrius compression crate (gzip/deflate/lz4); replaces Rust
@@ -73,7 +73,7 @@ modules = ["dist/sigil.cyr"]
 [deps.sankoch]
 git = "https://github.com/MacCracken/sankoch.git"
 path = "../sankoch"
-tag = "2.4.6"
+tag = "2.7.14"
 modules = ["dist/sankoch.cyr"]
 
 # sandhi — the Cyrius HTTP client (HTTP/1.1 + H2, TLS, and a real DNS resolver).
@@ -82,5 +82,5 @@ modules = ["dist/sankoch.cyr"]
 [deps.sandhi]
 git = "https://github.com/MacCracken/sandhi.git"
 path = "../sandhi"
-tag = "1.7.0"
+tag = "1.9.16"
 modules = ["dist/sandhi.cyr"]
