@@ -4,6 +4,55 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
+## [1.0.3] - 2026-09-10
+
+**Every lib and dep brought current.** `cyrius build` OK (2,746,728 B), tests pass.
+
+### Fixed — CI could not build: package dep tags were years stale
+
+`[deps.*]` entries carry both `path` and `git`+`tag`. Locally the `path` wins, so builds resolved
+the sibling working copies and passed; **CI has no `../` siblings, so it cloned the pinned tags**
+and got pre-value-form sources — `lib/agnostik.cyr` was overwritten with the 1.3.1 artifact and
+`lib/sandhi.cyr` with 1.7.0, producing a wall of `a ': stack' enum returns two values` errors.
+Local success was an artifact of the `path` override.
+
+| dep | was | now |
+|---|---|---|
+| agnostik | 1.3.1 | **1.6.0** |
+| sigil | 3.9.7 | **3.12.16** |
+| sankoch | 2.4.6 | **2.7.14** |
+| sandhi | 1.7.0 | **1.9.16** |
+
+Each verified against `git ls-remote` before bumping — all four exist and are pushed, so CI can
+actually fetch them. agnostik, sandhi and sankoch now resolve byte-identical to their upstream
+`dist/`.
+
+### Changed — vendored stdlib re-synced to the 6.6.2 snapshot
+
+`cyrius lib sync --full`. Six bundles were shadowing the pinned stdlib with stale copies —
+ganita 1.0.1 → 1.2.4, niyama 1.0.5 → 1.0.10, yukti 2.2.6 → 2.3.10, patra 1.11.4 → 1.14.1,
+vani 0.9.5 → 1.2.4, mabda 3.2.7 → 4.1.1. Every stdlib leaf in `lib/` is now byte-identical to
+`~/.cyrius/versions/6.6.2/lib`.
+
+### Removed — `lib/agnosys.cyr` (orphan)
+
+Dated 2026-06-18, carrying **32 calls to the deleted `payload()`/`tag()`**. It is not in cyrius's
+stdlib at all any more, nothing in mela includes it, and ⚠ `lib sync` copies but never deletes —
+so it would have sat there indefinitely. `lib/` now has zero retired-name calls.
+
+### CI — `install.sh` instead of a hand-rolled tarball extract
+
+Both workflows now read the `cyrius.cyml` pin and pipe it to the upstream installer, matching
+patra. The old step copied `bin/`+`lib/` into a **flat** `~/.cyrius`, with no `versions/<v>/`
+layout and no `current` — and since 6.5.37 the pin redirect looks for
+`~/.cyrius/versions/<pin>/bin/cyrius`, so CI died before compiling. Also added `set -e`: every
+copy in the old step ended in `|| true`, so a failed install reported success.
+
+### Fixed — 11 files were not canonically formatted
+
+Pre-existing drift: cyrfmt only began tracking paren depth at v6.5.28 and mela was pinned 6.2.21,
+so these had never been checked. Whitespace only — `git diff -w` empty, build byte-identical.
+
 ## [1.0.2] - 2026-09-10
 
 **cyrius 6.2.21 → 6.6.2**, plus two real defects the bump surfaced. 492 assertions, 0 failures.

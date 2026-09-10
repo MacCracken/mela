@@ -20,18 +20,23 @@
 # then next group.
 
 include "lib/fnptr.cyr"
+include "lib/hashseed.cyr"   # v6.5.39: shared seed — do NOT re-copy the hash here
 
 # FNV-1a hash for null-terminated string (same as hashmap.cyr)
+# v6.5.39: seeded + finalized, like its twin. ⚠ This was a VERBATIM second copy of the
+# unseeded hash and the flooding filing did not mention it at all — measured, it floods too
+# (N=4096: 22.4 ms colliding vs 1.16 ms distinct). Both copies now draw from lib/hashseed.cyr
+# rather than each carrying their own constant, so they cannot drift apart again.
 fn _fhm_hash(s): i64 {
     if (s == 0) { return 0; }
-    var h = 0xCBF29CE484222325;
+    var h = 0xCBF29CE484222325 ^ _hm_seed_get();
     var hi = 0;
     while (load8(s + hi) != 0) {
         h = h ^ load8(s + hi);
         h = h * 0x100000001B3;
         hi = hi + 1;
     }
-    return h;
+    return _hm_mix(h);
 }
 
 var _FHM_EMPTY = 0;
@@ -66,10 +71,9 @@ fn fhm_count(m): i64 { return load64(m + 32); }
 # Returns bitmask (each bit = 1 if meta byte matches h2).
 fn _fhm_probe16(meta, offset, h2): i64 {
     var result = 0;
-    # Load 16 metadata bytes into xmm0
-    # Broadcast h2 into xmm1
-    # pcmpeqb xmm0, xmm1
-    # pmovmskb eax, xmm0
+    #ifdef CYRIUS_ARCH_X86
+    # SSE2 fast path: load 16 metadata bytes into xmm0, broadcast h2
+    # into xmm1, pcmpeqb, pmovmskb → bitmask of matching slots.
     asm {
         # movdqu xmm0, [rdi]  — rdi = meta + offset (1st arg)
         # We need meta+offset in a register. It's param 0 + param 1.
@@ -98,6 +102,16 @@ fn _fhm_probe16(meta, offset, h2): i64 {
         # mov [rbp-32], rax    ; result
         0x48; 0x89; 0x45; 0xE0;
     }
+    #endif
+    #ifndef CYRIUS_ARCH_X86
+    # Portable scalar fallback: bit i set iff meta[offset+i] == h2.
+    # Identical bitmask semantics to the SSE2 pcmpeqb/pmovmskb path.
+    var i = 0;
+    while (i < 16) {
+        if (load8(meta + offset + i) == h2) { result = result | (1 << i); }
+        i = i + 1;
+    }
+    #endif
     return result;
 }
 
