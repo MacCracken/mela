@@ -27,8 +27,8 @@
 #   64 entry_hash        (Str; SHA-256 hex over fields 0..56)
 
 fn log_entry_new(sequence, timestamp, package: Str, version: Str, key_id: Str,
-                 content_hash: Str, signature_hash: Str, previous_hash: Str,
-                 entry_hash: Str): i64 {
+  content_hash: Str, signature_hash: Str, previous_hash: Str,
+  entry_hash: Str): i64 {
     var e = alloc(72);
     store64(e,      sequence);
     store64(e + 8,  timestamp);
@@ -83,7 +83,7 @@ fn log_entry_compute_hash(e): Str {
     var ph  = log_previous_hash(e);
 
     var total = 8 + str_len(ts) + str_len(pkg) + str_len(ver) + str_len(kid)
-              + str_len(ch) + str_len(sh) + str_len(ph);
+    + str_len(ch) + str_len(sh) + str_len(ph);
     var buf = alloc(total);
     _be64(log_seq(e), buf);
     var off = 8;
@@ -112,12 +112,12 @@ fn tlog_new(): i64 { return vec_new(); }
 # entry_hash (or ""), entry_hash = compute_hash. Returns the new entry. Takes an
 # explicit `timestamp` (Rust used Utc::now()) — ADR-0004. Mirrors Rust `append`.
 fn tlog_append(log, package: Str, version: Str, key_id: Str,
-               content_hash: Str, signature_hash: Str, timestamp): i64 {
+  content_hash: Str, signature_hash: Str, timestamp): i64 {
     var seq = vec_len(log);
     var prev = str_from("");
     if (seq > 0) { prev = log_entry_hash(vec_get(log, seq - 1)); }
     var e = log_entry_new(seq, timestamp, package, version, key_id,
-                          content_hash, signature_hash, prev, str_from(""));
+      content_hash, signature_hash, prev, str_from(""));
     log_set_entry_hash(e, log_entry_compute_hash(e));
     vec_push(log, e);
     return e;
@@ -249,15 +249,15 @@ fn tlog_from_json(json: Str): i64 {
     while (i < n) {
         var o = json_v_arr_get(root, i);
         var e = log_entry_new(
-            _log_jint(o, "sequence"),
-            _log_jint(o, "timestamp"),
-            _log_jstr(o, "package"),
-            _log_jstr(o, "version"),
-            _log_jstr(o, "publisher_key_id"),
-            _log_jstr(o, "content_hash"),
-            _log_jstr(o, "signature_hash"),
-            _log_jstr(o, "previous_hash"),
-            _log_jstr(o, "entry_hash"));
+          _log_jint(o, "sequence"),
+          _log_jint(o, "timestamp"),
+          _log_jstr(o, "package"),
+          _log_jstr(o, "version"),
+          _log_jstr(o, "publisher_key_id"),
+          _log_jstr(o, "content_hash"),
+          _log_jstr(o, "signature_hash"),
+          _log_jstr(o, "previous_hash"),
+          _log_jstr(o, "entry_hash"));
         vec_push(log, e);
         i = i + 1;
     }

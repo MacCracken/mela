@@ -70,13 +70,13 @@ fn main() {
     # Smoke inputs (the fuzzer replaces these with mutations): valid, partial,
     # garbage, plus crypto-shaped blobs — all have to be survived.
     fuzz_main("{\"name\":\"x\",\"version\":\"1.0.0\",\"category\":\"Utility\"}",
-              strlen("{\"name\":\"x\",\"version\":\"1.0.0\",\"category\":\"Utility\"}"));
+      strlen("{\"name\":\"x\",\"version\":\"1.0.0\",\"category\":\"Utility\"}"));
     fuzz_main("{", strlen("{"));
     fuzz_main("not json at all", strlen("not json at all"));
     fuzz_main("[]", strlen("[]"));
     fuzz_main("deadbeefnothex!!", strlen("deadbeefnothex!!"));
     fuzz_main("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-              strlen("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"));
+      strlen("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"));
     println("fuzz: ok");
     return 0;
 }

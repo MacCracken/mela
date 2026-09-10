@@ -409,5 +409,5 @@ fn profile_from_json(json: Str): i64 {
         }
     }
     return profile_new(preset, rules, _sp_jstr(root, "seccomp_mode"), nr_new(enabled, hosts),
-                       _sp_jint(root, "max_memory_mb"), _sp_jbool(root, "allow_process_spawn"));
+      _sp_jint(root, "max_memory_mb"), _sp_jbool(root, "allow_process_spawn"));
 }

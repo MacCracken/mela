@@ -171,7 +171,7 @@ fn _rc_jbool(o, key): i64 {
 
 # --- SearchResult { qualified_name, latest_version, description, downloads, category, publisher }
 fn sresult_new(qualified_name: Str, latest_version: Str, description: Str,
-               downloads, category: Str, publisher: Str): i64 {
+  downloads, category: Str, publisher: Str): i64 {
     var p = alloc(48);
     store64(p,      qualified_name);
     store64(p + 8,  latest_version);
@@ -200,8 +200,8 @@ fn _sresult_to_jv(p): i64 {
 }
 fn _sresult_from_jv(o): i64 {
     return sresult_new(_rc_jstr(o, "qualified_name"), _rc_jstr(o, "latest_version"),
-                       _rc_jstr(o, "description"), _rc_jint(o, "downloads"),
-                       _rc_jstr(o, "category"), _rc_jstr(o, "publisher"));
+      _rc_jstr(o, "description"), _rc_jint(o, "downloads"),
+      _rc_jstr(o, "category"), _rc_jstr(o, "publisher"));
 }
 
 # --- SearchResults { packages: [SearchResult], total, page, per_page }
@@ -252,7 +252,7 @@ fn sresults_from_json(json: Str): i64 {
         }
     }
     return sresults_new(pkgs, _rc_jint(root, "total"), _rc_jint(root, "page"),
-                        _rc_jint(root, "per_page"));
+      _rc_jint(root, "per_page"));
 }
 
 # --- PublishResponse { name, version, download_url, replaced }
@@ -282,7 +282,7 @@ fn presp_from_json(json: Str): i64 {
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
     return presp_new(_rc_jstr(root, "name"), _rc_jstr(root, "version"),
-                     _rc_jstr(root, "download_url"), _rc_jbool(root, "replaced"));
+      _rc_jstr(root, "download_url"), _rc_jbool(root, "replaced"));
 }
 
 # --- UpdateAvailable { name, installed_version, available_version, changelog }
@@ -312,7 +312,7 @@ fn update_from_json(json: Str): i64 {
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
     return update_new(_rc_jstr(root, "name"), _rc_jstr(root, "installed_version"),
-                      _rc_jstr(root, "available_version"), _rc_jstr(root, "changelog"));
+      _rc_jstr(root, "available_version"), _rc_jstr(root, "changelog"));
 }
 
 # ---------------------------------------------------------------------------
@@ -563,7 +563,7 @@ fn rc_check_updates(c, installed): i64 {
             if (latest != 0) {
                 if (str_eq(man_version(latest), imp_version(pkg)) == 0) {
                     vec_push(out, update_new(name, imp_version(pkg), man_version(latest),
-                                             man_changelog(latest)));
+                        man_changelog(latest)));
                 }
             }
         }

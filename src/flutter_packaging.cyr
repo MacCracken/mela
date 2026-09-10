@@ -50,7 +50,7 @@ fn display_backend_name(b): Str {
 #   24 wayland_protocols (Vec<i64>)  32 platform_channels (Vec<Str>)  40 aot_compiled (i64)
 
 fn fmanifest_new(runtime: Str, engine_version: Str, dart_version: Str,
-                 wayland_protocols, platform_channels, aot_compiled): i64 {
+  wayland_protocols, platform_channels, aot_compiled): i64 {
     var m = alloc(48);
     store64(m,      runtime);
     store64(m + 8,  engine_version);
@@ -237,7 +237,7 @@ fn build_env_vars(c): i64 {
     # measured `str_len` = 4 (correct) with the bytes read back as four SPACES.
     # str_clone copies into heap memory, which outlives the frame.
     map_set(env, str_from("FLUTTER_FORCE_SCALE_FACTOR"),
-            _trim_trailing_zeros(str_clone(str_new(&scbuf, sclen))));
+      _trim_trailing_zeros(str_clone(str_new(&scbuf, sclen))));
     if (launch_accessibility(c) == 1) {
         map_set(env, str_from("FLUTTER_ACCESSIBILITY"), str_from("true"));
     }

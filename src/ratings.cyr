@@ -21,7 +21,7 @@ var MAX_SCORE = 5;
 #   24 has_review (i64)  32 review (Str)  40 created_at (i64)  48 version_reviewed (Str)
 
 fn rating_new(agent_id: Str, package_name: Str, score, has_review, review: Str,
-              created_at, version_reviewed: Str): i64 {
+  created_at, version_reviewed: Str): i64 {
     var r = alloc(56);
     store64(r,      agent_id);
     store64(r + 8,  package_name);
@@ -115,7 +115,7 @@ fn rstore_new(): i64 { return map_new_str(); }
 # a validation failure (empty agent/package, score out of 1..5, review too long).
 # Takes an explicit created_at (Rust used Utc::now()). Mirrors Rust `add_rating`.
 fn rstore_add_rating(store, agent_id: Str, package_name: Str, score, has_review,
-                     review: Str, version_reviewed: Str, created_at): i64 {
+  review: Str, version_reviewed: Str, created_at): i64 {
     if (str_len(agent_id) == 0) { return 0; }
     if (str_len(package_name) == 0) { return 0; }
     if (score < MIN_SCORE) { return 0; }
@@ -124,7 +124,7 @@ fn rstore_add_rating(store, agent_id: Str, package_name: Str, score, has_review,
         if (str_len(review) > MAX_REVIEW_LENGTH) { return 0; }
     }
     var rating = rating_new(agent_id, package_name, score, has_review, review,
-                            created_at, version_reviewed);
+      created_at, version_reviewed);
     var pkg_map = map_get(store, package_name);
     if (pkg_map == 0) {
         pkg_map = map_new_str();
@@ -320,7 +320,7 @@ fn _rating_from_jv(o): i64 {
     var review = str_from("");
     if (json_v_is_str(rv) == 1) { has_review = 1; review = json_v_str(rv); }
     return rating_new(_r_jstr(o, "agent_id"), _r_jstr(o, "package_name"), _r_jint(o, "score"),
-                      has_review, review, _r_jint(o, "created_at"), _r_jstr(o, "version_reviewed"));
+      has_review, review, _r_jint(o, "created_at"), _r_jstr(o, "version_reviewed"));
 }
 
 fn rating_to_json(r): Str { return json_v_build(_rating_to_jv(r)); }

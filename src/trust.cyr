@@ -223,7 +223,7 @@ fn kv_to_jv(kv): i64 {
 fn kv_from_jv(o): i64 {
     if (json_v_is_obj(o) == 0) { return 0; }
     return kv_new(_kv_jstr(o, "key_id"), _kv_jint(o, "valid_from"), _kv_jint(o, "has_until"),
-                  _kv_jint(o, "valid_until"), _kv_jstr(o, "public_key_hex"));
+      _kv_jint(o, "valid_until"), _kv_jstr(o, "public_key_hex"));
 }
 fn kv_to_json(kv): Str { return json_v_build(kv_to_jv(kv)); }
 fn kv_from_json(json: Str): i64 {

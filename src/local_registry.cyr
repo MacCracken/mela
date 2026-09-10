@@ -29,7 +29,7 @@ var REG_DIR_MODE       = 0x1FF;          # 0o777
 #   40 installed_size  (i64 bytes)
 
 fn imp_new(manifest, installed_at, install_dir: Str, package_hash: Str,
-           auto_update, installed_size): i64 {
+  auto_update, installed_size): i64 {
     var p = alloc(48);
     store64(p,      manifest);
     store64(p + 8,  installed_at);
@@ -104,8 +104,8 @@ fn _reg_record_from_jv(o): i64 {
     var manifest = manifest_from_jv(json_v_obj_get(o, "manifest"));
     if (manifest == 0) { return 0; }
     return imp_new(manifest, _reg_jint(o, "installed_at"), _reg_jstr(o, "install_dir"),
-                   _reg_jstr(o, "package_hash"), _reg_jbool(o, "auto_update"),
-                   _reg_jint(o, "installed_size"));
+      _reg_jstr(o, "package_hash"), _reg_jbool(o, "auto_update"),
+      _reg_jint(o, "installed_size"));
 }
 
 # Serialize an index map (name -> record) to a JSON object string.

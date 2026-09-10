@@ -304,7 +304,7 @@ fn publisher_from_json(json: Str): i64 {
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
     return publisher_new(_man_jstr(root, "name"), _man_jstr(root, "key_id"),
-                         _man_jstr(root, "homepage"));
+      _man_jstr(root, "homepage"));
 }
 
 # manifest_to_jv — build the JSON value object per ADR-0001 (flattened agent
@@ -356,7 +356,7 @@ fn manifest_from_jv(root): i64 {
 
     var pubv = json_v_obj_get(root, "publisher");
     var publisher = publisher_new(_man_jstr(pubv, "name"), _man_jstr(pubv, "key_id"),
-                                  _man_jstr(pubv, "homepage"));
+      _man_jstr(pubv, "homepage"));
 
     var catv = json_v_obj_get(root, "category");
     var cat = CAT_PARSE_FAIL;

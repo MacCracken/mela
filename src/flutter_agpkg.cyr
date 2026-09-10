@@ -14,7 +14,7 @@
 #   56 has_data_dir (i64)  64 data_dir (Str)
 
 fn pfconfig_new(app_name: Str, version: Str, publisher: Str, description: Str,
-                category, wayland_requirements, network_access, has_data_dir, data_dir: Str): i64 {
+  category, wayland_requirements, network_access, has_data_dir, data_dir: Str): i64 {
     var c = alloc(72);
     store64(c,      app_name);
     store64(c + 8,  version);
@@ -79,8 +79,8 @@ fn pfconfig_from_json(json: Str): i64 {
     if (json_v_is_str(ddv) == 1) { has_dd = 1; dd = json_v_str(ddv); }
 
     return pfconfig_new(_ag_jstr(root, "app_name"), _ag_jstr(root, "version"),
-                        _ag_jstr(root, "publisher"), _ag_jstr(root, "description"),
-                        category, wl, _ag_jbool(root, "network_access"), has_dd, dd);
+      _ag_jstr(root, "publisher"), _ag_jstr(root, "description"),
+      category, wl, _ag_jbool(root, "network_access"), has_dd, dd);
 }
 
 # WaylandRequirement serde variant name -> code (PascalCase).
@@ -449,13 +449,13 @@ fn pack_flutter_app(build_dir: Str, config, output_dir: Str): i64 {
     var engine_bytes = _read_file(path_join(build_dir, fbuild_engine_lib(b)));
     if (engine_bytes == 0) { return 0; }
     vec_push(entries, tentry_new(str_from("bin/flutter_engine.so"),
-                                 str_data(engine_bytes), str_len(engine_bytes)));
+        str_data(engine_bytes), str_len(engine_bytes)));
 
     if (fbuild_has_aot(b) == 1) {
         var aot_bytes = _read_file(path_join(build_dir, fbuild_aot_binary(b)));
         if (aot_bytes != 0) {
             vec_push(entries, tentry_new(str_cat(str_from("bin/"), pfconfig_app_name(config)),
-                                         str_data(aot_bytes), str_len(aot_bytes)));
+                str_data(aot_bytes), str_len(aot_bytes)));
         }
     }
 
@@ -470,7 +470,7 @@ fn pack_flutter_app(build_dir: Str, config, output_dir: Str): i64 {
             var fb = _read_file(fpath);
             if (fb != 0) {
                 vec_push(entries, tentry_new(str_cat(str_from("assets/flutter_assets/"), nm),
-                                             str_data(fb), str_len(fb)));
+                    str_data(fb), str_len(fb)));
             }
         }
         ai = ai + 1;
@@ -485,7 +485,7 @@ fn pack_flutter_app(build_dir: Str, config, output_dir: Str): i64 {
     if (gz == 0) { return 0; }
     _rc_mkdir_p(output_dir);
     var tarball_name = str_cat(str_cat(str_cat(pfconfig_app_name(config), str_from("-")),
-                                       pfconfig_version(config)), str_from(".agnos-agent"));
+        pfconfig_version(config)), str_from(".agnos-agent"));
     var out_path = path_join(output_dir, tarball_name);
     if (file_write_all(str_data(out_path), str_data(gz), str_len(gz)) < 0) { return 0; }
     return out_path;

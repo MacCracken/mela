@@ -68,7 +68,7 @@ fn test_semver() {
 fn test_publisher() {
     test_group("publisher");
     var p = publisher_new(str_from("AGNOS Team"), str_from("deadbeef"),
-                          str_from("https://agnos.org"));
+      str_from("https://agnos.org"));
     assert_eq(str_eq_cstr(pub_name(p),     "AGNOS Team"),        1, "publisher name");
     assert_eq(str_eq_cstr(pub_key_id(p),   "deadbeef"),          1, "publisher key_id");
     assert_eq(str_eq_cstr(pub_homepage(p), "https://agnos.org"), 1, "publisher homepage");
@@ -120,42 +120,42 @@ fn test_manifest() {
 
     # valid manifest -> no errors
     var ok = mk_manifest(str_from("test-agent"), str_from("A test agent"),
-                         str_from("1.0.0"), str_from("Test Publisher"), str_from("abc12345"));
+      str_from("1.0.0"), str_from("Test Publisher"), str_from("abc12345"));
     assert_eq(vec_len(manifest_validate(ok)), 0, "valid manifest has no errors");
 
     # missing name
     var m_name = mk_manifest(str_from(""), str_from("A test agent"),
-                            str_from("1.0.0"), str_from("Test Publisher"), str_from("abc12345"));
+      str_from("1.0.0"), str_from("Test Publisher"), str_from("abc12345"));
     assert_eq(errors_contain(manifest_validate(m_name), "name is required"), 1, "missing name");
 
     # name too long (200 chars)
     var m_long = mk_manifest(repeat_char(200, 97), str_from("A test agent"),
-                            str_from("1.0.0"), str_from("Test Publisher"), str_from("abc12345"));
+      str_from("1.0.0"), str_from("Test Publisher"), str_from("abc12345"));
     assert_eq(errors_contain(manifest_validate(m_long), "128 characters"), 1, "long name");
 
     # invalid name chars
     var m_chars = mk_manifest(str_from("Test Agent!"), str_from("A test agent"),
-                             str_from("1.0.0"), str_from("Test Publisher"), str_from("abc12345"));
+      str_from("1.0.0"), str_from("Test Publisher"), str_from("abc12345"));
     assert_eq(errors_contain(manifest_validate(m_chars), "lowercase"), 1, "invalid name chars");
 
     # missing version
     var m_ver = mk_manifest(str_from("test-agent"), str_from("A test agent"),
-                           str_from(""), str_from("Test Publisher"), str_from("abc12345"));
+      str_from(""), str_from("Test Publisher"), str_from("abc12345"));
     assert_eq(errors_contain(manifest_validate(m_ver), "version is required"), 1, "missing version");
 
     # invalid semver
     var m_sem = mk_manifest(str_from("test-agent"), str_from("A test agent"),
-                           str_from("not-a-version"), str_from("Test Publisher"), str_from("abc12345"));
+      str_from("not-a-version"), str_from("Test Publisher"), str_from("abc12345"));
     assert_eq(errors_contain(manifest_validate(m_sem), "semver"), 1, "invalid semver");
 
     # missing description
     var m_desc = mk_manifest(str_from("test-agent"), str_from(""),
-                            str_from("1.0.0"), str_from("Test Publisher"), str_from("abc12345"));
+      str_from("1.0.0"), str_from("Test Publisher"), str_from("abc12345"));
     assert_eq(errors_contain(manifest_validate(m_desc), "description is required"), 1, "missing description");
 
     # missing publisher fields
     var m_pub = mk_manifest(str_from("test-agent"), str_from("A test agent"),
-                           str_from("1.0.0"), str_from(""), str_from(""));
+      str_from("1.0.0"), str_from(""), str_from(""));
     assert_eq(errors_contain(manifest_validate(m_pub), "publisher.name"),   1, "missing publisher.name");
     assert_eq(errors_contain(manifest_validate(m_pub), "publisher.key_id"), 1, "missing publisher.key_id");
 
@@ -336,7 +336,7 @@ fn test_trust() {
     var sig_kat = trust_sign(&sk, "", 0);
     assert_eq(str_eq_cstr(trust_hex_encode(sig_kat, 64),
         "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"),
-        1, "ed25519 sig KAT");
+      1, "ed25519 sig KAT");
     assert_eq(trust_verify("", 0, sig_kat, 64, &pk), 1, "ed25519 KAT verify");
 
     # key_id is 16 hex chars and matches key_id_from_pk; sk embeds pk
@@ -472,7 +472,7 @@ fn test_keyring_load() {
 # append with a fixed timestamp (tests pin time for determinism — ADR-0004).
 fn tlog_add(log, pkg, ver, kid, ch, sh) {
     return tlog_append(log, str_from(pkg), str_from(ver), str_from(kid),
-                       str_from(ch), str_from(sh), 1000);
+      str_from(ch), str_from(sh), 1000);
 }
 
 # TransparencyLog core — parity with rust-old/src/transparency.rs.
@@ -593,7 +593,7 @@ fn rclean(dir) {
 # Sample manifest with a tag (for search-by-tag).
 fn mk_pkg(name, ver) {
     var m = mk_manifest(str_from(name), str_from("Test package"), str_from(ver),
-                        str_from("Test Publisher"), str_from("abc12345"));
+      str_from("Test Publisher"), str_from("abc12345"));
     vec_push(man_tags(m), str_from("scanner"));
     return m;
 }
@@ -790,7 +790,7 @@ fn test_remote_codec() {
     # SearchResults roundtrip
     var pkgs = vec_new();
     vec_push(pkgs, sresult_new(str_from("acme/scanner"), str_from("1.0.0"), str_from("A scanner"),
-                               1000, str_from("security"), str_from("Acme Corp")));
+        1000, str_from("security"), str_from("Acme Corp")));
     var rec = sresults_from_json(sresults_to_json(sresults_new(pkgs, 1, 1, 20)));
     assert_neq(rec, 0, "search results parse");
     assert_eq(vec_len(sresults_packages(rec)), 1, "results packages len 1");
@@ -808,14 +808,14 @@ fn test_remote_codec() {
 
     # PublishResponse roundtrip
     var pr = presp_from_json(presp_to_json(presp_new(str_from("test-app"), str_from("1.0.0"),
-                            str_from("https://r/v1/packages/test-app/1.0.0/download"), 0)));
+          str_from("https://r/v1/packages/test-app/1.0.0/download"), 0)));
     assert_neq(pr, 0, "publish response parse");
     assert_eq(str_eq_cstr(presp_name(pr), "test-app"), 1, "publish resp name");
     assert_eq(presp_replaced(pr), 0, "publish resp not replaced");
 
     # UpdateAvailable roundtrip
     var up = update_from_json(mela_update_to_json(update_new(str_from("test-pkg"), str_from("1.0.0"),
-                             str_from("2.0.0"), str_from("New features"))));
+          str_from("2.0.0"), str_from("New features"))));
     assert_neq(up, 0, "update parse");
     assert_eq(str_eq_cstr(update_name(up), "test-pkg"), 1, "update name");
     assert_eq(str_eq_cstr(update_available_version(up), "2.0.0"), 1, "update available version");
@@ -859,7 +859,7 @@ fn test_remote_client() {
 
     # manifest cache round-trip
     var m = mk_manifest(str_from("cached-pkg"), str_from("A cached pkg"), str_from("1.0.0"),
-                        str_from("Pub"), str_from("kid12345"));
+      str_from("Pub"), str_from("kid12345"));
     registry_cache_manifest(c1, str_from("cached-pkg"), str_from("1.0.0"), m);
     var cm = registry_cached_manifest(c1, str_from("cached-pkg"), str_from("1.0.0"));
     assert_neq(cm, 0, "cached manifest found");
@@ -1005,7 +1005,7 @@ fn wlvec(a, b) { var v = vec_new(); if (a >= 0) { vec_push(v, a); } if (b >= 0) 
 fn mk_pfconfig() {
     var wl = vec_new(); vec_push(wl, WL_CORE); vec_push(wl, WL_XDG_SHELL);
     return pfconfig_new(str_from("my-flutter-app"), str_from("1.0.0"), str_from("Test Publisher"),
-                        str_from("A test Flutter application"), CAT_DESKTOP_APP, wl, 0, 0, str_from(""));
+      str_from("A test Flutter application"), CAT_DESKTOP_APP, wl, 0, 0, str_from(""));
 }
 
 # Create a Flutter build-dir variant on disk (each variant has its own dir, so
@@ -1167,11 +1167,11 @@ fn test_transport() {
     assert_eq(rc_download(on, str_from("../evil"), str_from("1.0.0")), 0, "invalid-name download -> 0");
     # format-agnostic fetch (0.9.5): same no-network guards, caller-chosen dest.
     assert_eq(mela_fetch_artifact(off, str_from("p"), str_from("1.0.0"),
-                                  str_from("/tmp/mela-dl-guard/p.ark")), 0,
-              "offline fetch_artifact -> 0");
+        str_from("/tmp/mela-dl-guard/p.ark")), 0,
+      "offline fetch_artifact -> 0");
     assert_eq(mela_fetch_artifact(on, str_from("../evil"), str_from("1.0.0"),
-                                  str_from("/tmp/mela-dl-guard/x.ark")), 0,
-              "invalid-name fetch_artifact -> 0");
+        str_from("/tmp/mela-dl-guard/x.ark")), 0,
+      "invalid-name fetch_artifact -> 0");
     return 0;
 }
 
