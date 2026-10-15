@@ -105,7 +105,7 @@ See [`docs/architecture/overview.md`](docs/architecture/overview.md) for the mod
 cyrius deps                              # resolve [deps.*] into lib/
 cyrius build src/main.cyr build/mela     # build
 cyrius test                              # parity tests (tests/mela.tcyr)
-cyrius run benches/hotpaths.cyr          # hot-path benchmarks (ns/op)
+cyrius bench                             # hot-path benchmarks (tests/mela.bcyr)
 ```
 
 The Rust oracle at [`rust-old/`](rust-old/) is the frozen parity reference. It is **not built

@@ -6,9 +6,9 @@ include benchmark numbers; breaking changes get a **Breaking** section with a mi
 
 ## [1.1.0] - 2026-10-14
 
-**cyrius 6.6.20 → 6.7.9.** `cyrius build` OK (3,201,960 B), 492 passed / 0 failed, fuzz 1 / 0.
-No source change was needed: the build has the same four warnings as 1.0.5, and it also builds for
-`--agnos` and `--aarch64`.
+**cyrius 6.6.20 → 6.7.9.** `cyrius build` OK (3,201,960 B), 492 passed / 0 failed, fuzz 1 / 0,
+bench 1 / 0. No `src/` change was needed: the build has the same four warnings as 1.0.5, and it
+also builds for `--agnos` and `--aarch64`.
 
 ### Changed — deps on the 6.7.9 line
 
@@ -28,20 +28,38 @@ is byte-identical to `~/.cyrius/versions/6.7.9/lib` (`cyrius lib sync --full --r
 reports `lib/` and the lock exactly as the tags resolve. The roadmap's 6.7.6 pin-move note is
 marked applied.
 
-### Verified — hot paths, no regression
+### Changed — one bench harness: `tests/mela.bcyr` under `cyrius bench`
 
-`benches/hotpaths.cyr` (run from a copy with the fix below): manifest_validate 159 ns,
-sha256_hash 830 ns, registry_get 69 ns, agpkg_inspect 82 µs, ed25519_verify 5.76 ms per op. Each
-is at or under the recorded figures in `docs/benchmarks-rust-v-cyrius.md`. This was a single run,
-so it only shows there is no regression.
+Both harnesses failed to compile, and neither break came from the bump:
+- `benches/hotpaths.cyr` called `manifest_new`, which the pre-1.0 namespace pass renamed to
+  `mela_manifest_new`.
+- `tests/mela.bcyr` was the original `cyrius init` scaffold. It called `bench(...)`, which no
+  stdlib version defines (cyrius fixed the template in 5.11.62), so `cyrius bench` failed.
 
-### Known — both bench harnesses fail to compile (not from this bump)
+The hand-rolled loop existed only because `cyrius bench` SIGILLed with sigil + sankoch linked in
+at the v0.8.1 toolchain. On 6.7.9 it does not, so the five hot paths moved into
+`tests/mela.bcyr` on `lib/bench.cyr` and `benches/hotpaths.cyr` is removed. CONTRIBUTING.md
+already named `tests/mela.bcyr` as the place for benchmark numbers.
+- Each row uses a fixed batch (`bench_run_batch`) sized so one window is about 1 ms or more.
+  That clears the stdlib's 100× clock-error bar on this hpet host (floor 1.32 µs), so every
+  row resolves its min and max.
+- Every fixture is checked to take its success path before it is timed (verify returns 1, the
+  manifest is valid, the lookup hits, the bundle inspects). Otherwise a row could time an early
+  reject.
 
-- `benches/hotpaths.cyr` calls `manifest_new`, renamed to `mela_manifest_new` in the
-  pre-1.0 namespace pass.
-- `tests/mela.bcyr` is the original `cyrius init` scaffold calling `bench(...)`, a function
-  no stdlib version has defined (the template was fixed in cyrius 5.11.62). `cyrius bench`
-  therefore fails. CI does not run it.
+`cyrius bench` exits 0. Single run, avg (min – max) per op:
+
+| Hot path | v1.1.0 | v0.8.1 (hand loop) |
+|---|---|---|
+| `registry_get` | 75 ns (69 – 82) | 72 ns |
+| `manifest_validate` | 134 ns (126 – 145) | 389 ns |
+| `sha256_hash` | 760 ns (738 – 804) | 1,016 ns |
+| `agpkg_inspect` | 104.9 µs (63.9 – 155.0) | 96.9 µs |
+| `ed25519_verify` | 5.15 ms (5.04 – 5.38) | 7.75 ms |
+
+The two columns come from different harnesses, so they show no regression but are not a
+measured speed-up. `docs/benchmarks-rust-v-cyrius.md` is re-captured at v1.1.0. The README,
+getting-started guide and state.md now point at `cyrius bench`.
 
 ## [1.0.5] - 2026-10-14
 

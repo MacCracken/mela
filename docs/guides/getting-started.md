@@ -15,8 +15,8 @@ cyrius test                              # run tests/*.tcyr
   `remote_client`, `sandbox_profiles`, `ratings`, `flutter_packaging`, `flutter_agpkg`, `pipeline`
   (the end-to-end flow). The frozen public surface is documented in [`../api/`](../api/).
 - `tests/mela.tcyr` — parity test suite (auto-discovered by `cyrius test`); `tests/mela.fcyr` —
-  fuzz harness for every external-data parser.
-- `benches/hotpaths.cyr` — hot-path benchmarks (`cyrius run benches/hotpaths.cyr`).
+  fuzz harness for every external-data parser; `tests/mela.bcyr` — hot-path benchmarks
+  (`cyrius bench`).
 - `rust-old/` — original Rust source, the frozen parity oracle. Do not modify. It is **not built
   here** (needs `agnos-common`); parity is asserted by hand in the tests.
 

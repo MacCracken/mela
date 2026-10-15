@@ -6,7 +6,8 @@
 ## Version
 
 **1.1.0** — cyrius 6.7.9 (2026-10-14). agnostik 1.12.0; sigil 3.13.11 / sankoch 2.8.3 /
-sandhi 1.10.9 from the stdlib. No source change; 492/492; builds for agnos and aarch64.
+sandhi 1.10.9 from the stdlib. No `src/` change; 492/492; builds for agnos and aarch64. One bench harness:
+`tests/mela.bcyr` under `cyrius bench`.
 
 **1.0.5** — JSON lookups migrated to `bayan_json_v_obj_get_by_cstr` (2026-10-14); zero
 deprecation warnings at build. Filesystem calls go through the portable `xunlink` / `xrmdir` /
@@ -90,7 +91,7 @@ gone after uninstall)). `trust` has SHA-256 + RFC 8032 Ed25519 KAT vectors; `reg
 `.agnos-agent` (cross-validated against the system `tar` both directions); `pipeline` runs
 package→sign→log→verify→install and rejects tampered / digest-mismatch / untrusted / wrong-key.
 Fuzz harness at `tests/mela.fcyr` covers every external-data parser (survive arbitrary bytes).
-Benchmarks at [`benches/hotpaths.cyr`](../../benches/hotpaths.cyr) /
+Benchmarks at [`tests/mela.bcyr`](../../tests/mela.bcyr) (`cyrius bench`) /
 [`docs/benchmarks-rust-v-cyrius.md`](../benchmarks-rust-v-cyrius.md). `cyrius test` is the gate.
 
 ## Dependencies

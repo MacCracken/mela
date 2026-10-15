@@ -1,10 +1,90 @@
-# mela benchmarks
+# mela hot-path benchmarks — run with `cyrius bench`.
+#
+# Times the marketplace hot paths the roadmap calls out: manifest validation,
+# Ed25519 signature verification, SHA-256 hashing, registry lookup, and the
+# gzip+ustar inspect. Numbers are recorded in docs/benchmarks-rust-v-cyrius.md.
+#
+# Each row uses a FIXED batch (bench_run_batch) sized so one window is ~1 ms or
+# more: past lib/bench.cyr's 100x clock-error bar even on a slow-clock (hpet)
+# host, so min/max resolve and runs compare at identical window sizes.
 
-fn bench_noop() { return 0; }
+include "src/category.cyr"
+include "src/manifest.cyr"
+include "src/depgraph.cyr"
+include "src/trust.cyr"
+include "src/transparency.cyr"
+include "src/local_registry.cyr"
+include "src/remote_client.cyr"
+include "src/sandbox_profiles.cyr"
+include "src/ratings.cyr"
+include "src/flutter_packaging.cyr"
+include "src/flutter_agpkg.cyr"
+include "src/pipeline.cyr"
+
+# Fixtures, built once in main(); the op fns are zero-arg for bench_run_batch.
+var B_MANIFEST = 0;
+var B_DATA = 0;
+var B_DLEN = 0;
+var B_SIG = 0;
+var B_PK = 0;
+var B_REG = 0;
+var B_KEY = 0;
+var B_BUNDLE = 0;
+
+fn op_manifest_validate() { return manifest_validate(B_MANIFEST); }
+fn op_ed25519_verify()    { return trust_verify(B_DATA, B_DLEN, B_SIG, 64, B_PK); }
+fn op_sha256_hash()       { return trust_hash_data(B_DATA, B_DLEN); }
+fn op_registry_get()      { return registry_get_package(B_REG, B_KEY); }
+fn op_agpkg_inspect()     { return agpkg_inspect_bytes(str_data(B_BUNDLE), str_len(B_BUNDLE)); }
+
+# minimal pack config for the bundle fixture
+fn mk_pfconfig_bench() {
+    var wl = vec_new(); vec_push(wl, WL_CORE); vec_push(wl, WL_XDG_SHELL);
+    return pfconfig_new(str_from("bench-app"), str_from("1.0.0"), str_from("Pub"),
+      str_from("desc"), CAT_DESKTOP_APP, wl, 0, 0, str_from(""));
+}
+
+fn _row(name, fp, batch, rounds) {
+    var b = bench_new(name);
+    if (b == 0) { return 1; }
+    bench_run_batch(b, fp, batch, rounds);
+    bench_report(b);
+    return 0;
+}
 
 fn main() {
     alloc_init();
-    bench("noop", &bench_noop, 1000000);
+
+    var agent = agent_manifest_new(str_from("test-pkg"));
+    store64(agent + 8, str_from("A benchmark package"));
+    var publisher = publisher_new(str_from("Bench Publisher"), str_from("abc12345"), str_from(""));
+    B_MANIFEST = mela_manifest_new(agent, publisher, CAT_UTILITY, str_from("1.0.0"));
+
+    var sk = alloc(64);
+    B_PK = alloc(32);
+    var seed = hex_decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", 64);
+    trust_keypair_from_seed(seed, sk, B_PK);
+    B_DATA = "the quick brown fox jumps over the lazy marketplace bundle";
+    B_DLEN = strlen(B_DATA);
+    B_SIG = trust_sign(sk, B_DATA, B_DLEN);
+
+    B_REG = registry_in_memory();
+    registry_install(B_REG, B_MANIFEST, str_from("hash"), 1024, 1000);
+    B_KEY = str_from("test-pkg");
+
+    B_BUNDLE = pipeline_package(B_MANIFEST, generate_sandbox_profile(mk_pfconfig_bench()));
+
+    # Every fixture must take its success path, or a row times an early reject.
+    if (vec_len(op_manifest_validate()) != 0) { return 2; }
+    if (op_ed25519_verify() != 1) { return 3; }
+    if (op_registry_get() == 0) { return 4; }
+    if (op_agpkg_inspect() == 0) { return 5; }
+
+    if (_row("manifest_validate", &op_manifest_validate, 10000, 20) != 0) { return 1; }
+    if (_row("ed25519_verify", &op_ed25519_verify, 1, 200) != 0) { return 1; }
+    if (_row("sha256_hash", &op_sha256_hash, 2000, 100) != 0) { return 1; }
+    if (_row("registry_get", &op_registry_get, 20000, 10) != 0) { return 1; }
+    if (_row("agpkg_inspect", &op_agpkg_inspect, 20, 250) != 0) { return 1; }
     return 0;
 }
 
