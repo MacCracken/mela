@@ -48,6 +48,16 @@ fn test_category() {
     # FromStr: unknown -> fail sentinel.
     assert_eq(cat_parse("nope"), CAT_PARSE_FAIL, "parse unknown fails");
     assert_eq(cat_parse(""),     CAT_PARSE_FAIL, "parse empty fails");
+    # v1.1.1 (D4): input longer than the 64-byte lowercase buffer is rejected,
+    # not copied past it
+    var long = alloc(201);
+    memset(long, 97, 200);
+    store8(long + 200, 0);
+    assert_eq(cat_parse(long), CAT_PARSE_FAIL, "200-byte input -> fail, no overrun");
+    var edge = alloc(64);
+    memset(edge, 97, 63);
+    store8(edge + 63, 0);
+    assert_eq(cat_parse(edge), CAT_PARSE_FAIL, "63-byte input -> fail (fits, not a name)");
     return 0;
 }
 
@@ -466,6 +476,66 @@ fn test_keyring_load() {
 
     # absent dir loads nothing (no crash)
     assert_eq(keyring_load_dir(mela_keyring_new(), str_from("/tmp/mela-nope-xyz")), 0, "absent dir loads 0");
+
+    # v1.1.1 (D5): a load replaces the keyring
+    assert_eq(keyring_load_dir(kr, str_from(DIR)), 2, "reload counts 2");
+    assert_eq(vec_len(mela_keyring_get_all_versions(kr, str_from("gamma"))), 2, "reload: no duplicated versions");
+    mela_keyring_add_key(kr, kv_new(str_from("manual"), 0, 0, 0, ZHEX));
+    keyring_load_dir(kr, str_from(DIR));
+    assert_eq(vec_len(mela_keyring_get_all_versions(kr, str_from("manual"))), 0, "load drops keys not in the dir");
+
+    # Rust keyring_load_malformed_file: a non-JSON file is skipped, the rest load
+    var badp = path_join(str_from(DIR), str_from("bad.json"));
+    file_write_all(str_data(badp), "not valid json", 14);
+    assert_eq(keyring_load_dir(kr, str_from(DIR)), 2, "malformed file skipped, gamma still loads");
+
+    # one malformed version skips its whole file (Rust: the Vec parse fails)
+    var mixed = json_v_arr_new();
+    json_v_arr_push(mixed, kv_to_jv(kv_new(str_from("delta"), 0, 0, 0, ZHEX)));
+    json_v_arr_push(mixed, json_v_int_new(42));
+    var mb = json_v_build(mixed);
+    var mp = path_join(str_from(DIR), str_from("delta.json"));
+    file_write_all(str_data(mp), str_data(mb), str_len(mb));
+    assert_eq(keyring_load_dir(kr, str_from(DIR)), 2, "mixed file skipped whole");
+    assert_eq(vec_len(mela_keyring_get_all_versions(kr, str_from("delta"))), 0, "no delta version loaded");
+    sys_unlink(str_data(mp));
+    sys_unlink(str_data(badp));
+
+    # revocation: delete gamma.json, reload the same keyring
+    sys_unlink(str_data(fp));
+    assert_eq(keyring_load_dir(kr, str_from(DIR)), 0, "revoked: reload loads 0");
+    assert_eq(keyring_get_current_key(kr, str_from("gamma"), 1500), 0, "revoked key no longer trusted");
+    assert_eq(mela_keyring_len(kr), 0, "keyring empty after revocation");
+
+    # Rust keyring_load_malformed_file, exactly: a dir holding only bad.json loads 0
+    file_write_all(str_data(badp), "not valid json", 14);
+    assert_eq(keyring_load_dir(kr, str_from(DIR)), 0, "only a malformed file -> 0");
+    sys_unlink(str_data(badp));
+
+    # an absent dir empties a populated keyring
+    var kr2 = mela_keyring_new();
+    mela_keyring_add_key(kr2, kv_new(str_from("x"), 0, 0, 0, ZHEX));
+    assert_eq(keyring_load_dir(kr2, str_from("/tmp/mela-nope-xyz")), 0, "absent dir: 0");
+    assert_eq(mela_keyring_len(kr2), 0, "absent dir: keyring emptied");
+
+    # strict KeyVersion decoding: nothing defaults
+    var Z = "0000000000000000000000000000000000000000000000000000000000000000";
+    assert_eq(kv_from_json(str_from("{\"key_id\":\"k\",\"valid_from\":0,\"public_key_hex\":\"00\"}")), 0,
+      "missing has_until -> 0 (was: never expires)");
+    assert_eq(kv_from_json(str_from("{\"key_id\":\"k\",\"valid_from\":\"2026-01-01T00:00:00Z\",\"valid_until\":\"2026-02-01T00:00:00Z\",\"public_key_hex\":\"00\"}")),
+      0, "Rust-shaped RFC 3339 times -> 0");
+    assert_eq(kv_from_json(str_from("{\"key_id\":\"k\",\"valid_from\":0,\"has_until\":2,\"valid_until\":5,\"public_key_hex\":\"00\"}")),
+      0, "has_until 2 -> 0");
+    assert_eq(kv_from_json(str_from("{\"key_id\":\"k\",\"valid_from\":0,\"has_until\":1,\"public_key_hex\":\"00\"}")), 0,
+      "has_until 1 without valid_until -> 0");
+    assert_eq(kv_from_json(str_from("{\"valid_from\":0,\"has_until\":0,\"public_key_hex\":\"00\"}")), 0,
+      "missing key_id -> 0");
+    assert_eq(kv_from_json(str_from("{\"key_id\":\"k\",\"valid_from\":0,\"has_until\":0,\"public_key_hex\":7}")), 0,
+      "numeric public_key_hex -> 0");
+    var open_ended = kv_from_json(str_from("{\"key_id\":\"k\",\"valid_from\":5,\"has_until\":0,\"public_key_hex\":\"00\"}"));
+    assert_neq(open_ended, 0, "has_until 0 needs no valid_until");
+    assert_eq(kv_has_until(open_ended), 0, "open-ended key decoded");
+    assert_neq(kv_from_json(kv_to_json(kv_new(str_from("w"), 1, 1, 9, str_from(Z)))), 0, "writer output still decodes");
     return 0;
 }
 
@@ -701,10 +771,31 @@ fn test_registry_uninstall_fs() {
     file_write_all(str_data(f), str_data(str_from("XYZ")), 3);
     assert_eq(is_dir(dir), 1, "install dir on disk before uninstall");
 
+    # v1.1.1 (D2): a symlink inside the install dir points outside it
+    var VICTIM = "/tmp/mela-test-rm-victim";
+    sys_mkdir(VICTIM, 493);
+    var keep = str_cat(str_from(VICTIM), str_from("/keep.txt"));
+    file_write_all(str_data(keep), "K", 1);
+    xsymlink(VICTIM, str_data(path_join(dir, str_from("data"))));
+    xsymlink(str_data(keep), str_data(path_join(dir, str_from("keep-link"))));
+
     # uninstall removes the whole tree
     assert_eq(registry_uninstall(reg, str_from("rm-pkg")), 1, "uninstall ok");
     assert_eq(is_dir(dir),            0, "install dir removed after uninstall");
     assert_eq(registry_is_empty(reg), 1, "registry empty after uninstall");
+    assert_eq(file_exists(str_data(keep)), 1, "symlinked dir: target's files survive");
+    assert_eq(is_dir(str_from(VICTIM)), 1, "symlinked dir: target dir survives");
+
+    # the install dir itself is a symlink to an outside dir
+    var res2 = registry_install(reg, mk_pkg("rm-link", "1.0.0"), str_from("h"), 64, 1000);
+    var dir2 = instres_install_dir(res2);
+    xsymlink(VICTIM, str_data(dir2));
+    assert_eq(is_symlink(dir2), 1, "install dir is a symlink");
+    assert_eq(registry_uninstall(reg, str_from("rm-link")), 1, "uninstall via link ok");
+    assert_eq(is_symlink(dir2), 0, "link removed");
+    assert_eq(file_exists(str_data(keep)), 1, "linked install dir: target's files survive");
+    xunlink(str_data(keep));
+    xrmdir(VICTIM);
     return 0;
 }
 
@@ -1152,6 +1243,149 @@ fn test_hardening() {
     return 0;
 }
 
+# v1.1.1 (D1) — the tar reader validates the whole archive before use: strict
+# octal fields, header checksums, data inside the archive, no duplicate names.
+# A crafted size field used to walk the reader backwards and crash
+# pipeline_install before the signature gate.
+
+# Recompute the header checksum at buf+off after a test patches the header.
+fn _t_tar_fix_sum(buf, off) {
+    _tar_octal(buf, off + 148, 7, _tar_sum(buf, off));
+    store8(buf + off + 155, 32);
+    return 0;
+}
+
+# Overwrite the 12-byte size field of the header at buf+off with `field`
+# (NUL-padded), then fix the checksum so only the size is wrong.
+fn _t_tar_set_size(buf, off, field) {
+    var i = 0;
+    while (i < 12) { store8(buf + off + 124 + i, 0); i = i + 1; }
+    memcpy(buf + off + 124, field, strlen(field));
+    _t_tar_fix_sum(buf, off);
+    return 0;
+}
+
+# A one-entry raw (uncompressed) tar holding manifest.json.
+fn _t_tar_manifest() {
+    var m = str_from("{\"name\":\"x\"}");
+    var es = vec_new();
+    vec_push(es, tentry_new(str_from("manifest.json"), str_data(m), str_len(m)));
+    return _tar_build(es);
+}
+
+# 1 if every reader rejects the raw tar `t` once gzipped.
+fn _t_tar_all_reject(t) {
+    var gz = _gzip_str(t);
+    var d = str_data(gz);
+    var n = str_len(gz);
+    if (agpkg_inspect_bytes(d, n) != 0) { return 0; }
+    if (agpkg_read_entry(d, n, str_from("manifest.json")) != 0) { return 0; }
+    if (agpkg_extract_to_dir(d, n, str_from("/tmp/mela-tar-reject")) != 0 - 1) { return 0; }
+    if (pipeline_extract_manifest(gz) != 0) { return 0; }
+    return 1;
+}
+
+fn test_tar_reader() {
+    test_group("tar-reader");
+
+    # strict octal fields
+    assert_eq(_tar_read_octal("00000000007\0", 0, 12), 7, "octal: zero-padded");
+    assert_eq(_tar_read_octal("     7 \0\0\0\0\0", 0, 12), 7, "octal: leading spaces, space end");
+    assert_eq(_tar_read_octal("!(1\0\0\0\0\0\0\0\0\0", 0, 12), 0 - 1, "octal: non-digit rejected");
+    assert_eq(_tar_read_octal("78\0\0\0\0\0\0\0\0\0\0", 0, 12), 0 - 1, "octal: digit 8 rejected");
+    assert_eq(_tar_read_octal("7 7\0\0\0\0\0\0\0\0\0", 0, 12), 0 - 1, "octal: bytes after terminator");
+    var zeros = alloc(12);
+    memset(zeros, 0, 12);
+    assert_eq(_tar_read_octal(zeros, 0, 12), 0 - 1, "octal: no digits rejected");
+    var b256 = alloc(12);
+    memset(b256, 0, 12);
+    store8(b256, 128);
+    assert_eq(_tar_read_octal(b256, 0, 12), 0 - 1, "octal: base-256 rejected");
+
+    # the valid fixture reads
+    var ok = _t_tar_manifest();
+    var okgz = _gzip_str(ok);
+    assert_neq(pipeline_extract_manifest(okgz), 0, "valid bundle: manifest read");
+
+    # the audit's crash input: a non-octal size with a valid checksum
+    var t1 = _t_tar_manifest();
+    _t_tar_set_size(str_data(t1), 0, "!(1");
+    assert_eq(_t_tar_all_reject(t1), 1, "non-octal size rejected by every reader");
+    var reg = registry_in_memory();
+    var sig = alloc(64);
+    memset(sig, 0, 64);
+    assert_eq(pipeline_install(reg, mela_keyring_new(), _gzip_str(t1), sig, 64, str_from(""), 1000), 0,
+      "crafted bundle: pipeline_install returns 0, no crash");
+    assert_eq(registry_is_empty(reg), 1, "crafted bundle: nothing installed");
+
+    # a size whose data would run past the archive
+    var t2 = _t_tar_manifest();
+    _t_tar_set_size(str_data(t2), 0, "77777777777");
+    assert_eq(_t_tar_all_reject(t2), 1, "oversized size rejected");
+
+    # control bytes in the size field
+    var t3 = _t_tar_manifest();
+    var ctl = alloc(5);
+    memset(ctl, 1, 4);
+    store8(ctl + 4, 0);
+    _t_tar_set_size(str_data(t3), 0, ctl);
+    assert_eq(load8(str_data(t3) + 124), 1, "control-byte size: fixture written");
+    assert_eq(_t_tar_all_reject(t3), 1, "control-byte size rejected");
+
+    # checksum mismatch: change the name, leave the stored sum
+    var t4 = _t_tar_manifest();
+    store8(str_data(t4), 77);   # 'M'
+    assert_eq(_t_tar_all_reject(t4), 1, "bad checksum rejected");
+
+    # duplicate entry names (D12): what is disclosed must be what is installed
+    var a = str_from("first");
+    var b = str_from("second");
+    var dup = vec_new();
+    vec_push(dup, tentry_new(str_from("sandbox.json"), str_data(a), str_len(a)));
+    vec_push(dup, tentry_new(str_from("sandbox.json"), str_data(b), str_len(b)));
+    var tdup = _tar_build(dup);
+    var dgz = _gzip_str(tdup);
+    assert_eq(agpkg_inspect_bytes(str_data(dgz), str_len(dgz)), 0, "duplicate names: inspect rejects");
+    assert_eq(agpkg_read_entry(str_data(dgz), str_len(dgz), str_from("sandbox.json")), 0,
+      "duplicate names: read rejects");
+    assert_eq(agpkg_extract_to_dir(str_data(dgz), str_len(dgz), str_from("/tmp/mela-tar-dup")), 0 - 1,
+      "duplicate names: extract rejects");
+
+    # link / dir typeflags are skipped, the rest of the archive still reads
+    var p = str_from("x");
+    var mix = vec_new();
+    vec_push(mix, tentry_new(str_from("link"), str_data(p), str_len(p)));
+    vec_push(mix, tentry_new(str_from("dir"), str_data(p), str_len(p)));
+    vec_push(mix, tentry_new(str_from("hard"), str_data(p), str_len(p)));
+    vec_push(mix, tentry_new(str_from("bin/ok.so"), str_data(p), str_len(p)));
+    var tm = _tar_build(mix);
+    var mb = str_data(tm);
+    store8(mb + 156, 50);              # '2' symlink
+    _t_tar_fix_sum(mb, 0);
+    store8(mb + 1024 + 156, 53);       # '5' directory
+    _t_tar_fix_sum(mb, 1024);
+    store8(mb + 2048 + 156, 49);       # '1' hardlink
+    _t_tar_fix_sum(mb, 2048);
+    var mgz = _gzip_str(tm);
+    var mnames = agpkg_inspect_bytes(str_data(mgz), str_len(mgz));
+    assert_neq(mnames, 0, "typeflags: archive accepted");
+    assert_eq(vec_len(mnames), 1, "typeflags: only the regular file listed");
+    assert_eq(names_contain(mnames, "bin/ok.so"), 1, "typeflags: regular file kept");
+    assert_eq(agpkg_read_entry(str_data(mgz), str_len(mgz), str_from("link")), 0, "typeflags: symlink not readable");
+
+    # only an all-zero block ends the archive: an empty-name header is skipped
+    var two = vec_new();
+    vec_push(two, tentry_new(str_from("a"), str_data(p), str_len(p)));
+    vec_push(two, tentry_new(str_from("b"), str_data(p), str_len(p)));
+    var tt = _tar_build(two);
+    store8(str_data(tt), 0);
+    _t_tar_fix_sum(str_data(tt), 0);
+    var tgz = _gzip_str(tt);
+    var tnames = agpkg_inspect_bytes(str_data(tgz), str_len(tgz));
+    assert_eq(names_contain(tnames, "b"), 1, "empty-name header is not end-of-archive");
+    return 0;
+}
+
 # Transport (sandhi-backed). The real HTTP/HTTPS+DNS fetch is exercised live in
 # the v0.9.2 CHANGELOG demo (local server + httpbin.org); in-process we just
 # confirm the no-network guard so `cyrius test` never opens a socket.
@@ -1423,6 +1657,27 @@ fn test_ratings_persist() {
     file_write_all(str_data(str_from(BAD)), "not valid json!!!", 17);
     assert_eq(rstore_load(str_from(BAD)), 0, "corrupt -> 0");
 
+    # v1.1.1 (D3): an out-of-range score in a ratings file is rejected on load,
+    # before get_stats / top_rated could index the 6-slot distribution with it
+    var OOR = "/tmp/mela-test-ratings-oor.json";
+    var hi = "{\"pkg\":{\"a\":{\"agent_id\":\"a\",\"package_name\":\"pkg\",\"score\":9,\"created_at\":1}}}";
+    file_write_all(str_data(str_from(OOR)), hi, strlen(hi));
+    assert_eq(rstore_load(str_from(OOR)), 0, "score 9 -> load rejected");
+    var lo = "{\"pkg\":{\"a\":{\"agent_id\":\"a\",\"package_name\":\"pkg\",\"score\":-1,\"created_at\":1}}}";
+    assert_eq(rstore_from_json(str_from(lo)), 0, "score -1 -> rejected");
+    var zero = "{\"pkg\":{\"a\":{\"agent_id\":\"a\",\"package_name\":\"pkg\",\"score\":0,\"created_at\":1}}}";
+    assert_eq(rstore_from_json(str_from(zero)), 0, "score 0 -> rejected");
+    var big = "{\"agent_id\":\"a\",\"package_name\":\"pkg\",\"score\":1000000000,\"created_at\":1}";
+    assert_eq(rating_from_json(str_from(big)), 0, "rating_from_json: score 1e9 -> 0");
+    var five = "{\"pkg\":{\"a\":{\"agent_id\":\"a\",\"package_name\":\"pkg\",\"score\":5,\"created_at\":1}}}";
+    var st5 = rstore_from_json(str_from(five));
+    assert_neq(st5, 0, "score 5 -> accepted");
+    var s5 = rstore_get_stats(st5, str_from("pkg"));
+    assert_eq(stats_dist(s5, 5), 1, "stats_dist in range");
+    assert_eq(stats_dist(s5, 9), 0, "stats_dist(9) -> 0, no read past the buffer");
+    assert_eq(stats_dist(s5, 0 - 1), 0, "stats_dist(-1) -> 0");
+    assert_eq(vec_len(rstore_top_rated(st5, 0, 0)), 1, "top_rated on a loaded store");
+
     # rating serialization
     var r = rating_new(str_from("agent-1"), str_from("pkg"), 4, 1, str_from("Good"), 100, str_from("1.0.0"));
     var r2 = rating_from_json(rating_to_json(r));
@@ -1569,6 +1824,7 @@ fn main() {
     test_agpkg();
     test_agpkg_archive();
     test_hardening();
+    test_tar_reader();
     test_transport();
     test_extraction();
     test_pipeline();

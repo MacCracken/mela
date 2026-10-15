@@ -5,6 +5,11 @@
 
 ## Version
 
+**1.1.1** — audit defects D1–D5 fixed (2026-10-14): the tar reader validates the whole archive
+before use (a crafted bundle no longer crashes `pipeline_install` pre-signature), uninstall no
+longer follows symlinks, rating scores and KeyVersions decode fail-closed, `keyring_load_dir`
+replaces the keyring (ADR-0011). 553/553.
+
 **1.1.0** — cyrius 6.7.9 (2026-10-14). agnostik 1.12.0; sigil 3.13.11 / sankoch 2.8.3 /
 sandhi 1.10.9 from the stdlib. No `src/` change; 492/492; builds for agnos and aarch64. One bench harness:
 `tests/mela.bcyr` under `cyrius bench`.
@@ -83,8 +88,9 @@ remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once 
 
 ## Tests
 
-**492/492** parity tests green (`tests/mela.tcyr` — groups across the 9 modules, plus `pipeline`
-(end-to-end), `hardening` (zip-slip), `transport` (HTTP logic), `extraction` (on-disk unpack),
+**553/553** tests green (`tests/mela.tcyr` — groups across the 9 modules, plus `pipeline`
+(end-to-end), `hardening` (zip-slip), `tar-reader` (v1.1.1: checksum, strict octal, bounds,
+duplicate names, the D1 crash input), `transport` (HTTP logic), `extraction` (on-disk unpack),
 `keyring-load` (disk `load()` + `KeyVersion` JSON round-trip), and `registry-uninstall-fs` (files
 gone after uninstall)). `trust` has SHA-256 + RFC 8032 Ed25519 KAT vectors; `registry-persist`
 / `ratings-persist` do real on-disk round-trips; `agpkg-archive` packs + inspects a gzipped-ustar
@@ -127,11 +133,11 @@ Direct (declared in `cyrius.cyml`):
 
 See [`roadmap.md`](roadmap.md). **v1.1.x** works the 2026-10-14 `rust-old/` parity audit
 ([`rust-parity.md`](rust-parity.md)):
-- Rust tests: 171 of 204 covered, 23 partial, 10 not covered.
+- Rust tests: 172 of 204 covered, 23 partial, 9 not covered.
 - `cyrius coverage`: 75% of `src/` fns referenced.
-- Twelve defects (D1–D12) to fix before `rust-old/` can be deleted. The most severe: a crafted
-  bundle crashes `pipeline_install` before the signature gate (D1), uninstall follows symlinks
-  (D2), and artifact downloads cap at 256 KiB (D7).
+- D1–D5 fixed in v1.1.1. Still open before `rust-old/` can be deleted: D6–D11, and D12's
+  unknown-category half. The most severe left are the 256 KiB download cap (D7), silent 8 MiB
+  truncation (D8) and the garbage sandbox data-dir rule (D6).
 - CI does not yet run `cyrius test`.
 
 The **v1.x** backlog maps large-bundle support, hardening residuals, API and build hygiene,

@@ -15,6 +15,8 @@ include "src/sandbox_profiles.cyr"
 include "src/ratings.cyr"
 include "src/flutter_packaging.cyr"
 include "src/flutter_agpkg.cyr"
+include "src/depgraph.cyr"
+include "src/pipeline.cyr"
 
 fn fuzz_main(data, len) {
     if (len == 0) { return 0; }
@@ -44,12 +46,14 @@ fn fuzz_main(data, len) {
 
     # sandbox profile + ratings store importers (v0.7.0)
     profile_from_json(s);
-    rstore_from_json(s);
+    var st = rstore_from_json(s);
+    if (st != 0) { rstore_top_rated(st, 0, 0); }   # v1.1.1 (D3): stats over parsed stores
 
     # packaging config + sandbox importers + the gzip/ustar inspector (v0.8.0)
     pfconfig_from_json(s);
     sbprofile_from_json(s);
     agpkg_inspect_bytes(data, len);   # arbitrary bytes -> 0, never a crash
+    _tar_scan(data, len);             # v1.1.1: raw bytes reach the tar parser (no gzip CRC gate)
 
     # verify with arbitrary bytes as the public key + a signature derived from
     # the input — must reject (0), never fault.
@@ -65,12 +69,68 @@ fn fuzz_main(data, len) {
     return 0;
 }
 
+# v1.1.1 (D1): the seeds above never pass the gzip CRC, so the tar parser was
+# never reached. Mutate every byte of a real archive's first header to eight
+# boundary values, each scanned as-is and again with the checksum recomputed
+# (so the size / typeflag / name checks run). A few size-field mutations also go
+# through gzip into pipeline_extract_manifest, the pre-signature path.
+fn _fz_val(k): i64 {
+    if (k == 0) { return 0; }
+    if (k == 1) { return 32; }    # space
+    if (k == 2) { return 33; }    # '!'
+    if (k == 3) { return 48; }    # '0'
+    if (k == 4) { return 55; }    # '7'
+    if (k == 5) { return 56; }    # '8'
+    if (k == 6) { return 128; }
+    return 255;
+}
+
+fn fuzz_tar() {
+    var m = str_from("{\"name\":\"x\",\"version\":\"1.0.0\"}");
+    var es = vec_new();
+    vec_push(es, tentry_new(str_from("manifest.json"), str_data(m), str_len(m)));
+    vec_push(es, tentry_new(str_from("sandbox.json"), str_data(m), str_len(m)));
+    var base = _tar_build(es);
+    var blen = str_len(base);
+    var buf = alloc(blen);
+    var pos = 0;
+    while (pos < 512) {
+        var k = 0;
+        while (k < 8) {
+            memcpy(buf, str_data(base), blen);
+            store8(buf + pos, _fz_val(k));
+            _tar_scan(buf, blen);
+            _tar_octal(buf, 148, 7, _tar_sum(buf, 0));
+            store8(buf + 155, 32);
+            store8(buf + pos, _fz_val(k));    # keep the mutation if it hit the chksum field
+            _tar_scan(buf, blen);
+            k = k + 1;
+        }
+        pos = pos + 1;
+    }
+    var k2 = 2;
+    while (k2 < 8) {
+        memcpy(buf, str_data(base), blen);
+        store8(buf + 124, _fz_val(k2));
+        _tar_octal(buf, 148, 7, _tar_sum(buf, 0));
+        store8(buf + 155, 32);
+        pipeline_extract_manifest(_gzip_str(str_new(buf, blen)));
+        k2 = k2 + 2;
+    }
+    return 0;
+}
+
 fn main() {
     alloc_init();
+    fuzz_tar();
     # Smoke inputs (the fuzzer replaces these with mutations): valid, partial,
     # garbage, plus crypto-shaped blobs — all have to be survived.
     fuzz_main("{\"name\":\"x\",\"version\":\"1.0.0\",\"category\":\"Utility\"}",
       strlen("{\"name\":\"x\",\"version\":\"1.0.0\",\"category\":\"Utility\"}"));
+    fuzz_main("{\"p\":{\"a\":{\"agent_id\":\"a\",\"score\":9}}}",
+      strlen("{\"p\":{\"a\":{\"agent_id\":\"a\",\"score\":9}}}"));
+    fuzz_main("{\"p\":{\"a\":{\"agent_id\":\"a\",\"score\":3}}}",
+      strlen("{\"p\":{\"a\":{\"agent_id\":\"a\",\"score\":3}}}"));
     fuzz_main("{", strlen("{"));
     fuzz_main("not json at all", strlen("not json at all"));
     fuzz_main("[]", strlen("[]"));

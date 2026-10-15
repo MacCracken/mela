@@ -33,31 +33,8 @@ Baseline at v1.1.0:
 - `cyrius coverage`: 247 of 326 `src/` fns (75%).
 - CI builds but runs no tests.
 
-### v1.1.1 — Memory safety and the trust gate
-
-The defects an attacker or a local file can reach. Fix these first.
-
-- **D1, tar reader:**
-  - `_tar_read_size` accepts only `[0-7]` (plus NUL or space terminators) and rejects negative
-    or oversized sizes.
-  - Verify the header checksum.
-  - Bound every `off` against the buffer.
-  - Reject an archive with duplicate entry names (D12).
-  - `pipeline_install` must not hang or crash on a crafted bundle **before** the signature gate.
-    Regression test: the 138-byte bundle from the audit.
-  - Add fuzz seeds that pass the gzip CRC, so the tar parser is actually fuzzed.
-- **D2, uninstall:** `_rmtree` checks `is_symlink` before `is_dir` and unlinks links without
-  following them. Test: a symlink to an outside dir survives uninstall with its target intact.
-- **D3, ratings:**
-  - Reject scores outside 1..5 on load.
-  - Bounds-check `rstore_get_stats` / `stats_dist`.
-  - Fuzz `rstore_top_rated` on parsed stores.
-- **D4, `cat_parse`:** fail on input longer than the buffer.
-- **D5, keyring:**
-  - `keyring_load_dir` replaces the keyring's contents, so a deleted key file is revoked on
-    reload.
-  - `kv_from_jv` rejects a missing or mistyped `valid_from` / `has_until` / `key_id` /
-    `public_key_hex` instead of defaulting to "never expires". This needs an ADR (stricter decode).
+v1.1.1 shipped the memory-safety group, D1–D5, plus D12's duplicate-name half (see the
+CHANGELOG and ADR-0011).
 
 ### v1.1.2 — CI gate
 
@@ -91,11 +68,12 @@ Defects that make a feature not work.
   - `registry_save_index` creates parent dirs.
 - **D10, publish:** `rc_publish` sends the signature (`X-Package-Metadata`, as Rust did).
 - **D11, assets:** walk `flutter_assets/` recursively. Correct ADR-0008's rationale.
-- **D12, manifest:** an unknown or missing `category` rejects the manifest.
+- **D12, manifest:** an unknown or missing `category` rejects the manifest. (The
+  duplicate-entry half shipped in v1.1.1.)
 
 ### v1.1.4 — Coverage catch-up
 
-- Close the 23 partial and 10 uncovered Rust tests, or mark each N/A in `rust-parity.md` with the
+- Close the 23 partial and 9 uncovered Rust tests, or mark each N/A in `rust-parity.md` with the
   reason. `RatingFilter` / `DisplayBackend` codecs have no consumer, so they are N/A candidates.
 - Add the untested-behavior assertions listed per group in `rust-parity.md` § Coverage to add.
   The ones that matter most for the trust boundary:

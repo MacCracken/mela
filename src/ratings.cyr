@@ -60,7 +60,13 @@ fn stats_total_ratings(s): i64 { return load64(s + 16); }
 fn stats_distribution(s)       { return load64(s + 24); }
 fn stats_has_latest(s): i64    { return load64(s + 32); }
 fn stats_latest_review(s): i64 { return load64(s + 40); }
-fn stats_dist(s, score): i64   { return load64(load64(s + 24) + score * 8); }
+# Ratings in the distribution for `score`; 0 for a score outside the 6-slot
+# buffer (0..5) rather than a read past it.
+fn stats_dist(s, score): i64 {
+    if (score < 0) { return 0; }
+    if (score > MAX_SCORE) { return 0; }
+    return load64(load64(s + 24) + score * 8);
+}
 
 # ---------------------------------------------------------------------------
 # RatingFilter
@@ -219,7 +225,11 @@ fn rstore_get_stats(store, package_name: Str): i64 {
     while (i < count) {
         var r = vec_get(ratings, i);
         var sc = rating_score(r);
-        store64(dist + sc * 8, load64(dist + sc * 8) + 1);
+        # scores are validated on add and on load; the guard keeps the 6-slot
+        # buffer safe regardless (D3)
+        if (sc >= MIN_SCORE) {
+            if (sc <= MAX_SCORE) { store64(dist + sc * 8, load64(dist + sc * 8) + 1); }
+        }
         total = total + sc;
         if (has_latest == 0) { has_latest = 1; latest = rating_created_at(r); }
         else { if (rating_created_at(r) > latest) { latest = rating_created_at(r); } }
@@ -314,12 +324,17 @@ fn _rating_to_jv(r): i64 {
     return o;
 }
 
+# Decode one rating; 0 if its score is outside MIN_SCORE..MAX_SCORE, the same
+# range rstore_add_rating enforces (ADR-0011).
 fn _rating_from_jv(o): i64 {
+    var score = _r_jint(o, "score");
+    if (score < MIN_SCORE) { return 0; }
+    if (score > MAX_SCORE) { return 0; }
     var rv = bayan_json_v_obj_get_by_cstr(o, "review");
     var has_review = 0;
     var review = str_from("");
     if (json_v_is_str(rv) == 1) { has_review = 1; review = json_v_str(rv); }
-    return rating_new(_r_jstr(o, "agent_id"), _r_jstr(o, "package_name"), _r_jint(o, "score"),
+    return rating_new(_r_jstr(o, "agent_id"), _r_jstr(o, "package_name"), score,
       has_review, review, _r_jint(o, "created_at"), _r_jstr(o, "version_reviewed"));
 }
 
@@ -435,7 +450,11 @@ fn rstore_from_json(json: Str): i64 {
             while (j < an) {
                 var agent = json_v_obj_key(pkg_in, j);
                 var rv = json_v_obj_val(pkg_in, j);
-                if (json_v_is_obj(rv) == 1) { map_set(pkg_map, agent, _rating_from_jv(rv)); }
+                if (json_v_is_obj(rv) == 1) {
+                    var rating = _rating_from_jv(rv);
+                    if (rating == 0) { return 0; }     # out-of-range score: corrupt file
+                    map_set(pkg_map, agent, rating);
+                }
                 j = j + 1;
             }
             map_set(store, pkg, pkg_map);

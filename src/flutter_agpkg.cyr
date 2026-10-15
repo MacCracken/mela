@@ -379,14 +379,8 @@ fn _tar_header(buf, off, name: Str, size): i64 {
     store8(buf + off + 257, 117); store8(buf + off + 258, 115); store8(buf + off + 259, 116);
     store8(buf + off + 260, 97);  store8(buf + off + 261, 114); store8(buf + off + 262, 0);
     store8(buf + off + 263, 48);  store8(buf + off + 264, 48);
-    # checksum over header with chksum field as 8 spaces
-    var c = 0;
-    while (c < 8) { store8(buf + off + 148 + c, 32); c = c + 1; }
-    var sum = 0;
-    var j = 0;
-    while (j < 512) { sum = sum + (load8(buf + off + j) & 0xFF); j = j + 1; }
-    _tar_octal(buf, off + 148, 7, sum);      # 6 octal digits + NUL
-    store8(buf + off + 148 + 7, 32);         # trailing space
+    _tar_octal(buf, off + 148, 7, _tar_sum(buf, off));   # 6 octal digits + NUL
+    store8(buf + off + 148 + 7, 32);                      # trailing space
     return 0;
 }
 
@@ -514,23 +508,111 @@ fn _tar_read_name(buf, off): Str {
     return str_new(nb, len);
 }
 
-# Parse the octal size field (offset 124, 12 bytes; stops at NUL/space).
-fn _tar_read_size(buf, off): i64 {
-    var v = 0;
+# Header checksum: the unsigned byte sum of the 512-byte header with the 8-byte
+# chksum field (offset 148) counted as spaces.
+fn _tar_sum(buf, off): i64 {
+    var sum = 0;
+    var j = 0;
+    while (j < 512) {
+        if (j >= 148) {
+            if (j < 156) { sum = sum + 32; }
+            else { sum = sum + (load8(buf + off + j) & 0xFF); }
+        } else { sum = sum + (load8(buf + off + j) & 0xFF); }
+        j = j + 1;
+    }
+    return sum;
+}
+
+# Parse a `width`-byte octal header field at buf+off: optional leading spaces,
+# one or more digits 0-7, then only NUL / space to the end of the field. Returns
+# the value, or -1 for anything else (base-256, stray bytes, no digits). Strict
+# on purpose: a lenient parse let a crafted size go negative and walk the reader
+# backwards before the signature gate (D1, docs/development/rust-parity.md).
+fn _tar_read_octal(buf, off, width): i64 {
     var i = 0;
-    var done = 0;
-    while (i < 12) {
-        if (done == 0) {
-            var c = load8(buf + off + 124 + i) & 0xFF;
-            if (c == 0) { done = 1; }
-            else {
-                if (c == 32) { done = 1; }
-                else { v = v * 8 + (c - 48); }
-            }
+    var lead = 1;
+    while (lead == 1) {
+        if (i >= width) { lead = 0; }
+        else { if (load8(buf + off + i) == 32) { i = i + 1; } else { lead = 0; } }
+    }
+    var v = 0;
+    var digits = 0;
+    var go = 1;
+    while (go == 1) {
+        if (i >= width) { go = 0; }
+        else {
+            var c = load8(buf + off + i) & 0xFF;
+            if (c >= 48) {
+                if (c <= 55) { v = v * 8 + (c - 48); digits = digits + 1; i = i + 1; }
+                else { go = 0; }
+            } else { go = 0; }
         }
+    }
+    if (digits == 0) { return 0 - 1; }
+    while (i < width) {
+        var t = load8(buf + off + i) & 0xFF;
+        if (t != 0) { if (t != 32) { return 0 - 1; } }
         i = i + 1;
     }
     return v;
+}
+
+fn _tar_read_size(buf, off): i64 { return _tar_read_octal(buf, off + 124, 12); }
+
+# 1 if the 512-byte block at buf+off is all zero (end-of-archive marker).
+fn _tar_block_zero(buf, off): i64 {
+    var i = 0;
+    while (i < 512) {
+        if (load8(buf + off + i) != 0) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# 1 if the stored checksum matches the header. GNU tar also accepts the
+# historic signed-byte sum, so this does too.
+fn _tar_checksum_ok(buf, off): i64 {
+    var want = _tar_read_octal(buf, off + 148, 8);
+    if (want < 0) { return 0; }
+    var u = _tar_sum(buf, off);
+    if (want == u) { return 1; }
+    var sgn = u;
+    var j = 0;
+    while (j < 512) {
+        if (j < 148) { if ((load8(buf + off + j) & 0xFF) >= 128) { sgn = sgn - 256; } }
+        if (j >= 156) { if ((load8(buf + off + j) & 0xFF) >= 128) { sgn = sgn - 256; } }
+        j = j + 1;
+    }
+    if (want == sgn) { return 1; }
+    return 0;
+}
+
+# Walk and validate a whole ustar archive of `blen` bytes. Returns a Vec of
+# tar entries (name, data pointer into `buf`, size) for the safe regular files,
+# or 0 if the archive is malformed: a bad checksum, a size field that is not
+# strict octal, an entry whose data runs past the archive, or two safe entries
+# with the same name (the bundle disclosed pre-install must be the bundle
+# installed). Unsafe entries (links, dirs, traversal names) are skipped, as
+# before. The single walker behind inspect, read_entry and extract.
+fn _tar_scan(buf, blen): i64 {
+    var entries = vec_new();
+    var seen = map_new_str();
+    var off = 0;
+    while (off + 512 <= blen) {
+        if (_tar_block_zero(buf, off) == 1) { return entries; }   # end of archive
+        if (_tar_checksum_ok(buf, off) == 0) { return 0; }
+        var size = _tar_read_size(buf, off);
+        if (size < 0) { return 0; }
+        if (size > blen - off - 512) { return 0; }                # data past the end
+        if (_tar_entry_safe(buf, off) == 1) {
+            var name = _tar_read_name(buf, off);
+            if (map_has(seen, name) == 1) { return 0; }           # duplicate entry
+            map_set(seen, name, 1);
+            vec_push(entries, tentry_new(name, buf + off + 512, size));
+        }
+        off = off + 512 + _roundup512(size);
+    }
+    return entries;
 }
 
 # agpkg_inspect — gunzip + parse the ustar archive at `path`, returning a Vec of
@@ -560,97 +642,71 @@ fn _tar_entry_safe(buf, off): i64 {
 }
 
 # agpkg_read_entry — gunzip + find the entry named `name`, returning its content
-# bytes as a Str (or 0 if absent / on a decompress error). Bounds-checked. Used
-# to pull manifest.json / sandbox.json back out of a packed bundle (backs the
-# local_registry on-disk extraction, ADR-0005 — now implemented).
+# bytes as a Str (or 0 if absent, unsafe, or the archive is malformed / fails to
+# decompress). Used to pull manifest.json / sandbox.json back out of a packed
+# bundle (backs the local_registry on-disk extraction, ADR-0005).
 fn agpkg_read_entry(data, len, name: Str): i64 {
     var dst = alloc(AGPKG_BUF_MAXLEN);
     var dlen = gzip_decompress(data, len, dst, AGPKG_BUF_MAXLEN);
     if (dlen < 0) { return 0; }
-    var off = 0;
-    var go = 1;
-    var found = 0;
-    while (go == 1) {
-        if (off + 512 > dlen) { go = 0; }
-        else {
-            if (load8(dst + off) == 0) { go = 0; }
-            else {
-                var esize = _tar_read_size(dst, off);
-                if (str_eq(_tar_read_name(dst, off), name) == 1) {
-                    # only return content for a safe regular-file entry
-                    if (_tar_entry_safe(dst, off) == 1) {
-                        if (off + 512 + esize <= dlen) {
-                            var out = alloc(esize + 1);
-                            memcpy(out, dst + off + 512, esize);
-                            store8(out + esize, 0);
-                            found = str_new(out, esize);
-                        }
-                    }
-                    go = 0;
-                } else {
-                    off = off + 512 + _roundup512(esize);
-                }
-            }
+    var entries = _tar_scan(dst, dlen);
+    if (entries == 0) { return 0; }
+    var n = vec_len(entries);
+    var i = 0;
+    while (i < n) {
+        var e = vec_get(entries, i);
+        if (str_eq(tentry_name(e), name) == 1) {
+            var esize = tentry_len(e);
+            var out = alloc(esize + 1);
+            memcpy(out, tentry_data(e), esize);
+            store8(out + esize, 0);
+            return str_new(out, esize);
         }
+        i = i + 1;
     }
-    return found;
+    return 0;
 }
 
 # agpkg_extract_to_dir — gunzip + extract every safe regular-file entry of the
-# bundle to disk under `dest` (creating parent dirs), applying the zip-slip /
-# symlink guard per entry. Returns the number of files written, or -1 on a
-# decompress error. This is the real on-disk extractor (closes ADR-0005).
+# bundle to disk under `dest` (creating parent dirs). The whole archive is
+# validated before anything is written. Returns the number of files written, or
+# -1 on a decompress error or a malformed archive (closes ADR-0005).
 fn agpkg_extract_to_dir(data, len, dest: Str): i64 {
     var dst = alloc(AGPKG_BUF_MAXLEN);
     var dlen = gzip_decompress(data, len, dst, AGPKG_BUF_MAXLEN);
     if (dlen < 0) { return 0 - 1; }
+    var entries = _tar_scan(dst, dlen);
+    if (entries == 0) { return 0 - 1; }
     _rc_mkdir_p(dest);
-    var off = 0;
-    var go = 1;
+    var n = vec_len(entries);
     var count = 0;
-    while (go == 1) {
-        if (off + 512 > dlen) { go = 0; }
-        else {
-            if (load8(dst + off) == 0) { go = 0; }
-            else {
-                var esize = _tar_read_size(dst, off);
-                if (_tar_entry_safe(dst, off) == 1) {       # zip-slip / symlink guard
-                    if (off + 512 + esize <= dlen) {
-                        var outpath = path_join(dest, _tar_read_name(dst, off));
-                        _rc_mkdir_p(path_dirname(outpath));   # ensure parent dirs
-                        if (file_write_all(str_data(outpath), dst + off + 512, esize) >= 0) {
-                            count = count + 1;
-                        }
-                    }
-                }
-                off = off + 512 + _roundup512(esize);
-            }
+    var i = 0;
+    while (i < n) {
+        var e = vec_get(entries, i);
+        var outpath = path_join(dest, tentry_name(e));
+        _rc_mkdir_p(path_dirname(outpath));   # ensure parent dirs
+        if (file_write_all(str_data(outpath), tentry_data(e), tentry_len(e)) >= 0) {
+            count = count + 1;
         }
+        i = i + 1;
     }
     return count;
 }
 
-# Gunzip + parse a gzipped-ustar byte buffer; returns a Vec of entry-name Strs,
-# or 0 on a decompress error. Robust to arbitrary input (bounds-checked) — the
-# fuzz entry point.
+# Gunzip + parse a gzipped-ustar byte buffer; returns a Vec of the safe entry
+# names, or 0 on a decompress error or a malformed archive. The fuzz entry point.
 fn agpkg_inspect_bytes(data, len): i64 {
     var dst = alloc(AGPKG_BUF_MAXLEN);
     var dlen = gzip_decompress(data, len, dst, AGPKG_BUF_MAXLEN);
     if (dlen < 0) { return 0; }
+    var entries = _tar_scan(dst, dlen);
+    if (entries == 0) { return 0; }
     var names = vec_new();
-    var off = 0;
-    var go = 1;
-    while (go == 1) {
-        if (off + 512 > dlen) { go = 0; }
-        else {
-            if (load8(dst + off) == 0) { go = 0; }     # zero block => EOF
-            else {
-                # only list safe regular-file entries (zip-slip / symlink escapes
-                # are skipped, not surfaced as installable — v0.9.0 hardening)
-                if (_tar_entry_safe(dst, off) == 1) { vec_push(names, _tar_read_name(dst, off)); }
-                off = off + 512 + _roundup512(_tar_read_size(dst, off));
-            }
-        }
+    var n = vec_len(entries);
+    var i = 0;
+    while (i < n) {
+        vec_push(names, tentry_name(vec_get(entries, i)));
+        i = i + 1;
     }
     return names;
 }

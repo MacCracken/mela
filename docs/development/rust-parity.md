@@ -1,20 +1,20 @@
 # rust-old parity record
 
-> Audited 2026-10-14 against v1.1.0 (cyrius 6.7.9). This file is the record that outlives
+> Audited 2026-10-14 against v1.1.0 (cyrius 6.7.9); D1–D5 fixed in v1.1.1. This file is the record that outlives
 > `rust-old/`: once the oracle is deleted, every Rust behavior mela chose to keep, drop or change
 > must be written here or in an ADR. Work items live in [`roadmap.md`](roadmap.md) § v1.1.x.
 
 ## Summary
 
 The port reproduces the Rust surface, and in several places is stricter than Rust. But
-`rust-old/` cannot be deleted yet. The suite misses 33 of Rust's 204 tests (23 partial, 10
-uncovered). The review also found defects in mela's own code and behavior changes that no ADR
+`rust-old/` cannot be deleted yet. The suite misses 32 of Rust's 204 tests (23 partial, 9
+uncovered; `keyring_load_malformed_file` was covered in v1.1.1). The review also found defects in mela's own code and behavior changes that no ADR
 records.
 
 | Rust module → Cyrius | Rust tests | Covered | Partial | Not covered | Verdict |
 |---|---:|---:|---:|---:|---|
 | `lib.rs` → `category` / `manifest` / `depgraph` | 23 | 22 | 0 | 1 | ready after tests + ADRs |
-| `trust.rs` → `trust` | 23 | 20 | 2 | 1 | ready after keyring fixes |
+| `trust.rs` → `trust` | 23 | 21 | 2 | 0 | ready after tests |
 | `transparency.rs` → `transparency` | 15 | 15 | 0 | 0 | ready after chain-check tests |
 | `local_registry.rs` → `local_registry` + `pipeline` | 19 | 16 | 2 | 1 | ready after `_rmtree` fix + ADR |
 | `remote_client.rs` → `remote_client` | 20 | 19 | 0 | 1 | ready after transport fixes |
@@ -22,7 +22,7 @@ records.
 | `ratings.rs` → `ratings` | 43 | 33 | 8 | 2 | ready after bounds fix + ADR |
 | `flutter_packaging.rs` → `flutter_packaging` | 21 | 15 | 4 | 2 | ready after tests + ADR |
 | `flutter_agpkg.rs` → `flutter_agpkg` | 15 | 14 | 0 | 1 | ready after reader fix + size policy |
-| **Total** | **204** | **171** | **23** | **10** | |
+| **Total** | **204** | **172** | **23** | **9** | |
 
 Reference coverage (`cyrius coverage`) is 247 of 326 `src/` fns (75%). That counts functions
 named in a test, not lines executed.
@@ -34,18 +34,18 @@ it was confirmed in the source, with the mechanism traced.
 
 | # | Severity | Defect | Status |
 |---|---|---|---|
-| D1 | Critical | `_tar_read_size` (`flutter_agpkg.cyr`) treats any byte as an octal digit, so a crafted size field is negative and the reader walks backwards. `pipeline_install` parses the manifest **before** the signature gate, so a 138-byte unsigned bundle crashes it (SIGSEGV). The reader also skips the header checksum and treats a leading NUL as end-of-archive. | Reproduced |
-| D2 | High | `_rmtree` (uninstall) recurses through `is_dir`, which follows symlinks. A symlink inside an install dir gets its **target's** contents deleted. Rust's `remove_dir_all` removes the link. | Read |
-| D3 | High | `rstore_get_stats` indexes a 6-slot buffer by an unchecked score. A ratings file loaded with `"score": 9` writes past the heap allocation. | Read |
-| D4 | High | `cat_parse` copies its input into a 64-byte stack buffer with no bound (public API). | Read |
-| D5 | High | `keyring_load_dir` never clears the keyring (Rust `keys.clear()`), so a revoked key survives a reload. `kv_from_jv` defaults a missing `has_until` to "never expires". | Read |
+| D1 | Critical | `_tar_read_size` (`flutter_agpkg.cyr`) treats any byte as an octal digit, so a crafted size field is negative and the reader walks backwards. `pipeline_install` parses the manifest **before** the signature gate, so a 138-byte unsigned bundle crashes it (SIGSEGV). The reader also skips the header checksum and treats a leading NUL as end-of-archive. | Fixed v1.1.1 (reproduced) |
+| D2 | High | `_rmtree` (uninstall) recurses through `is_dir`, which follows symlinks. A symlink inside an install dir gets its **target's** contents deleted. Rust's `remove_dir_all` removes the link. | Fixed v1.1.1 |
+| D3 | High | `rstore_get_stats` indexes a 6-slot buffer by an unchecked score. A ratings file loaded with `"score": 9` writes past the heap allocation. | Fixed v1.1.1 |
+| D4 | High | `cat_parse` copies its input into a 64-byte stack buffer with no bound (public API). | Fixed v1.1.1 |
+| D5 | High | `keyring_load_dir` never clears the keyring (Rust `keys.clear()`), so a revoked key survives a reload. `kv_from_jv` defaults a missing `has_until` to "never expires". | Fixed v1.1.1 |
 | D6 | High | Six of seven sandbox presets pass the `data_dir` Str through `str_from`, so their first rule's path is garbage, not the app's data dir (Custom is correct). | Reproduced |
 | D7 | High | Downloads use sandhi's buffered GET with default options: a **256 KiB** response cap, so larger `.ark` / `.agnos-agent` fetches fail. There are no timeouts (`REQUEST_TIMEOUT` / `DOWNLOAD_TIMEOUT` are defined but unused), and redirects are not followed. | Read |
 | D8 | High | The packer's `_read_file` stops at 8 MiB with no error, so a large engine `.so` is packed truncated. The 8 MiB decompress cap also makes such bundles uninstallable. Rust's limit was `MAX_PACKAGE_SIZE` = 100 MB compressed. | Read |
 | D9 | Medium | `pipeline_install` records the install before extracting and ignores extraction and index-save failures. A corrupt or >1 MiB `index.json` silently loads as empty, and the next save overwrites it. | Read |
 | D10 | Medium | `rc_publish` sends no signature or `X-Package-Metadata`, so the signature never reaches the registry. | Read |
 | D11 | Medium | The packer walks `flutter_assets/` one level deep and drops `fonts/`, `shaders/` and `packages/**` (Rust recursed). ADR-0008's rationale for this is wrong. | Read |
-| D12 | Medium | An unknown or missing `category` decodes to `-1` and installs. Duplicate tar entry names let the disclosed `sandbox.json` differ from the one written to disk. | Read |
+| D12 | Medium | An unknown or missing `category` decodes to `-1` and installs. Duplicate tar entry names let the disclosed `sandbox.json` differ from the one written to disk. | Read; duplicate names fixed v1.1.1 |
 
 ## Behavior changes with no ADR
 
@@ -163,9 +163,9 @@ Grouped by `tests/mela.tcyr` group. The Rust tests named here are the 33 partial
   - Typeflag `1`/`2`/`5` entries rejected.
   - Crafted size fields (D1).
   - Duplicate names (D12).
-- **fuzz:** `tests/mela.fcyr`'s seeds never pass the gzip CRC, so **the tar parser has never
-  been fuzzed**. That is why D1 survived. Add seeds with a valid gzip wrapper around a mutated
-  tar.
+- **fuzz:** *(done v1.1.1)* the seeds never passed the gzip CRC, so the tar parser had never
+  been fuzzed, which is why D1 survived. The harness now runs `_tar_scan` on raw input and
+  mutates a real archive's header.
 - **Independent format oracle:** script the GNU `tar` cross-check from ADR-0008. It ran once by
   hand, and once `rust-old/` is gone it is the only outside check on the bundle format.
 
@@ -173,7 +173,7 @@ Grouped by `tests/mela.tcyr` group. The Rust tests named here are the 33 partial
 
 `rust-old/` can be deleted when all of these hold:
 
-- [ ] D1–D12 fixed, each with a regression test.
+- [ ] D1–D12 fixed, each with a regression test. *(D1–D5 and D12's duplicate-name half: v1.1.1.)*
 - [ ] Each "behavior change with no ADR" above is either matched to Rust or recorded in an ADR.
 - [ ] The 33 partial or uncovered Rust tests are covered, or marked N/A here with the reason.
 - [ ] CI runs `cyrius test`, `cyrius fuzz` and the GNU-tar cross-check.

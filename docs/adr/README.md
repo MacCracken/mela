@@ -51,3 +51,7 @@ Decisions about mela — what we chose, the context, and the consequences we acc
 - [0010 — Ship mela as a consumable library (dist bundle)](0010-library-packaging-dist-bundle.md) —
   *Accepted (v0.9.2)* · `[lib]` + `cyrius distlib` → `dist/mela.cyr`; the bundle ark consumes via
   `[deps.mela]`. Proven by a dist-only consumer running the full pipeline.
+- [0011 — Fail-closed decoding for keys, ratings and bundles](0011-fail-closed-decoding-at-the-trust-boundary.md) —
+  *Accepted (v1.1.1)* · the tar reader validates the whole archive (checksum, strict octal, bounds,
+  no duplicate names); out-of-range rating scores and incomplete KeyVersions are rejected, not
+  defaulted; `keyring_load_dir` replaces the keyring so a deleted key file is revoked.

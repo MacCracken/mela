@@ -40,7 +40,7 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   `CAT_SYSTEM`; `CAT_COUNT`; `CAT_PARSE_FAIL` (sentinel).
 - `cat_name(cat): cstring` — canonical lowercase display name (`Display`).
 - `cat_parse(s): i64` — case-insensitive `FromStr` (+ `dev-tool`/`desktopapp` aliases), or
-  `CAT_PARSE_FAIL`.
+  `CAT_PARSE_FAIL` (also for input over 63 bytes).
 
 ## manifest — `src/manifest.cyr`
 
@@ -81,10 +81,12 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   `mela_kv_is_valid_at(kv, when): i64`; `kv_verifying_key(kv): pk|0` (hex→32 bytes, validated).
 - `mela_keyring_new()`; `mela_keyring_add_key(kr, kv)`; `keyring_get_current_key(kr, key_id, now): kv|0`;
   `mela_keyring_get_all_versions` / `mela_keyring_len` / `mela_keyring_is_empty`.
-- `keyring_load_dir(kr, dir: Str): count` — load every `*.json` key file in `dir` (each a JSON
-  array of `KeyVersion`) into the keyring; non-json files ignored, absent dir → 0 (parity with
-  rust-old `PublisherKeyring::load`). `KeyVersion` JSON codec: `kv_to_json(kv): Str` /
-  `kv_from_json(json: Str): kv|0`.
+- `keyring_load_dir(kr, dir: Str): count` — **replace** the keyring's contents with every
+  `*.json` key file in `dir` (each a JSON array of `KeyVersion`); a file with one malformed
+  version is skipped whole, non-json files are ignored, an absent dir empties the keyring and
+  returns 0 (parity with rust-old `PublisherKeyring::load`; v1.1.1, ADR-0011). `KeyVersion` JSON
+  codec: `kv_to_json(kv): Str` / `kv_from_json(json: Str): kv|0` — every field `kv_to_json`
+  writes is required (`has_until` 0/1; `valid_until` when it is 1); nothing defaults.
 
 ## transparency — `src/transparency.cyr`
 
@@ -171,11 +173,13 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
 - `rstore_get_ratings(store, filter): Vec` (newest first); `filter_new()` + `filter_set_min_score`
   / `_set_package` / `_set_agent` / `_set_from` / `_set_until`.
 - `rstore_get_stats(store, package: Str): RatingStats*|0` — `stats_average_score` is an f64
-  (`f64_to` for the integer part); `stats_total_ratings` / `stats_dist(s, score)` /
+  (`f64_to` for the integer part); `stats_total_ratings` / `stats_dist(s, score)` (0 outside
+  0..5) /
   `stats_latest_review`.
 - `rstore_top_rated(store, has_min, min_ratings): Vec` (avg desc, total tiebreak);
   `rstore_total_count` / `rstore_package_count`.
-- Persistence: `rstore_save(store, path: Str)` / `rstore_load(path): store|0`;
+- Persistence: `rstore_save(store, path: Str)` / `rstore_load(path): store|0` (a score outside
+  1..5 rejects the file, v1.1.1);
   `rating_to_json`/`from_json`, `stats_to_json`/`from_json`, `rstore_to_json`/`from_json`.
 
 ## flutter_packaging — `src/flutter_packaging.cyr`
@@ -200,8 +204,10 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   `sbprofile_to_json` / `from_json`).
 - Archive (gzip + ustar): `pack_flutter_app(build_dir, config, output_dir: Str): path|0`;
   `agpkg_inspect(path: Str): Vec<name>|0`; `agpkg_inspect_bytes(data, len): Vec|0`;
-  `agpkg_read_entry(data, len, name: Str): content|0`. The reader rejects symlink/hardlink and
-  `..`/absolute entries (v0.9.0 hardening).
+  `agpkg_read_entry(data, len, name: Str): content|0`. The reader skips symlink/hardlink and
+  `..`/absolute entries (v0.9.0 hardening), and rejects the whole archive (`0`, or `-1` from
+  `agpkg_extract_to_dir`) on a bad header checksum, a non-octal numeric field, data past the end
+  of the archive, or two entries with the same name (v1.1.1, ADR-0011).
 
 ## pipeline — `src/pipeline.cyr`
 

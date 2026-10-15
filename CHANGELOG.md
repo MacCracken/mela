@@ -4,7 +4,80 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
-## [Unreleased]
+## [1.1.1] - 2026-10-14
+
+**Memory safety and the trust gate: audit defects D1–D5 fixed** (from
+[`docs/development/rust-parity.md`](docs/development/rust-parity.md)). Each fix comes with a
+regression test that fails against v1.1.0. `cyrius build` OK (3,206,056 B); 553 passed /
+0 failed (was 492); fuzz 1 / 0; bench 1 / 0. `--agnos` and `--aarch64` build, and `distlib`
+compile-verifies the bundle. New [ADR-0011](docs/adr/0011-fail-closed-decoding-at-the-trust-boundary.md)
+records the stricter decoding.
+
+### Security — a crafted bundle crashed `pipeline_install` before the signature gate (D1)
+
+The ustar reader parsed the size field with `v*8 + (c-48)` for any byte, so `"!(1"` produced a
+negative size. The reader then walked backwards. `pipeline_install` reads `manifest.json` out of
+the bundle to find the publisher's key, before verifying anything, so an **unsigned 138-byte
+bundle crashed it with SIGSEGV**.
+
+One validating walker, `_tar_scan`, now sits behind inspect, read and extract, and the whole
+archive is checked before anything is read or written. It rejects:
+- a header whose checksum fails (unsigned or signed sum, as GNU tar accepts);
+- a numeric field that is not strict octal;
+- an entry whose data runs past the archive;
+- two safe entries with the same name. Previously `agpkg_read_entry` returned the first copy
+  while extraction wrote the last, so the sandbox disclosed before install could differ from
+  the one installed (the duplicate-name half of D12).
+
+Only an all-zero block now ends the archive. GNU, ustar and pax archives from GNU tar still read
+byte-exact. New `tar-reader` test group (23 assertions), including the audit's crash input
+through `pipeline_install`.
+
+**Fuzzing now reaches the parser.** Every seed in `tests/mela.fcyr` failed the gzip CRC, so the
+tar parser had never been fuzzed. The harness now:
+- runs `_tar_scan` directly on raw input;
+- mutates all 512 bytes of a real archive's first header to 8 boundary values, scanning each as
+  is and again with the checksum recomputed;
+- sends size-field mutations through gzip into `pipeline_extract_manifest`.
+
+Performance: the stricter scan costs nothing measurable. `agpkg_inspect` divided by
+`sha256_hash` within one run is 139–141× (138× at v1.1.0); absolute rows varied ±50% between
+runs on a noisy host.
+
+### Security — uninstall followed symlinks out of the install dir (D2)
+
+`_rmtree` recursed whenever `is_dir` was true, and `is_dir` stats through symlinks. A link an
+app left in its own install dir (`data -> $HOME`) got its **target's** contents deleted on
+uninstall, and so did an install dir that was itself a link. `_rmtree` now unlinks a symlink
+without following it, as Rust's `remove_dir_all` did. Tests plant both kinds of link; against
+v1.1.0 they fail with the target's files gone.
+
+### Security — out-of-range rating scores wrote past the heap (D3)
+
+`rstore_from_json` accepted any score, and `rstore_get_stats` then indexed its 6-slot
+distribution with it. A score outside 1..5 now rejects the ratings file (`rating_from_json` /
+`rstore_from_json` / `rstore_load` → 0). `get_stats` guards the index as well. `stats_dist(s,
+score)` returns 0 outside 0..5 instead of reading past the buffer. The fuzz harness runs
+`rstore_top_rated` on every store it parses.
+
+### Security — `cat_parse` overran a 64-byte stack buffer (D4)
+
+Input longer than 63 bytes now returns `CAT_PARSE_FAIL`; the longest category name is 12 bytes.
+
+### Security — revoked keys survived a reload; incomplete keys never expired (D5)
+
+- `keyring_load_dir` **replaces** the keyring, as Rust's `load()` did with `keys.clear()`. A key
+  file deleted between loads is now revoked. Before, it stayed trusted until the process made a
+  fresh keyring.
+  - An absent dir empties the keyring.
+  - A file with one malformed version is skipped whole (Rust's `Vec<KeyVersion>` parse).
+- `kv_from_json` requires every field `kv_to_json` writes. A missing `has_until` used to decode
+  as "never expires", and a Rust-shaped file with RFC 3339 strings decoded as a key valid from
+  epoch 0 forever. Now both decode to 0.
+
+**Behavior change (ADR-0011):** a caller that added keys by hand and then called
+`keyring_load_dir` on the same keyring loses them. Load into a fresh keyring, or add the keys
+after loading. Hand-written key files must spell out `has_until`.
 
 ### Docs — `rust-old/` parity audit; roadmap rewritten
 

@@ -262,8 +262,15 @@ fn registry_install(r, manifest, package_hash: Str, installed_size, installed_at
 
 # Recursively delete a directory tree (files via unlink, dirs via rmdir after
 # their contents). Returns the number of files removed. Mirrors Rust
-# count_files + remove_dir_all on uninstall.
+# count_files + remove_dir_all on uninstall. A symlink is removed, never
+# followed: is_dir stats through links, so without this check a link an app
+# left in its install dir got its TARGET's contents deleted (D2). Checked here
+# rather than per entry so an install dir that is itself a link is covered too.
 fn _rmtree(dir: Str): i64 {
+    if (is_symlink(dir) == 1) {
+        xunlink(str_data(dir));
+        return 1;
+    }
     var entries = dir_list(dir);
     var n = vec_len(entries);
     var i = 0;

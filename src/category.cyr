@@ -48,6 +48,9 @@ fn cat_lower(s, out): i64 {
 # Case-insensitive; accepts the dev-tool / desktopapp aliases (Rust parity).
 fn cat_parse(s): i64 {
     if (s == 0) { return CAT_PARSE_FAIL; }
+    # every name fits in 12 bytes; anything that would overrun `lower` (with its
+    # NUL) is not a category (D4)
+    if (strlen(s) > 63) { return CAT_PARSE_FAIL; }
     var lower[64];
     cat_lower(s, &lower);
     if (streq(&lower, "utility"))      { return CAT_UTILITY; }

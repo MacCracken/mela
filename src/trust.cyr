@@ -220,10 +220,37 @@ fn kv_to_jv(kv): i64 {
     json_v_obj_set(o, str_from("public_key_hex"), json_v_str_new(mela_kv_public_key_hex(kv)));
     return o;
 }
+# 1 if `key` is present in `o` as a string / an integer.
+fn _kv_field_str(o, key): i64 {
+    var v = bayan_json_v_obj_get_by_cstr(o, key);
+    if (v == 0) { return 0; }
+    return json_v_is_str(v);
+}
+fn _kv_field_int(o, key): i64 {
+    var v = bayan_json_v_obj_get_by_cstr(o, key);
+    if (v == 0) { return 0; }
+    return json_v_is_int(v);
+}
+
+# Decode one KeyVersion, or 0. Every field kv_to_jv writes must be present with
+# its type: key_id / public_key_hex strings, valid_from / has_until integers,
+# has_until 0 or 1, and valid_until an integer when has_until is 1. Nothing is
+# defaulted: a missing has_until used to decode as "never expires" (D5, ADR-0011).
 fn kv_from_jv(o): i64 {
     if (json_v_is_obj(o) == 0) { return 0; }
-    return kv_new(_kv_jstr(o, "key_id"), _kv_jint(o, "valid_from"), _kv_jint(o, "has_until"),
-      _kv_jint(o, "valid_until"), _kv_jstr(o, "public_key_hex"));
+    if (_kv_field_str(o, "key_id") == 0) { return 0; }
+    if (_kv_field_str(o, "public_key_hex") == 0) { return 0; }
+    if (_kv_field_int(o, "valid_from") == 0) { return 0; }
+    if (_kv_field_int(o, "has_until") == 0) { return 0; }
+    var has_until = _kv_jint(o, "has_until");
+    if (has_until != 0) { if (has_until != 1) { return 0; } }
+    var valid_until = 0;
+    if (has_until == 1) {
+        if (_kv_field_int(o, "valid_until") == 0) { return 0; }
+        valid_until = _kv_jint(o, "valid_until");
+    }
+    return kv_new(_kv_jstr(o, "key_id"), _kv_jint(o, "valid_from"), has_until, valid_until,
+      _kv_jstr(o, "public_key_hex"));
 }
 fn kv_to_json(kv): Str { return json_v_build(kv_to_jv(kv)); }
 fn kv_from_json(json: Str): i64 {
@@ -239,10 +266,14 @@ fn _ends_dot_json(nm: Str): i64 {
     return str_eq_cstr(str_sub(nm, n - 5, 5), ".json");
 }
 
-# keyring_load_dir(kr, dir) — load every `*.json` key file in `dir`, each a JSON
-# ARRAY of KeyVersion objects, into the keyring. Returns the count added (0 if
-# the dir is absent). Mirrors Rust `PublisherKeyring::load` (resolves ADR-0003).
+# keyring_load_dir(kr, dir) — replace the keyring's contents with every `*.json`
+# key file in `dir`, each a JSON ARRAY of KeyVersion objects. Returns the count
+# loaded (0, with the keyring emptied, if the dir is absent). Mirrors Rust
+# `PublisherKeyring::load` (resolves ADR-0003; clear-on-load is ADR-0011).
 fn keyring_load_dir(kr, dir: Str): i64 {
+    # A load replaces the keyring, as Rust's load() did (keys.clear()): a key file
+    # deleted between loads is a revoked key, not one that stays trusted (D5).
+    map_clear(kr);
     if (is_dir(dir) == 0) { return 0; }
     var entries = dir_list(dir);
     var n = vec_len(entries);
@@ -258,12 +289,24 @@ fn keyring_load_dir(kr, dir: Str): i64 {
                 var root = json_v_parse_buf(buf, rn);
                 if (root != 0) {
                     if (json_v_is_arr(root) == 1) {
+                        # a file loads whole or not at all: one malformed version
+                        # skips the file (Rust: the Vec<KeyVersion> parse fails)
+                        var parsed = vec_new();
+                        var ok = 1;
                         var an = json_v_arr_len(root);
                         var j = 0;
                         while (j < an) {
                             var kv = kv_from_jv(json_v_arr_get(root, j));
-                            if (kv != 0) { mela_keyring_add_key(kr, kv); count = count + 1; }
+                            if (kv == 0) { ok = 0; } else { vec_push(parsed, kv); }
                             j = j + 1;
+                        }
+                        if (ok == 1) {
+                            var k = 0;
+                            while (k < vec_len(parsed)) {
+                                mela_keyring_add_key(kr, vec_get(parsed, k));
+                                count = count + 1;
+                                k = k + 1;
+                            }
                         }
                     }
                 }
