@@ -18,6 +18,13 @@
 - **Wire format** is JSON (ADR-0001): category & enum values serialize as their PascalCase
   serde variant name; `*_to_json` / `*_from_json` round-trip; `from_json` returns `0` on a
   parse error.
+- **Decoding is strict (v1.1.5, ADR-0013).** Every `*_from_json` / `*_from_jv` follows Rust's
+  serde rules: a required field missing or of the wrong type, an optional field present with the
+  wrong type, a negative value in an unsigned field, or an unknown enum name returns `0`. Absent
+  optional fields take their default. Timestamps are integers in every mela format. The
+  per-decoder field table is in ADR-0013.
+- **Text is Unicode-aware (v1.1.5, ADR-0013):** case-insensitive comparisons lowercase with
+  Unicode simple case mapping; `sanitize_filename` keeps letters and digits in any script.
 - **Field accessors** follow `<type>_<field>(ptr)` and are not all listed individually below;
   the constructor's field order is the struct layout. Setters are `<type>_set_<field>`.
 - **Namespacing (v0.9.3):** 15 public symbols that collided with co-bundled deps (nous, sigil) are
@@ -52,7 +59,8 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   `man_publisher` / `man_category` / `man_runtime` / `man_screenshots` / `man_changelog` /
   `man_min_agnos_version` / `man_dependencies` / `man_tags`; setters for the optional fields.
 - `manifest_validate(m): Vec<Str>` — list of error messages; empty Vec ⇒ valid.
-- `manifest_qualified_name(m): Str` — `publisher/agent-name` (publisher lowercased, spaces→`-`).
+- `manifest_qualified_name(m): Str` — `publisher/agent-name` (publisher Unicode-lowercased,
+  spaces→`-`).
 - Codec: `mela_manifest_to_json(m): Str` / `manifest_from_json(Str): m|0` (0 for an unknown,
   missing or non-string `category`, v1.1.3, ADR-0012);
   `manifest_to_jv` / `manifest_from_jv` (json-value tree, for nesting);
@@ -134,7 +142,8 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
 > `rc_fetch_manifest` perform live fetches (and cache the result); the offline branches fall back
 > to the cache.
 
-- `url_encode(Str): Str`; `sanitize_filename(Str): Str`; `validate_path_segment(Str): i64`.
+- `url_encode(Str): Str`; `sanitize_filename(Str): Str` (per character: letters and digits in any
+  script, `-`, `_` kept, everything else one `_`; v1.1.5); `validate_path_segment(Str): i64`.
 - URL builders: `build_search_url(base, query, category, has_category, page)`;
   `build_manifest_url(base, name, version)`; `build_download_url(…)`; `build_publish_url(base)`;
   `build_latest_url(base, name)`.
@@ -178,7 +187,9 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   `profile_preset` / `profile_landlock_rules` / `profile_seccomp_mode` / `profile_network` /
   `profile_max_memory_mb` / `profile_allow_process_spawn`.
 - `validate_profile(profile): Str` — `""` if valid, else the first problem.
-- Codec: `profile_to_json` / `profile_from_json`; `sandbox_preset_json_name` / `_json_parse`.
+- Codec: `profile_to_json` / `profile_from_json`; `sandbox_preset_json_name` /
+  `sandbox_preset_json_parse` (`-1` for an unknown name, v1.1.5; it was Custom).
+- `validate_profile(p): Str` — `""` if valid, else Rust's message naming the bad value.
 
 ## ratings — `src/ratings.cyr`
 
@@ -194,8 +205,9 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   `stats_latest_review`.
 - `rstore_top_rated(store, has_min, min_ratings): Vec` (avg desc, total tiebreak);
   `rstore_total_count` / `rstore_package_count`.
-- Persistence: `rstore_save(store, path: Str)` / `rstore_load(path): store|0` (a score outside
-  1..5 rejects the file, v1.1.1);
+- Persistence: `rstore_save(store, path: Str)` / `rstore_load(path): store|0` — a missing file is
+  an empty store; a file that is empty, unreadable, over 1 MiB, incomplete, has a score outside
+  1..5, or is in the Rust version's format is `0` (v1.1.1, v1.1.5);
   `rating_to_json`/`from_json`, `stats_to_json`/`from_json`, `rstore_to_json`/`from_json`.
 
 ## flutter_packaging — `src/flutter_packaging.cyr`
@@ -223,6 +235,7 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   8 MiB, an entry name is over 100 bytes, or the archive would not fit the reader (v1.1.3,
   ADR-0012);
   `agpkg_inspect(path: Str): Vec<name>|0`; `agpkg_inspect_bytes(data, len): Vec|0`;
+  `agpkg_payload_size(data, len): bytes|-1` *(added v1.1.5)* — what the bundle extracts to;
   `agpkg_read_entry(data, len, name: Str): content|0`. The reader skips symlink/hardlink and
   `..`/absolute entries (v0.9.0 hardening), and rejects the whole archive (`0`, or `-1` from
   `agpkg_extract_to_dir`) on a bad header checksum, a non-octal numeric field, data past the end
@@ -239,6 +252,7 @@ The end-to-end flow (ADR-0009); both trust gates are enforced at install.
 - `pipeline_install(reg, keyring, bundle, sig, sig_len, expected_hash: Str, now): InstallResult*|0`
   — **gate 1** (signature, keyed by publisher key_id) + **gate 2** (SHA-256 digest), then quota,
   then **extract** to `packages/<name>`, then record and save (v1.1.3: extract-first, as Rust).
+  `installed_size` is the extracted size (`agpkg_payload_size`, v1.1.5), as Rust recorded it.
   Returns `0` on any gate failure / malformed bundle / invalid manifest / quota / failed
   extraction / failed index save; a fresh install's partial directory is removed.
 

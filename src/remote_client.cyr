@@ -18,7 +18,7 @@ var REQUEST_TIMEOUT_SECS  = 30;
 var DOWNLOAD_TIMEOUT_SECS  = 300;
 var RC_MAX_HOPS           = 10;          # reqwest's default redirect limit
 var RC_DOWNLOAD_MAX_BYTES = 104857600;   # 100 MiB: Rust MAX_PACKAGE_SIZE
-var MELA_VERSION          = "1.1.4";     # == VERSION; pinned by a test (User-Agent)
+var MELA_VERSION          = "1.1.5";     # == VERSION; pinned by a test (User-Agent)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -68,25 +68,74 @@ fn _hex_digit_upper(v): i64 {
 
 # Replace any byte that isn't ASCII-alphanumeric / '-' / '_' with '_'. Mirrors
 # Rust `sanitize_filename` (ASCII subset; no oracle case is non-ASCII).
+# Decode the UTF-8 character at src+off (len bytes total) into cp_out[0];
+# returns the bytes it spans, or 0 for an invalid or truncated sequence.
+fn _rc_utf8_at(src, off, len, cp_out): i64 {
+    var b0 = load8(src + off) & 0xFF;
+    var need = 0;
+    var cp = 0;
+    if (b0 < 128) { store64(cp_out, b0); return 1; }
+    if ((b0 & 0xE0) == 0xC0) { need = 1; cp = b0 & 0x1F; }
+    if ((b0 & 0xF0) == 0xE0) { need = 2; cp = b0 & 0x0F; }
+    if ((b0 & 0xF8) == 0xF0) { need = 3; cp = b0 & 0x07; }
+    if (need == 0) { return 0; }
+    if (off + need >= len) { return 0; }      # the sequence runs past the end
+    var k = 1;
+    while (k <= need) {
+        var bk = load8(src + off + k) & 0xFF;
+        if ((bk & 0xC0) != 0x80) { return 0; }
+        cp = (cp << 6) | (bk & 0x3F);
+        k = k + 1;
+    }
+    store64(cp_out, cp);
+    return need + 1;
+}
+
+# Rust char::is_alphanumeric: Alphabetic or Numeric. By general category that
+# is L* and Nd/Nl/No; Other_Alphabetic combining marks are not covered
+# (ADR-0013).
+fn _rc_is_alnum(cp): i64 {
+    var gc = unicode_category(cp);
+    if (gc <= GC_LO) { return 1; }               # Lu Ll Lt Lm Lo
+    if (gc >= GC_ND) { if (gc <= GC_NO) { return 1; } }
+    return 0;
+}
+
+# Map a string to a safe cache filename, per character as Rust did: letters and
+# digits in any script, '-' and '_' are kept; every other character becomes one
+# '_'. Unicode-aware since v1.1.5 (ADR-0013): it was byte-wise, so 'caf\u00e9'
+# became 'caf__' and different queries could share one cache file.
 fn sanitize_filename(s: Str): Str {
     var n = str_len(s);
     var src = str_data(s);
     var buf = alloc(n + 1);
+    var o = 0;
     var i = 0;
+    var cp = alloc(8);
     while (i < n) {
-        var c = load8(src + i) & 0xFF;
-        var keep = 0;
-        if (c >= 65) { if (c <= 90) { keep = 1; } }
-        if (c >= 97) { if (c <= 122) { keep = 1; } }
-        if (c >= 48) { if (c <= 57) { keep = 1; } }
-        if (c == 45) { keep = 1; }
-        if (c == 95) { keep = 1; }
-        if (keep == 1) { store8(buf + i, c); }
-        else { store8(buf + i, 95); }     # '_'
-        i = i + 1;
+        var w = _rc_utf8_at(src, i, n, cp);
+        if (w == 0) {
+            store8(buf + o, 95);                  # invalid byte -> '_'
+            o = o + 1;
+            i = i + 1;
+        } else {
+            var c = load64(cp);
+            var keep = 0;
+            if (c == 45) { keep = 1; }
+            if (c == 95) { keep = 1; }
+            if (keep == 0) { keep = _rc_is_alnum(c); }
+            if (keep == 1) {
+                memcpy(buf + o, src + i, w);
+                o = o + w;
+            } else {
+                store8(buf + o, 95);              # '_'
+                o = o + 1;
+            }
+            i = i + w;
+        }
     }
-    store8(buf + n, 0);
-    return str_new(buf, n);
+    store8(buf + o, 0);
+    return str_new(buf, o);
 }
 
 # Validate a name/version path segment: 1 if safe, 0 if empty or it contains
@@ -201,7 +250,16 @@ fn _sresult_to_jv(p): i64 {
     json_v_obj_set(o, str_from("publisher"),      json_v_str_new(sresult_publisher(p)));
     return o;
 }
+# Registry responses decode strictly: every field Rust's serde required must be
+# present with its type, so `{}` is not an empty result (ADR-0013).
 fn _sresult_from_jv(o): i64 {
+    if (json_v_is_obj(o) == 0) { return 0; }
+    if (_jreq_str(o, "qualified_name") == 0) { return 0; }
+    if (_jreq_str(o, "latest_version") == 0) { return 0; }
+    if (_jreq_str(o, "description") == 0) { return 0; }
+    if (_jreq_uint(o, "downloads") == 0) { return 0; }
+    if (_jreq_str(o, "category") == 0) { return 0; }
+    if (_jreq_str(o, "publisher") == 0) { return 0; }
     return sresult_new(_rc_jstr(o, "qualified_name"), _rc_jstr(o, "latest_version"),
       _rc_jstr(o, "description"), _rc_jint(o, "downloads"),
       _rc_jstr(o, "category"), _rc_jstr(o, "publisher"));
@@ -243,16 +301,19 @@ fn sresults_from_json(json: Str): i64 {
     var root = json_v_parse_buf(str_data(json), str_len(json));   # explicit buf+len (see trust.cyr)
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
-    var pkgs = vec_new();
+    if (_jreq_uint(root, "total") == 0) { return 0; }
+    if (_jreq_uint(root, "page") == 0) { return 0; }
+    if (_jreq_uint(root, "per_page") == 0) { return 0; }
     var arr = bayan_json_v_obj_get_by_cstr(root, "packages");
-    if (json_v_is_arr(arr) == 1) {
-        var n = json_v_arr_len(arr);
-        var i = 0;
-        while (i < n) {
-            var el = json_v_arr_get(arr, i);
-            if (json_v_is_obj(el) == 1) { vec_push(pkgs, _sresult_from_jv(el)); }
-            i = i + 1;
-        }
+    if (json_v_is_arr(arr) == 0) { return 0; }
+    var pkgs = vec_new();
+    var n = json_v_arr_len(arr);
+    var i = 0;
+    while (i < n) {
+        var r = _sresult_from_jv(json_v_arr_get(arr, i));
+        if (r == 0) { return 0; }
+        vec_push(pkgs, r);
+        i = i + 1;
     }
     return sresults_new(pkgs, _rc_jint(root, "total"), _rc_jint(root, "page"),
       _rc_jint(root, "per_page"));
@@ -284,6 +345,10 @@ fn presp_from_json(json: Str): i64 {
     var root = json_v_parse_buf(str_data(json), str_len(json));
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
+    if (_jreq_str(root, "name") == 0) { return 0; }
+    if (_jreq_str(root, "version") == 0) { return 0; }
+    if (_jreq_str(root, "download_url") == 0) { return 0; }
+    if (_jreq_bool(root, "replaced") == 0) { return 0; }
     return presp_new(_rc_jstr(root, "name"), _rc_jstr(root, "version"),
       _rc_jstr(root, "download_url"), _rc_jbool(root, "replaced"));
 }
@@ -314,6 +379,10 @@ fn update_from_json(json: Str): i64 {
     var root = json_v_parse_buf(str_data(json), str_len(json));
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
+    if (_jreq_str(root, "name") == 0) { return 0; }
+    if (_jreq_str(root, "installed_version") == 0) { return 0; }
+    if (_jreq_str(root, "available_version") == 0) { return 0; }
+    if (_jreq_str(root, "changelog") == 0) { return 0; }
     return update_new(_rc_jstr(root, "name"), _rc_jstr(root, "installed_version"),
       _rc_jstr(root, "available_version"), _rc_jstr(root, "changelog"));
 }

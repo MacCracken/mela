@@ -99,8 +99,15 @@ fn _reg_record_to_jv(p): i64 {
     return o;
 }
 
+# Every InstalledMarketplacePackage field is required, as Rust's serde required
+# it (ADR-0013); installed_at is an i64 epoch (ADR-0003).
 fn _reg_record_from_jv(o): i64 {
     if (json_v_is_obj(o) == 0) { return 0; }
+    if (_jreq_int(o, "installed_at") == 0) { return 0; }
+    if (_jreq_str(o, "install_dir") == 0) { return 0; }
+    if (_jreq_str(o, "package_hash") == 0) { return 0; }
+    if (_jreq_bool(o, "auto_update") == 0) { return 0; }
+    if (_jreq_uint(o, "installed_size") == 0) { return 0; }
     var manifest = manifest_from_jv(bayan_json_v_obj_get_by_cstr(o, "manifest"));
     if (manifest == 0) { return 0; }
     return imp_new(manifest, _reg_jint(o, "installed_at"), _reg_jstr(o, "install_dir"),
@@ -354,20 +361,8 @@ fn registry_list_installed(r): i64 {
 }
 
 # ASCII-lowercase a Str into a fresh Str (for case-insensitive search).
-fn _reg_to_lower(s: Str): Str {
-    var n = str_len(s);
-    var src = str_data(s);
-    var buf = alloc(n + 1);
-    var i = 0;
-    while (i < n) {
-        var c = load8(src + i);
-        if (c >= 65) { if (c <= 90) { c = c + 32; } }
-        store8(buf + i, c);
-        i = i + 1;
-    }
-    store8(buf + n, 0);
-    return str_new(buf, n);
-}
+# Unicode lowercase, as Rust's search lowercased both sides (ADR-0013).
+fn _reg_to_lower(s: Str): Str { return str_lower_unicode(s); }
 
 # True if record matches a lowercased query in name, description, or any tag.
 fn _reg_matches(rec, ql: Str): i64 {

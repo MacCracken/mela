@@ -81,7 +81,9 @@ fn pipeline_install(reg, keyring, bundle, sig, sig_len, expected_hash: Str, now)
         if (str_eq(package_hash, expected_hash) == 0) { return 0; }
     }
 
-    if (registry_admits(reg, manifest, len) == 0) { return 0; }
+    if (registry_admits(reg, manifest, len) == 0) { return 0; }   # quota on the bundle size, as Rust
+    var extracted = agpkg_payload_size(data, len);                  # recorded size: what lands on disk
+    if (extracted < 0) { return 0; }
 
     # Extract first, record second (Rust order): a bundle that fails to land on
     # disk is not recorded as installed (D9). An in-memory registry has no disk.
@@ -94,7 +96,7 @@ fn pipeline_install(reg, keyring, bundle, sig, sig_len, expected_hash: Str, now)
             return 0;
         }
     }
-    var res = registry_install(reg, manifest, package_hash, len, now);
+    var res = registry_install(reg, manifest, package_hash, extracted, now);
     if (res == 0) {
         if (_registry_on_disk(reg) == 1) {
             if (fresh == 1) { if (is_dir(dir) == 1) { _rmtree(dir); } }

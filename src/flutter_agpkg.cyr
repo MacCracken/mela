@@ -52,23 +52,40 @@ fn _ag_jbool(o, key): i64 {
 
 # config_from_json — category defaults to DesktopApp; network_access false;
 # data_dir none (serde defaults). Mirrors Rust `PackFlutterConfig` deserialize.
+# Decode a PackFlutterConfig, or 0. Required: app_name, version, publisher,
+# description. Optional (Rust #[serde(default)]): category (DesktopApp), the
+# wayland_requirements list, network_access, data_dir (null or a string); when
+# present each must have its type, and an unknown category or protocol name is
+# rejected rather than defaulted (ADR-0013).
 fn pfconfig_from_json(json: Str): i64 {
     var root = json_v_parse_buf(str_data(json), str_len(json));
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
+    if (_jreq_str(root, "app_name") == 0) { return 0; }
+    if (_jreq_str(root, "version") == 0) { return 0; }
+    if (_jreq_str(root, "publisher") == 0) { return 0; }
+    if (_jreq_str(root, "description") == 0) { return 0; }
+    if (_jopt_bool(root, "network_access") == 0) { return 0; }
+    if (_jopt_str_or_null(root, "data_dir") == 0) { return 0; }
 
     var category = CAT_DESKTOP_APP;                 # default_category()
     var cv = bayan_json_v_obj_get_by_cstr(root, "category");
-    if (json_v_is_str(cv) == 1) { category = cat_json_parse(json_v_str(cv)); }
+    if (cv != 0) {
+        if (json_v_is_str(cv) == 0) { return 0; }
+        category = cat_json_parse(json_v_str(cv));
+        if (category == CAT_PARSE_FAIL) { return 0; }
+    }
 
     var wl = vec_new();
     var wv = bayan_json_v_obj_get_by_cstr(root, "wayland_requirements");
-    if (json_v_is_arr(wv) == 1) {
+    if (wv != 0) {
+        if (_jarr_all_str(wv) == 0) { return 0; }
         var n = json_v_arr_len(wv);
         var i = 0;
         while (i < n) {
-            var el = json_v_arr_get(wv, i);
-            if (json_v_is_str(el) == 1) { vec_push(wl, _wl_json_parse(json_v_str(el))); }
+            var w = _wl_json_parse(json_v_str(json_v_arr_get(wv, i)));
+            if (w < 0) { return 0; }
+            vec_push(wl, w);
             i = i + 1;
         }
     }
@@ -93,7 +110,7 @@ fn _wl_json_parse(s: Str): i64 {
     if (str_eq_cstr(s, "Viewporter") == 1)      { return WL_VIEWPORTER; }
     if (str_eq_cstr(s, "FractionalScale") == 1) { return WL_FRACTIONAL_SCALE; }
     if (str_eq_cstr(s, "XWayland") == 1)        { return WL_XWAYLAND; }
-    return WL_CORE;
+    return 0 - 1;      # unknown: Rust's serde rejected it (it used to become Core; ADR-0013)
 }
 
 # ---------------------------------------------------------------------------
@@ -283,38 +300,19 @@ fn sbprofile_to_json(s): Str {
     return json_v_build(o);
 }
 
+# Decode a SandboxProfile (the capability disclosure shipped in a bundle), or 0.
+# landlock_paths, seccomp_mode and network are required (ADR-0013): `{}` used to
+# decode as "no paths, network off", which misstated what the package asks for.
 fn sbprofile_from_json(json: Str): i64 {
     var root = json_v_parse_buf(str_data(json), str_len(json));
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
-    var rules = vec_new();
-    var arr = bayan_json_v_obj_get_by_cstr(root, "landlock_paths");
-    if (json_v_is_arr(arr) == 1) {
-        var n = json_v_arr_len(arr);
-        var i = 0;
-        while (i < n) {
-            var ro = json_v_arr_get(arr, i);
-            vec_push(rules, ll_new(_ag_jstr(ro, "path"), _ag_jstr(ro, "access")));
-            i = i + 1;
-        }
-    }
-    var hosts = vec_new();
-    var enabled = 0;
-    var net_in = bayan_json_v_obj_get_by_cstr(root, "network");
-    if (json_v_is_obj(net_in) == 1) {
-        enabled = _ag_jbool(net_in, "enabled");
-        var ha = bayan_json_v_obj_get_by_cstr(net_in, "allowed_hosts");
-        if (json_v_is_arr(ha) == 1) {
-            var hn = json_v_arr_len(ha);
-            var hi = 0;
-            while (hi < hn) {
-                var el = json_v_arr_get(ha, hi);
-                if (json_v_is_str(el) == 1) { vec_push(hosts, json_v_str(el)); }
-                hi = hi + 1;
-            }
-        }
-    }
-    return sbprofile_new(rules, _ag_jstr(root, "seccomp_mode"), nr_new(enabled, hosts));
+    var rules = _ll_vec_from_jv(bayan_json_v_obj_get_by_cstr(root, "landlock_paths"));
+    if (rules == 0) { return 0; }
+    if (_jreq_str(root, "seccomp_mode") == 0) { return 0; }
+    var net = _nr_from_jv(bayan_json_v_obj_get_by_cstr(root, "network"));
+    if (net == 0) { return 0; }
+    return sbprofile_new(rules, _ag_jstr(root, "seccomp_mode"), net);
 }
 
 # ---------------------------------------------------------------------------
@@ -719,6 +717,25 @@ fn agpkg_extract_to_dir(data, len, dest: Str): i64 {
         i = i + 1;
     }
     return count;
+}
+
+# The bytes a bundle extracts to: the summed sizes of its safe regular-file
+# entries, or -1 for a bundle that does not decompress or validate. Rust's
+# install recorded this as installed_size (v1.1.5, ADR-0013).
+fn agpkg_payload_size(data, len): i64 {
+    var dst = alloc(AGPKG_BUF_MAXLEN);
+    var dlen = gzip_decompress(data, len, dst, AGPKG_BUF_MAXLEN);
+    if (dlen < 0) { return 0 - 1; }
+    var entries = _tar_scan(dst, dlen);
+    if (entries == 0) { return 0 - 1; }
+    var total = 0;
+    var n = vec_len(entries);
+    var i = 0;
+    while (i < n) {
+        total = total + tentry_len(vec_get(entries, i));
+        i = i + 1;
+    }
+    return total;
 }
 
 # Gunzip + parse a gzipped-ustar byte buffer; returns a Vec of the safe entry

@@ -40,21 +40,8 @@ GNU tar cross-check (`scripts/tar-crosscheck.sh`).
 v1.1.3 shipped the correctness group, D6–D12 (ADR-0012), plus a live transport check in CI. All
 twelve audit defects are now fixed.
 v1.1.4 closed Rust test coverage: 202 of 204 covered, 2 N/A; coverage floor 88%.
-
-### v1.1.5 — Decide the unrecorded divergences
-
-One ADR per decision, covering every item in `rust-parity.md` § Behavior changes with no ADR:
-
-- Strict vs lenient JSON decoding at trust-boundary inputs: one rule for every decoder.
-- Install accounting: `installed_size` (compressed vs extracted, which changes the quota), file
-  modes, resolved-path containment.
-- Archive writer: normalized mode/uid/mtime (reproducible), long names, unreadable inputs,
-  compact JSON.
-- Text: ASCII vs Unicode lowercasing, `sanitize_filename`, semver `+` and overflow,
-  scale-factor formatting.
-- The ratings wire format vs Rust-written files.
-- Keyring per-element vs per-file validation.
-- The transparency hash-preimage ambiguity: record it now; fixing it is v1.3.0.
+v1.1.5 decided every divergence from Rust (ADR-0013): strict decoding everywhere, Unicode text,
+Rust-era ratings files refused.
 
 ### v1.1.6 — Retire `rust-old/`
 
@@ -79,7 +66,8 @@ Real Flutter engines are tens of MB.
 - Streaming extraction: gunzip and untar to disk without the whole tar in memory.
 - A real `MAX_PACKAGE_SIZE`: Rust used 100 MB compressed, plus a decompressed ceiling against
   gzip bombs.
-- Keep file modes (the exec bit); an ADR decides `mode & 0o755` vs normalize.
+- Keep file modes on extraction (the exec bit). Rust kept `mode & 0o777`; ADR-0013 §5 deferred
+  the choice to this release, alongside the extractor rewrite.
 - Long names: write the ustar `prefix` and read GNU `L` / PAX path records, or reject them
   explicitly. No silent truncation.
 - Count extracted size toward the quota (Rust parity), once v1.1.5's ADR decides.

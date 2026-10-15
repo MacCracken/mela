@@ -324,9 +324,19 @@ fn _rating_to_jv(r): i64 {
     return o;
 }
 
-# Decode one rating; 0 if its score is outside MIN_SCORE..MAX_SCORE, the same
-# range rstore_add_rating enforces (ADR-0011).
+# Decode one rating, or 0: every field Rust's serde required must be present
+# with its type (review may be absent or null), created_at is an i64 epoch
+# (ADR-0007), and the score must be in MIN_SCORE..MAX_SCORE, the range
+# rstore_add_rating enforces (ADR-0011). A rating file written by the Rust
+# version (RFC 3339 created_at, a "ratings" wrapper) fails here (ADR-0013).
 fn _rating_from_jv(o): i64 {
+    if (json_v_is_obj(o) == 0) { return 0; }
+    if (_jreq_str(o, "agent_id") == 0) { return 0; }
+    if (_jreq_str(o, "package_name") == 0) { return 0; }
+    if (_jreq_int(o, "score") == 0) { return 0; }
+    if (_jopt_str_or_null(o, "review") == 0) { return 0; }
+    if (_jreq_int(o, "created_at") == 0) { return 0; }
+    if (_jreq_str(o, "version_reviewed") == 0) { return 0; }
     var score = _r_jint(o, "score");
     if (score < MIN_SCORE) { return 0; }
     if (score > MAX_SCORE) { return 0; }
@@ -372,33 +382,42 @@ fn stats_from_json(json: Str): i64 {
     var root = json_v_parse_buf(str_data(json), str_len(json));
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
-    var dist = _dist_new();
+    # every RatingStats field is required; latest_review may be null (Option);
+    # each distribution key must be a whole score 1..5 (ADR-0013: the first
+    # character alone used to be read, so "10" counted as 1)
+    if (_jreq_str(root, "package_name") == 0) { return 0; }
+    if (_jreq_uint(root, "total_ratings") == 0) { return 0; }
+    var av = bayan_json_v_obj_get_by_cstr(root, "average_score");
+    var avg = 0;
+    if (json_v_is_float(av) == 1) { avg = json_v_float(av); }
+    else {
+        if (json_v_is_int(av) == 0) { return 0; }
+        avg = f64_from(json_v_int(av));
+    }
     var dv = bayan_json_v_obj_get_by_cstr(root, "distribution");
-    if (json_v_is_obj(dv) == 1) {
-        var n = json_v_obj_len(dv);
-        var i = 0;
-        while (i < n) {
-            var k = json_v_obj_key(dv, i);            # "1".."5"
-            var v = json_v_obj_val(dv, i);
-            if (str_len(k) > 0) {
-                var sc = load8(str_data(k)) - 48;     # single-digit score
-                if (sc >= 1) {
-                    if (sc <= 5) {
-                        if (json_v_is_int(v) == 1) { store64(dist + sc * 8, json_v_int(v)); }
-                    }
-                }
-            }
-            i = i + 1;
-        }
+    if (json_v_is_obj(dv) == 0) { return 0; }
+    var dist = _dist_new();
+    var n = json_v_obj_len(dv);
+    var i = 0;
+    while (i < n) {
+        var k = json_v_obj_key(dv, i);
+        var v = json_v_obj_val(dv, i);
+        if (str_len(k) != 1) { return 0; }
+        var sc = load8(str_data(k)) - 48;
+        if (sc < MIN_SCORE) { return 0; }
+        if (sc > MAX_SCORE) { return 0; }
+        if (json_v_is_int(v) == 0) { return 0; }
+        if (json_v_int(v) < 0) { return 0; }
+        store64(dist + sc * 8, json_v_int(v));
+        i = i + 1;
     }
     var has_latest = 0;
     var latest = 0;
     var lv = bayan_json_v_obj_get_by_cstr(root, "latest_review");
-    if (json_v_is_int(lv) == 1) { has_latest = 1; latest = json_v_int(lv); }
-    var avg = f64_from(0);
-    var av = bayan_json_v_obj_get_by_cstr(root, "average_score");
-    if (json_v_is_float(av) == 1) { avg = json_v_float(av); }
-    if (json_v_is_int(av) == 1)   { avg = f64_from(json_v_int(av)); }
+    if (lv != 0) {
+        if (json_v_is_int(lv) == 1) { has_latest = 1; latest = json_v_int(lv); }
+        else { if (json_v_is_null(lv) == 0) { return 0; } }
+    }
     var s = alloc(48);
     store64(s,      _r_jstr(root, "package_name"));
     store64(s + 8,  avg);
@@ -443,22 +462,18 @@ fn rstore_from_json(json: Str): i64 {
     while (i < pn) {
         var pkg = json_v_obj_key(root, i);
         var pkg_in = json_v_obj_val(root, i);
-        if (json_v_is_obj(pkg_in) == 1) {
-            var pkg_map = map_new_str();
-            var an = json_v_obj_len(pkg_in);
-            var j = 0;
-            while (j < an) {
-                var agent = json_v_obj_key(pkg_in, j);
-                var rv = json_v_obj_val(pkg_in, j);
-                if (json_v_is_obj(rv) == 1) {
-                    var rating = _rating_from_jv(rv);
-                    if (rating == 0) { return 0; }     # out-of-range score: corrupt file
-                    map_set(pkg_map, agent, rating);
-                }
-                j = j + 1;
-            }
-            map_set(store, pkg, pkg_map);
+        if (json_v_is_obj(pkg_in) == 0) { return 0; }
+        var pkg_map = map_new_str();
+        var an = json_v_obj_len(pkg_in);
+        var j = 0;
+        while (j < an) {
+            var agent = json_v_obj_key(pkg_in, j);
+            var rating = _rating_from_jv(json_v_obj_val(pkg_in, j));
+            if (rating == 0) { return 0; }     # incomplete or out-of-range rating: corrupt file
+            map_set(pkg_map, agent, rating);
+            j = j + 1;
         }
+        map_set(store, pkg, pkg_map);
         i = i + 1;
     }
     return store;
@@ -472,10 +487,17 @@ fn rstore_save(store, path: Str): i64 {
 
 # load(path) — read a store; a missing file yields an empty store, a corrupt
 # file yields 0 (error). Mirrors Rust `load`.
+# load — a missing file is an empty store (Rust parity). A file that exists but
+# is empty, unreadable, larger than RATINGS_MAXLEN or not a valid store is 0:
+# Rust returned an error, where this used to return an empty store (ADR-0013).
 fn rstore_load(path: Str): i64 {
-    if (file_exists(str_data(path)) == 0) { return rstore_new(); }
-    var buf = alloc(RATINGS_MAXLEN);
-    var n = file_read_all(str_data(path), buf, RATINGS_MAXLEN);
-    if (n <= 0) { return rstore_new(); }
+    if (file_exists(str_data(path)) == 0) {
+        if (is_dir(path) == 1) { return 0; }
+        return rstore_new();
+    }
+    var buf = alloc(RATINGS_MAXLEN + 1);
+    var n = file_read_all(str_data(path), buf, RATINGS_MAXLEN + 1);
+    if (n <= 0) { return 0; }
+    if (n > RATINGS_MAXLEN) { return 0; }
     return rstore_from_json(str_new(buf, n));
 }

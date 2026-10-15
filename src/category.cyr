@@ -51,15 +51,15 @@ fn cat_parse(s): i64 {
     # every name fits in 12 bytes; anything that would overrun `lower` (with its
     # NUL) is not a category (D4)
     if (strlen(s) > 63) { return CAT_PARSE_FAIL; }
-    var lower[64];
-    cat_lower(s, &lower);
-    if (streq(&lower, "utility"))      { return CAT_UTILITY; }
-    if (streq(&lower, "productivity")) { return CAT_PRODUCTIVITY; }
-    if (streq(&lower, "security"))     { return CAT_SECURITY; }
-    if (streq(&lower, "devtool"))      { return CAT_DEVTOOL; }
-    if (streq(&lower, "dev-tool"))     { return CAT_DEVTOOL; }
-    if (streq(&lower, "desktop-app"))  { return CAT_DESKTOP_APP; }
-    if (streq(&lower, "desktopapp"))   { return CAT_DESKTOP_APP; }
-    if (streq(&lower, "system"))       { return CAT_SYSTEM; }
+    # Unicode lowercase, as Rust's s.to_lowercase() (ADR-0013)
+    var lower = str_lower_unicode(str_from(s));
+    if (str_eq_cstr(lower, "utility") == 1)      { return CAT_UTILITY; }
+    if (str_eq_cstr(lower, "productivity") == 1) { return CAT_PRODUCTIVITY; }
+    if (str_eq_cstr(lower, "security") == 1)     { return CAT_SECURITY; }
+    if (str_eq_cstr(lower, "devtool") == 1)      { return CAT_DEVTOOL; }
+    if (str_eq_cstr(lower, "dev-tool") == 1)     { return CAT_DEVTOOL; }
+    if (str_eq_cstr(lower, "desktop-app") == 1)  { return CAT_DESKTOP_APP; }
+    if (str_eq_cstr(lower, "desktopapp") == 1)   { return CAT_DESKTOP_APP; }
+    if (str_eq_cstr(lower, "system") == 1)       { return CAT_SYSTEM; }
     return CAT_PARSE_FAIL;
 }

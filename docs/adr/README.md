@@ -60,3 +60,8 @@ Decisions about mela — what we chose, the context, and the consequences we acc
   100 MiB cap; publish sends `X-Package-Metadata` (+ `rc_publish_signed`); the packer and install
   report failure instead of truncating or recording half an install; a corrupt index refuses to
   open; a manifest needs a valid category.
+- [0013 — Every remaining divergence from rust-old, decided](0013-decided-divergences-from-rust-old.md) —
+  *Accepted (v1.1.5)* · strict decoding in every decoder (Rust serde rules); Rust-written ratings
+  files refused; Unicode lowercasing and filename sanitizing as Rust; semver overflow, scale-factor
+  text, validation messages and `installed_size` matched; normalized archive metadata, compact JSON
+  and stricter path containment kept; file modes (v1.2.0) and the hash preimage (v1.3.0) deferred.

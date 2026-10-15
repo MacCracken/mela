@@ -211,20 +211,20 @@ fn validate_profile(profile): Str {
     var n = vec_len(rules);
     if (n == 0) { return str_from("profile must have at least one Landlock rule"); }
 
-    # access modes
+    # access modes: the first bad rule is named, as Rust's message named it
     var i = 0;
-    var bad_access = 0;
     while (i < n) {
-        if (bad_access == 0) {
-            var acc = ll_access(vec_get(rules, i));
-            var ok = 0;
-            if (str_eq_cstr(acc, "ro") == 1) { ok = 1; }
-            if (str_eq_cstr(acc, "rw") == 1) { ok = 1; }
-            if (ok == 0) { bad_access = 1; }
+        var r = vec_get(rules, i);
+        var acc = ll_access(r);
+        var ok = 0;
+        if (str_eq_cstr(acc, "ro") == 1) { ok = 1; }
+        if (str_eq_cstr(acc, "rw") == 1) { ok = 1; }
+        if (ok == 0) {
+            return str_cat(str_cat(str_cat(str_cat(str_from("invalid Landlock access mode '"), acc),
+                  str_from("' for path '")), ll_path(r)), str_from("' (expected 'ro' or 'rw')"));
         }
         i = i + 1;
     }
-    if (bad_access == 1) { return str_from("invalid Landlock access mode (expected 'ro' or 'rw')"); }
 
     # non-empty paths
     var j = 0;
@@ -241,10 +241,14 @@ fn validate_profile(profile): Str {
     if (str_eq_cstr(sm, "basic") == 1)   { sm_ok = 1; }
     if (str_eq_cstr(sm, "desktop") == 1) { sm_ok = 1; }
     if (str_eq_cstr(sm, "strict") == 1)  { sm_ok = 1; }
-    if (sm_ok == 0) { return str_from("unknown seccomp mode (expected basic, desktop, or strict)"); }
+    if (sm_ok == 0) {
+        return str_cat(str_cat(str_from("unknown seccomp mode: '"), sm),
+          str_from("' (expected basic, desktop, or strict)"));
+    }
 
     # memory
-    if (profile_max_memory_mb(profile) == 0) { return str_from("max_memory_mb must be greater than zero"); }
+    # Rust's u64 cannot be negative: anything not above zero is invalid
+    if (profile_max_memory_mb(profile) <= 0) { return str_from("max_memory_mb must be greater than zero"); }
 
     # network disabled but hosts present
     var net = profile_network(profile);
@@ -321,7 +325,8 @@ fn sandbox_preset_json_parse(s: Str): i64 {
     if (str_eq_cstr(s, "GameApp") == 1)         { return SP_GAME; }
     if (str_eq_cstr(s, "CliTool") == 1)         { return SP_CLI_TOOL; }
     if (str_eq_cstr(s, "GpuCompute") == 1)      { return SP_GPU_COMPUTE; }
-    return SP_CUSTOM;
+    if (str_eq_cstr(s, "Custom") == 1)          { return SP_CUSTOM; }
+    return 0 - 1;      # unknown: Rust's serde rejected it (it used to become Custom; ADR-0013)
 }
 
 fn _sp_jstr(o, key): Str {
@@ -375,43 +380,66 @@ fn profile_to_json(p): Str {
     return json_v_build(o);
 }
 
+# A LandlockRule value {path, access}, both required strings, or 0.
+fn _ll_from_jv(o): i64 {
+    if (json_v_is_obj(o) == 0) { return 0; }
+    if (_jreq_str(o, "path") == 0) { return 0; }
+    if (_jreq_str(o, "access") == 0) { return 0; }
+    return ll_new(_sp_jstr(o, "path"), _sp_jstr(o, "access"));
+}
+
+# A Vec<LandlockRule> array, or 0 if it is not an array of valid rules.
+fn _ll_vec_from_jv(arr): i64 {
+    if (json_v_is_arr(arr) == 0) { return 0; }
+    var rules = vec_new();
+    var n = json_v_arr_len(arr);
+    var i = 0;
+    while (i < n) {
+        var r = _ll_from_jv(json_v_arr_get(arr, i));
+        if (r == 0) { return 0; }
+        vec_push(rules, r);
+        i = i + 1;
+    }
+    return rules;
+}
+
+# A NetworkRule value: enabled required; allowed_hosts optional (Rust
+# #[serde(default)]), an array of strings when present. 0 otherwise.
+fn _nr_from_jv(o): i64 {
+    if (json_v_is_obj(o) == 0) { return 0; }
+    if (_jreq_bool(o, "enabled") == 0) { return 0; }
+    if (_jopt_arr_str(o, "allowed_hosts") == 0) { return 0; }
+    var hosts = vec_new();
+    var ha = bayan_json_v_obj_get_by_cstr(o, "allowed_hosts");
+    if (ha != 0) {
+        var hn = json_v_arr_len(ha);
+        var hi = 0;
+        while (hi < hn) {
+            vec_push(hosts, json_v_str(json_v_arr_get(ha, hi)));
+            hi = hi + 1;
+        }
+    }
+    return nr_new(_sp_jbool(o, "enabled"), hosts);
+}
+
+# Decode a PredefinedProfile, or 0. Every field is required, as Rust's serde
+# required it: a known preset, the rules, seccomp_mode, network, a non-negative
+# max_memory_mb and allow_process_spawn (ADR-0013). Validation of the values
+# themselves stays in validate_profile.
 fn profile_from_json(json: Str): i64 {
     var root = json_v_parse_buf(str_data(json), str_len(json));
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
-
-    var preset = SP_CUSTOM;
-    var pv = bayan_json_v_obj_get_by_cstr(root, "preset");
-    if (json_v_is_str(pv) == 1) { preset = sandbox_preset_json_parse(json_v_str(pv)); }
-
-    var rules = vec_new();
-    var arr = bayan_json_v_obj_get_by_cstr(root, "landlock_rules");
-    if (json_v_is_arr(arr) == 1) {
-        var n = json_v_arr_len(arr);
-        var i = 0;
-        while (i < n) {
-            var ro = json_v_arr_get(arr, i);
-            vec_push(rules, ll_new(_sp_jstr(ro, "path"), _sp_jstr(ro, "access")));
-            i = i + 1;
-        }
-    }
-
-    var hosts = vec_new();
-    var enabled = 0;
-    var net_in = bayan_json_v_obj_get_by_cstr(root, "network");
-    if (json_v_is_obj(net_in) == 1) {
-        enabled = _sp_jbool(net_in, "enabled");
-        var ha = bayan_json_v_obj_get_by_cstr(net_in, "allowed_hosts");
-        if (json_v_is_arr(ha) == 1) {
-            var hn = json_v_arr_len(ha);
-            var hi = 0;
-            while (hi < hn) {
-                var el = json_v_arr_get(ha, hi);
-                if (json_v_is_str(el) == 1) { vec_push(hosts, json_v_str(el)); }
-                hi = hi + 1;
-            }
-        }
-    }
-    return profile_new(preset, rules, _sp_jstr(root, "seccomp_mode"), nr_new(enabled, hosts),
+    if (_jreq_str(root, "preset") == 0) { return 0; }
+    var preset = sandbox_preset_json_parse(_sp_jstr(root, "preset"));
+    if (preset < 0) { return 0; }
+    var rules = _ll_vec_from_jv(bayan_json_v_obj_get_by_cstr(root, "landlock_rules"));
+    if (rules == 0) { return 0; }
+    if (_jreq_str(root, "seccomp_mode") == 0) { return 0; }
+    var net = _nr_from_jv(bayan_json_v_obj_get_by_cstr(root, "network"));
+    if (net == 0) { return 0; }
+    if (_jreq_uint(root, "max_memory_mb") == 0) { return 0; }
+    if (_jreq_bool(root, "allow_process_spawn") == 0) { return 0; }
+    return profile_new(preset, rules, _sp_jstr(root, "seccomp_mode"), net,
       _sp_jint(root, "max_memory_mb"), _sp_jbool(root, "allow_process_spawn"));
 }

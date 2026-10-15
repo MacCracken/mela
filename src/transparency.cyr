@@ -235,6 +235,22 @@ fn tlog_to_json(log): Str {
     return json_v_build(arr);
 }
 
+# 1 if `o` carries every LogEntry field with its type (Rust's serde required all
+# nine; ADR-0013). The timestamp is an i64 epoch (ADR-0004).
+fn _log_entry_complete(o): i64 {
+    if (json_v_is_obj(o) == 0) { return 0; }
+    if (_jreq_uint(o, "sequence") == 0) { return 0; }
+    if (_jreq_int(o, "timestamp") == 0) { return 0; }
+    if (_jreq_str(o, "package") == 0) { return 0; }
+    if (_jreq_str(o, "version") == 0) { return 0; }
+    if (_jreq_str(o, "publisher_key_id") == 0) { return 0; }
+    if (_jreq_str(o, "content_hash") == 0) { return 0; }
+    if (_jreq_str(o, "signature_hash") == 0) { return 0; }
+    if (_jreq_str(o, "previous_hash") == 0) { return 0; }
+    if (_jreq_str(o, "entry_hash") == 0) { return 0; }
+    return 1;
+}
+
 # from_json() — rebuild a log from JSON, then verify the chain. Returns 0 on a
 # JSON parse error, a non-array root, OR a chain that fails verification (a
 # tampered entry, like the Rust `from_json` which calls verify_chain). Mirrors
@@ -248,6 +264,7 @@ fn tlog_from_json(json: Str): i64 {
     var i = 0;
     while (i < n) {
         var o = json_v_arr_get(root, i);
+        if (_log_entry_complete(o) == 0) { return 0; }
         var e = log_entry_new(
           _log_jint(o, "sequence"),
           _log_jint(o, "timestamp"),

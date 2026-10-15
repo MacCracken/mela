@@ -260,9 +260,11 @@ fn kv_from_json(json: Str): i64 {
 }
 
 # True if the filename ends in ".json".
+# A key file is `<stem>.json`. A file named exactly `.json` has no extension to
+# Rust's Path::extension() and was not loaded; it is skipped here too (v1.1.5).
 fn _ends_dot_json(nm: Str): i64 {
     var n = str_len(nm);
-    if (n < 5) { return 0; }
+    if (n < 6) { return 0; }
     return str_eq_cstr(str_sub(nm, n - 5, 5), ".json");
 }
 

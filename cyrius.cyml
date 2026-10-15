@@ -35,6 +35,8 @@ stdlib = [
     "net", "async", "atomic", "mmap", "dynlib", "fdlopen", "regression",
     "http", "tls", "ws",
     "sigil", "sankoch", "sandhi",
+    "unicode/_decode", "unicode/casefold", "unicode/_casefold_data",
+    "unicode/categories", "unicode/_categories_data",
 ]
 
 [deps.agnostik]

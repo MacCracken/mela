@@ -1,7 +1,7 @@
 # rust-old parity record
 
 > Audited 2026-10-14 against v1.1.0 (cyrius 6.7.9). D1–D5 fixed in v1.1.1, D6–D12 in v1.1.3; Rust test
-> coverage closed in v1.1.4. This file is the record that outlives
+> coverage closed in v1.1.4; every divergence decided in v1.1.5 (ADR-0013). This file is the record that outlives
 > `rust-old/`: once the oracle is deleted, every Rust behavior mela chose to keep, drop or change
 > must be written here or in an ADR. Work items live in [`roadmap.md`](roadmap.md) § v1.1.x.
 
@@ -9,8 +9,8 @@
 
 The port reproduces the Rust surface, and in several places is stricter than Rust. Every one of
 Rust's 204 tests is now covered by the Cyrius suite (202) or recorded as not applicable (2, below);
-all twelve defects the review found are fixed. What still stands between mela and deleting
-`rust-old/` is the list of behavior changes with no ADR (v1.1.5).
+all twelve defects the review found are fixed; and every behavior that differs from Rust is
+matched or recorded in ADR-0013 (v1.1.5). Only the retirement itself (v1.1.6) remains.
 
 | Rust module → Cyrius | Rust tests | Covered | N/A | Closed in |
 |---|---:|---:|---:|---|
@@ -51,37 +51,31 @@ it was confirmed in the source, with the mechanism traced.
 | D11 | Medium | The packer walks `flutter_assets/` one level deep and drops `fonts/`, `shaders/` and `packages/**` (Rust recursed). ADR-0008's rationale for this is wrong. | Fixed v1.1.3 |
 | D12 | Medium | An unknown or missing `category` decodes to `-1` and installs. Duplicate tar entry names let the disclosed `sandbox.json` differ from the one written to disk. | Fixed (v1.1.1 duplicates, v1.1.3 category) |
 
-## Behavior changes with no ADR
+## Behavior changes (all decided in v1.1.5)
 
-For each, either match Rust or write an ADR. The Rust behavior is written here so the choice
-stays possible once `rust-old/` is gone.
+Every behavior the audit found differing from Rust with no ADR is now either matched or kept on
+purpose in [ADR-0013](../adr/0013-decided-divergences-from-rust-old.md), which also records the
+Rust behavior so it survives the deletion of `rust-old/`.
 
-- **Lenient JSON decoders.** Rust's serde returns an error on missing or mistyped fields. Cyrius
-  substitutes defaults in `manifest`, `publisher`, `kv`, `tlog`, sandbox profile, `pfconfig`,
-  ratings, and remote responses. `{}` parses as a valid search result or update. Decide one rule
-  for trust-boundary inputs.
-- **Install accounting.** `installed_size` is the compressed bundle length; Rust summed the
-  extracted entry sizes, so the quota is looser. Files are written `0644` (Rust kept
-  `mode & 0o777`). There is no resolved-path containment check (Rust had one; Cyrius rejects
-  `..` and absolute names instead).
-- **Archive writer.** Every entry gets mode 0644, uid/gid 0 and mtime 0. Reproducible, but
-  undecided. Names over 100 bytes are truncated with no ustar `prefix` and no GNU LongLink. An
-  unreadable AOT or asset file is skipped silently (Rust errors). Output is compact JSON (Rust
-  pretty-printed), which changes the bundle bytes.
-- **Text handling.** Lowercasing is ASCII-only in `qualified_name`, `search` and `cat_parse`
-  (Rust uses Unicode). `sanitize_filename` is byte-wise, so `café` becomes `caf__`.
-  `is_valid_semver` rejects a leading `+` (Rust accepts it) and accepts u64 overflow (only a
-  code comment says so). `FLUTTER_FORCE_SCALE_FACTOR` is printed to 2 decimals (Rust prints the
-  shortest round-trip form: `4/3` → `1.3333333333333333`).
-- **Ratings wire format.** Cyrius writes `{pkg:{agent:Rating}}` with an integer `created_at`.
-  Rust wrote `{"ratings":{…}}` with RFC 3339 strings. A Rust-written file loads silently as
-  garbage, with no error. `RatingFilter` and `DisplayBackend` have no codec; no consumer reads
-  either (their Rust tests are recorded N/A under Coverage).
-- **Keyring loading.** Validation is per element (Rust skipped a whole file if any element was
-  malformed), a read is capped at 1 MiB, and a file named exactly `.json` is loaded.
-- **Transparency hash preimage.** A decimal epoch followed by the package name is ambiguous
-  (`1000`+`1/x` = `10001`+`/x`). Rust's RFC 3339 timestamp ended in `+00:00`. Changing this
-  changes every entry hash, so it needs a versioned format.
+| Divergence | Decision | Where |
+|---|---|---|
+| Lenient JSON decoders (defaults for missing or mistyped fields) | **matched**: every decoder strict, as serde | ADR-0013 §1 (with ADR-0011, ADR-0012) |
+| Ratings wire format (`{"ratings":…}`, RFC 3339) | Rust-written files **refused** | ADR-0013 §2 |
+| ASCII-only lowercasing; byte-wise `sanitize_filename` | **matched**: Unicode | ADR-0013 §3 |
+| Semver u64 overflow accepted | **matched**: rejected | ADR-0013 §4 |
+| Semver leading `+` rejected | **kept** (stricter) | ADR-0013 §4 |
+| Scale factor to 2 decimals | **matched**: shortest round-trip | ADR-0013 §4 |
+| Validation messages without the value; negative memory accepted | **matched** | ADR-0013 §4 |
+| `installed_size` = bundle length | **matched**: extracted size | ADR-0013 §5 |
+| Files extracted 0644 (Rust kept `mode & 0o777`) | **deferred** to v1.2.0 | ADR-0013 §5 |
+| No resolved-path containment check | **kept**: link/dir/`..`/absolute entries never written; destination symlinks v1.3.0 | ADR-0013 §5 |
+| Archive metadata normalized; compact JSON | **kept** (reproducible bundles) | ADR-0013 §6 |
+| Long names truncated; unreadable files skipped | **matched**: pack fails | ADR-0012 |
+| Keyring per-element validation | **matched**: whole file | ADR-0011 |
+| A file named `.json` loaded as a key file | **matched**: skipped | ADR-0013 §7 |
+| 1 MiB key-file / ratings-file read cap | **kept**, failing closed | ADR-0013 §1, §7 |
+| Transparency hash preimage ambiguity | recorded; versioned hash in v1.3.0 | ADR-0013 §8 |
+| `RatingFilter` / `DisplayBackend` codecs | not ported (no consumer) | Coverage, below |
 
 ## Where Cyrius is stricter than Rust (keep)
 
@@ -129,7 +123,8 @@ Every Rust test listed as partial or uncovered at the audit now has its assertio
 `rust-old/` can be deleted when all of these hold:
 
 - [x] D1–D12 fixed, each with a regression test. *(D1–D5: v1.1.1; D6–D12: v1.1.3.)*
-- [ ] Each "behavior change with no ADR" above is either matched to Rust or recorded in an ADR.
+- [x] Each "behavior change with no ADR" above is either matched to Rust or recorded in an ADR.
+  *(v1.1.5, ADR-0013.)*
 - [x] The 33 partial or uncovered Rust tests are covered, or marked N/A here with the reason. *(v1.1.4:
   202 covered, 2 N/A.)*
 - [x] CI runs `cyrius test`, `cyrius fuzz` and the GNU-tar cross-check. *(v1.1.2)*

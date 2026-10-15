@@ -127,14 +127,16 @@ fn is_dotted_version(v: Str): i64 {
 fn validate_flutter_manifest(m): i64 {
     var errors = vec_new();
     if (str_eq_cstr(fmanifest_runtime(m), "flutter") == 0) {
-        vec_push(errors, str_from("runtime must be 'flutter'"));
+        vec_push(errors, str_cat(str_cat(str_from("runtime must be 'flutter', got '"), fmanifest_runtime(m)),
+            str_from("'")));
     }
     var ev = fmanifest_engine_version(m);
     if (str_len(ev) == 0) {
         vec_push(errors, str_from("engine_version is required"));
     } else {
         if (is_dotted_version(ev) == 0) {
-            vec_push(errors, str_from("engine_version is not a valid version (expected x.y.z)"));
+            vec_push(errors, str_cat(str_cat(str_from("engine_version '"), ev),
+                str_from("' is not a valid version (expected x.y.z)")));
         }
     }
     var dv = fmanifest_dart_version(m);
@@ -142,7 +144,8 @@ fn validate_flutter_manifest(m): i64 {
         vec_push(errors, str_from("dart_version is required"));
     } else {
         if (is_dotted_version(dv) == 0) {
-            vec_push(errors, str_from("dart_version is not a valid version (expected x.y.z)"));
+            vec_push(errors, str_cat(str_cat(str_from("dart_version '"), dv),
+                str_from("' is not a valid version (expected x.y.z)")));
         }
     }
     if (_wl_contains(fmanifest_wayland(m), WL_CORE) == 0) {
@@ -212,6 +215,27 @@ fn build_launch_config(m, app_name: Str, compositor_socket: Str, scale): i64 {
 # Environment variables
 # ---------------------------------------------------------------------------
 
+# An f64 (as bits) the way Rust's Display prints it: the shortest decimal that
+# round-trips (bayan's Grisu2, near-shortest in rare cases), "1" not "1.0", and
+# NaN / inf / -inf for the non-finite values. Heap-backed: see the warning that
+# used to sit in build_env_vars about stack buffers outliving their frame.
+fn _fp_f64_display(bits): Str {
+    var be = (bits >> 52) & 0x7FF;
+    if (be == 0x7FF) {
+        if ((bits & 0x000FFFFFFFFFFFFF) != 0) { return str_from("NaN"); }
+        if (bits < 0) { return str_from("-inf"); }
+        return str_from("inf");
+    }
+    var buf = alloc(64);
+    var n = bayan_f64_to_json(bits, buf);
+    if (n >= 2) {
+        if (load8(buf + n - 2) == 46) {
+            if (load8(buf + n - 1) == 48) { n = n - 2; }     # "1.0" -> "1"
+        }
+    }
+    return str_new(buf, n);
+}
+
 # build_env_vars — Str-keyed map of launch env vars. Mirrors Rust `build_env_vars`.
 fn build_env_vars(c): i64 {
     var env = map_new_str();
@@ -224,20 +248,9 @@ fn build_env_vars(c): i64 {
         map_set(env, str_from("DISPLAY"), str_from(":0"));
         map_set(env, str_from("FLUTTER_ENGINE_SWITCH_GL"), str_from("x11"));
     }
-    # scale_factor formatted as a float string (matches Rust f64 to_string for the tested values)
-    var scbuf[32];
-    var sclen = fmt_float_buf(launch_scale_factor(c), &scbuf, 2);
-    # ⛔ str_clone IS LOAD-BEARING — a USE-AFTER-RETURN without it.
-    # `str_new(data, len)` ALIASES: it stores the pointer, it does not copy (lib/str.cyr:51).
-    # `scbuf` is a stack local of THIS function, so the Str handed to the map pointed into a
-    # frame that dies on return, and `_trim_trailing_zeros` does not help — `str_sub` also
-    # shares data with its parent (lib/str.cyr:199, "shares data with parent").
-    # It "worked" for years by luck: the dead frame happened not to be overwritten before the
-    # map was read. Surfaced by the 6.2.21 -> 6.6.2 bump, which changed the stack layout —
-    # measured `str_len` = 4 (correct) with the bytes read back as four SPACES.
-    # str_clone copies into heap memory, which outlives the frame.
-    map_set(env, str_from("FLUTTER_FORCE_SCALE_FACTOR"),
-      _trim_trailing_zeros(str_clone(str_new(&scbuf, sclen))));
+    # Rust's f64 Display: the shortest decimal that round-trips (v1.1.5, ADR-0013;
+    # it was rounded to 2 places, so 4/3 went out as 1.33)
+    map_set(env, str_from("FLUTTER_FORCE_SCALE_FACTOR"), _fp_f64_display(launch_scale_factor(c)));
     if (launch_accessibility(c) == 1) {
         map_set(env, str_from("FLUTTER_ACCESSIBILITY"), str_from("true"));
     }
@@ -246,32 +259,6 @@ fn build_env_vars(c): i64 {
     }
     map_set(env, str_from("AGNOS_APP_NAME"), launch_app_name(c));
     return env;
-}
-
-# Trim trailing zeros (and a trailing '.') from a decimal Str: "1.50"->"1.5",
-# "1.00"->"1", "1.25"->"1.25". Rust's f64 to_string has no trailing zeros.
-fn _trim_trailing_zeros(s: Str): Str {
-    var n = str_len(s);
-    var d = str_data(s);
-    # only trim if there's a '.'
-    var has_dot = 0;
-    var i = 0;
-    while (i < n) { if (load8(d + i) == 46) { has_dot = 1; } i = i + 1; }
-    if (has_dot == 0) { return s; }
-    var end = n;
-    var go = 1;
-    while (go == 1) {
-        if (end == 0) { go = 0; }
-        else {
-            var c = load8(d + end - 1);
-            if (c == 48) { end = end - 1; }            # trailing '0'
-            else {
-                if (c == 46) { end = end - 1; go = 0; } # trailing '.'
-                else { go = 0; }
-            }
-        }
-    }
-    return str_sub(s, 0, end);
 }
 
 # ---------------------------------------------------------------------------

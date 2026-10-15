@@ -5,6 +5,10 @@
 
 ## Version
 
+**1.1.5** — every divergence from rust-old decided (2026-10-15, ADR-0013): strict decoding in every
+decoder, Unicode text handling, Rust-era ratings files refused; semver overflow, scale-factor text,
+messages and `installed_size` matched. 979/979.
+
 **1.1.4** — Rust test coverage closed (2026-10-15): 202 of rust-old's 204 tests covered, 2 N/A with
 the reason recorded; chain checks, signature edge cases, rotation and codec fields asserted.
 894/894; coverage floor 88%.
@@ -102,9 +106,10 @@ remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once 
 
 ## Tests
 
-**894/894** tests green (`tests/mela.tcyr` — groups across the 9 modules, plus `pipeline`
+**979/979** tests green (`tests/mela.tcyr` — groups across the 9 modules, plus `pipeline`
 (end-to-end), `hardening` (zip-slip), `tar-reader` (v1.1.1: checksum, strict octal, bounds,
-duplicate names, the D1 crash input), `install-txn` (v1.1.3: fail-closed index, save rollback), `transport` (HTTP logic), `extraction` (on-disk unpack),
+duplicate names, the D1 crash input), `install-txn` (v1.1.3: fail-closed index, save rollback), `strict-decode` (v1.1.5: serde rules,
+Unicode), `transport` (HTTP logic), `extraction` (on-disk unpack),
 `keyring-load` (disk `load()` + `KeyVersion` JSON round-trip), and `registry-uninstall-fs` (files
 gone after uninstall)). `trust` has SHA-256 + RFC 8032 Ed25519 KAT vectors; `registry-persist`
 / `ratings-persist` do real on-disk round-trips; `agpkg-archive` packs + inspects a gzipped-ustar
@@ -148,10 +153,9 @@ Direct (declared in `cyrius.cyml`):
 See [`roadmap.md`](roadmap.md). **v1.1.x** works the 2026-10-14 `rust-old/` parity audit
 ([`rust-parity.md`](rust-parity.md)):
 - Rust tests: 202 of 204 covered, 2 N/A (no consumer of either codec).
-- `cyrius coverage`: 88% of `src/` fns referenced (291/328; the CI floor).
-- All twelve defects are fixed (v1.1.1, v1.1.3) and Rust test coverage is closed (v1.1.4). What
-  remains before `rust-old/` can be deleted is the divergence ADRs (v1.1.5), then the retirement
-  (v1.1.6).
+- `cyrius coverage`: 88% of `src/` fns referenced (292/330; the CI floor).
+- All twelve defects are fixed (v1.1.1, v1.1.3), Rust test coverage is closed (v1.1.4) and every
+  divergence is decided (v1.1.5, ADR-0013). Only the retirement of `rust-old/` (v1.1.6) remains.
 - CI runs test, fuzz, bench, an 88% coverage floor, the GNU tar cross-check and a live transport
   check.
 

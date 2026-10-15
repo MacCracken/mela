@@ -92,6 +92,14 @@ fn test_semver() {
     assert_eq(is_valid_semver(str_from("1.0.")),          0, "1.0. invalid");
     assert_eq(is_valid_semver(str_from("1.0.0+build")),   0, "1.0.0+build invalid (no build metadata)");
     assert_eq(is_valid_semver(str_from("")),              0, "empty invalid");
+
+    # v1.1.5 — a segment must fit u64, as Rust's parse::<u64>() required
+    assert_eq(is_valid_semver(str_from("18446744073709551615.0.0")), 1, "u64::MAX segment valid");
+    assert_eq(is_valid_semver(str_from("18446744073709551616.0.0")), 0, "u64::MAX + 1 invalid");
+    assert_eq(is_valid_semver(str_from("1.99999999999999999999999.0")), 0, "23-digit segment invalid");
+    assert_eq(is_valid_semver(str_from("0000000000000000000000001.0.0")), 1, "leading zeros do not overflow");
+    assert_eq(is_valid_semver(str_from("1.0.18446744073709551615-rc")), 1, "u64::MAX patch with prerelease");
+    assert_eq(is_valid_semver(str_from("+1.0.0")), 0, "leading + rejected (stricter than Rust, ADR-0013)");
     return 0;
 }
 
@@ -739,6 +747,13 @@ fn test_keyring_load() {
     file_write_all(str_data(badp), "not valid json", 14);
     assert_eq(keyring_load_dir(kr, str_from(DIR)), 0, "only a malformed file -> 0");
     sys_unlink(str_data(badp));
+
+    # a file named exactly ".json" has no extension (Rust Path::extension) and is skipped
+    var dotj = path_join(str_from(DIR), str_from(".json"));
+    var dbody = json_v_build(arr);
+    file_write_all(str_data(dotj), str_data(dbody), str_len(dbody));
+    assert_eq(keyring_load_dir(kr, str_from(DIR)), 0, "a file named .json is not a key file");
+    sys_unlink(str_data(dotj));
 
     # an absent dir empties a populated keyring
     var kr2 = mela_keyring_new();
@@ -1754,7 +1769,7 @@ fn _t_tar_set_size(buf, off, field) {
 
 # A one-entry raw (uncompressed) tar holding manifest.json.
 fn _t_tar_manifest() {
-    var m = str_from("{\"name\":\"x\",\"category\":\"Utility\"}");
+    var m = str_from("{\"name\":\"x\",\"version\":\"1.0.0\",\"description\":\"d\",\"publisher\":{\"name\":\"P\",\"key_id\":\"k\"},\"category\":\"Utility\"}");
     var es = vec_new();
     vec_push(es, tentry_new(str_from("manifest.json"), str_data(m), str_len(m)));
     return _tar_build(es);
@@ -1870,6 +1885,179 @@ fn test_tar_reader() {
     var tgz = _gzip_str(tt);
     var tnames = agpkg_inspect_bytes(str_data(tgz), str_len(tgz));
     assert_eq(names_contain(tnames, "b"), 1, "empty-name header is not end-of-archive");
+    return 0;
+}
+
+# v1.1.5 (ADR-0013): every decoder is strict, as Rust's serde was. A required
+# field that is missing or mistyped, or an optional field present with the wrong
+# type, rejects the input; an absent optional field takes its default.
+fn _sd(js) { return str_from(js); }
+
+fn test_strict_decode() {
+    test_group("strict-decode");
+
+    # manifest + publisher
+    var MP = "\"publisher\":{\"name\":\"P\",\"key_id\":\"k\"},\"category\":\"Utility\"";
+    var full = str_cat(_sd("{\"name\":\"x\",\"version\":\"1.0.0\",\"description\":\"d\","), str_cat(_sd(MP), _sd("}")));
+    assert_neq(manifest_from_json(full), 0, "manifest: required fields only -> ok");
+    assert_eq(manifest_from_json(str_cat(_sd("{\"version\":\"1.0.0\",\"description\":\"d\","), str_cat(_sd(MP), _sd("}")))), 0,
+      "manifest: no name -> 0");
+    assert_eq(manifest_from_json(str_cat(_sd("{\"name\":\"x\",\"version\":\"1.0.0\","), str_cat(_sd(MP), _sd("}")))), 0,
+      "manifest: no description -> 0");
+    assert_eq(manifest_from_json(str_cat(_sd("{\"name\":\"x\",\"version\":1,\"description\":\"d\","), str_cat(_sd(MP), _sd("}")))), 0,
+      "manifest: numeric version -> 0");
+    assert_eq(manifest_from_json(str_cat(_sd("{\"name\":\"x\",\"version\":\"1.0.0\",\"description\":\"d\",\"tags\":\"t\","),
+          str_cat(_sd(MP), _sd("}")))), 0, "manifest: tags not an array -> 0");
+    assert_eq(manifest_from_json(str_cat(_sd("{\"name\":\"x\",\"version\":\"1.0.0\",\"description\":\"d\",\"tags\":[1],"),
+          str_cat(_sd(MP), _sd("}")))), 0, "manifest: non-string tag -> 0");
+    assert_eq(manifest_from_json(str_cat(_sd("{\"name\":\"x\",\"version\":\"1.0.0\",\"description\":\"d\",\"dependencies\":{\"a\":1},"),
+          str_cat(_sd(MP), _sd("}")))), 0, "manifest: non-string dependency -> 0");
+    assert_eq(manifest_from_json(_sd("{\"name\":\"x\",\"version\":\"1.0.0\",\"description\":\"d\",\"category\":\"Utility\",\"publisher\":{\"name\":\"P\"}}")),
+      0, "manifest: publisher without key_id -> 0");
+    assert_eq(publisher_from_json(_sd("{\"name\":\"P\",\"key_id\":\"k\",\"homepage\":3}")), 0, "publisher: numeric homepage -> 0");
+    assert_neq(publisher_from_json(_sd("{\"name\":\"P\",\"key_id\":\"k\"}")), 0, "publisher: homepage optional");
+
+    # transparency entries
+    # an entry stamped 0, so a lenient decoder reading a string timestamp as 0
+    # would find a matching hash: only the type check can refuse it
+    var tl = tlog_new();
+    tlog_append(tl, str_from("a/b"), str_from("1.0.0"), str_from("k1"), str_from("h1"), str_from("s1"), 0);
+    assert_neq(tlog_from_json(tlog_to_json(tl)), 0, "tlog: complete entry -> ok");
+    var teh = log_entry_hash(vec_get(tl, 0));
+    var tstr = str_cat(str_cat(_sd("[{\"sequence\":0,\"timestamp\":\"1970-01-01T00:00:00Z\",\"package\":\"a/b\",\"version\":\"1.0.0\",\"publisher_key_id\":\"k1\",\"content_hash\":\"h1\",\"signature_hash\":\"s1\",\"previous_hash\":\"\",\"entry_hash\":\""),
+        teh), _sd("\"}]"));
+    assert_eq(tlog_from_json(tstr), 0, "tlog: RFC 3339 timestamp (Rust shape) -> 0");
+
+    # registry index records
+    var RD = "/tmp/mela-strict-reg";
+    _rc_mkdir_p(str_from(RD));
+    var ridx = path_join(str_from(RD), str_from("index.json"));
+    var rec = "{\"p\":{\"manifest\":{\"name\":\"p\",\"version\":\"1.0.0\",\"description\":\"d\",\"publisher\":{\"name\":\"P\",\"key_id\":\"k\"},\"category\":\"Utility\"},\"installed_at\":1,\"install_dir\":\"/x\",\"package_hash\":\"h\",\"installed_size\":1}}";
+    file_write_all(str_data(ridx), rec, strlen(rec));
+    assert_eq(mela_registry_new(str_from(RD)), 0, "index: record without auto_update -> registry refuses to open");
+    xunlink(str_data(ridx));
+
+    # registry responses
+    assert_eq(sresults_from_json(_sd("{}")), 0, "search results: {} is not a result");
+    assert_eq(sresults_from_json(_sd("{\"packages\":[],\"total\":0,\"page\":1}")), 0, "search results: no per_page -> 0");
+    assert_neq(sresults_from_json(_sd("{\"packages\":[],\"total\":0,\"page\":1,\"per_page\":20}")), 0, "search results: empty page ok");
+    assert_eq(sresults_from_json(_sd("{\"packages\":[{\"qualified_name\":\"a/b\"}],\"total\":1,\"page\":1,\"per_page\":20}")),
+      0, "search results: incomplete package -> 0");
+    assert_eq(sresults_from_json(_sd("{\"packages\":[],\"total\":-1,\"page\":1,\"per_page\":20}")), 0,
+      "search results: negative total -> 0");
+    assert_eq(update_from_json(_sd("{}")), 0, "update: {} -> 0");
+    assert_eq(update_from_json(_sd("{\"name\":\"n\",\"installed_version\":\"1\",\"available_version\":\"2\"}")), 0,
+      "update: no changelog -> 0");
+    assert_eq(presp_from_json(_sd("{\"name\":\"n\",\"version\":\"1\",\"download_url\":\"u\",\"replaced\":0}")), 0,
+      "publish response: numeric replaced -> 0");
+
+    # ratings
+    var R1 = "{\"agent_id\":\"a\",\"package_name\":\"p\",\"score\":4,\"created_at\":1,\"version_reviewed\":\"1.0.0\"}";
+    assert_neq(rating_from_json(_sd(R1)), 0, "rating: complete, no review -> ok");
+    assert_neq(rating_from_json(_sd("{\"agent_id\":\"a\",\"package_name\":\"p\",\"score\":4,\"review\":null,\"created_at\":1,\"version_reviewed\":\"1.0.0\"}")),
+      0, "rating: null review ok (Option)");
+    assert_eq(rating_from_json(_sd("{\"agent_id\":\"a\",\"package_name\":\"p\",\"score\":4,\"created_at\":1}")), 0,
+      "rating: no version_reviewed -> 0");
+    assert_eq(rating_from_json(_sd("{\"agent_id\":\"a\",\"package_name\":\"p\",\"score\":4,\"review\":7,\"created_at\":1,\"version_reviewed\":\"1.0.0\"}")),
+      0, "rating: numeric review -> 0");
+    # a ratings file written by the Rust version is refused, not loaded as garbage
+    var RUST = "{\"ratings\":{\"pkg\":{\"agent-1\":{\"agent_id\":\"agent-1\",\"package_name\":\"pkg\",\"score\":5,\"review\":\"Great\",\"created_at\":\"2026-01-01T00:00:00Z\",\"version_reviewed\":\"1.0.0\"}}}}";
+    var RP = "/tmp/mela-strict-rust-ratings.json";
+    file_write_all(RP, RUST, strlen(RUST));
+    assert_eq(rstore_load(str_from(RP)), 0, "ratings: a Rust-written file is refused");
+    file_write_all(RP, "", 0);
+    assert_eq(rstore_load(str_from(RP)), 0, "ratings: an empty file is an error (Rust), not an empty store");
+    xunlink(RP);
+    assert_eq(rstore_load(str_from("/tmp")), 0, "ratings: a directory is an error");
+    var rbig = alloc(RATINGS_MAXLEN + 2);
+    memset(rbig, 32, RATINGS_MAXLEN + 2);
+    file_write_all(RP, rbig, RATINGS_MAXLEN + 2);
+    assert_eq(rstore_load(str_from(RP)), 0, "ratings: over the cap is an error, not a truncated load");
+    xunlink(RP);
+    assert_neq(rstore_load(str_from("/tmp/mela-strict-no-such-ratings.json")), 0, "ratings: a missing file is an empty store (Rust)");
+    # stats: the whole distribution key is read
+    var ST = "{\"package_name\":\"p\",\"average_score\":4.0,\"total_ratings\":1,\"distribution\":{\"4\":1},\"latest_review\":null}";
+    assert_neq(stats_from_json(_sd(ST)), 0, "stats: complete -> ok");
+    assert_eq(stats_from_json(_sd("{\"package_name\":\"p\",\"average_score\":4.0,\"total_ratings\":1,\"distribution\":{\"10\":1},\"latest_review\":null}")),
+      0, "stats: key \"10\" is not score 1 -> 0");
+    assert_eq(stats_from_json(_sd("{\"package_name\":\"p\",\"average_score\":4.0,\"distribution\":{},\"latest_review\":null}")), 0,
+      "stats: no total_ratings -> 0");
+
+    # sandbox profiles
+    assert_neq(profile_from_json(profile_to_json(build_photis_nadi_profile())), 0, "profile: complete -> ok");
+    var PR = "\"landlock_rules\":[{\"path\":\"/d\",\"access\":\"rw\"}],\"seccomp_mode\":\"basic\",\"network\":{\"enabled\":false},\"allow_process_spawn\":false,";
+    assert_neq(profile_from_json(str_cat(str_cat(_sd("{\"preset\":\"Custom\","), _sd(PR)), _sd("\"max_memory_mb\":256}"))), 0,
+      "profile: hand-written complete -> ok");
+    assert_eq(profile_from_json(str_cat(str_cat(_sd("{\"preset\":\"Bogus\","), _sd(PR)), _sd("\"max_memory_mb\":256}"))), 0,
+      "profile: unknown preset -> 0 (was Custom)");
+    assert_eq(sandbox_preset_json_parse(str_from("Bogus")), 0 - 1, "preset parse: unknown -> -1");
+    assert_eq(sandbox_preset_json_parse(str_from("Custom")), SP_CUSTOM, "preset parse: Custom");
+    assert_eq(profile_from_json(str_cat(str_cat(_sd("{\"preset\":\"Custom\","), _sd(PR)), _sd("\"max_memory_mb\":-1}"))), 0,
+      "profile: negative memory -> 0 (Rust u64)");
+    assert_eq(profile_from_json(_sd("{}")), 0, "profile: {} -> 0");
+    assert_eq(sbprofile_from_json(_sd("{}")), 0, "flutter sandbox: {} -> 0 (was: no paths, network off)");
+    assert_eq(sbprofile_from_json(_sd("{\"landlock_paths\":[],\"seccomp_mode\":\"basic\",\"network\":{\"allowed_hosts\":[]}}")), 0,
+      "flutter sandbox: network without enabled -> 0");
+    assert_neq(sbprofile_from_json(_sd("{\"landlock_paths\":[],\"seccomp_mode\":\"basic\",\"network\":{\"enabled\":false}}")), 0,
+      "flutter sandbox: allowed_hosts optional");
+
+    # packaging config
+    var PC = "{\"app_name\":\"a\",\"version\":\"1\",\"publisher\":\"P\",\"description\":\"D\"";
+    assert_neq(pfconfig_from_json(str_cat(_sd(PC), _sd("}"))), 0, "config: optional fields absent -> ok");
+    assert_eq(pfconfig_category(pfconfig_from_json(str_cat(_sd(PC), _sd("}")))), CAT_DESKTOP_APP, "config: default category");
+    assert_eq(pfconfig_from_json(str_cat(_sd(PC), _sd(",\"category\":\"Nope\"}"))), 0, "config: unknown category -> 0");
+    assert_eq(pfconfig_from_json(str_cat(_sd(PC), _sd(",\"wayland_requirements\":[\"Bogus\"]}"))), 0,
+      "config: unknown protocol -> 0 (was Core)");
+    assert_eq(pfconfig_from_json(str_cat(_sd(PC), _sd(",\"network_access\":1}"))), 0, "config: numeric network_access -> 0");
+    assert_eq(pfconfig_from_json(_sd("{\"version\":\"1\",\"publisher\":\"P\",\"description\":\"D\"}")), 0, "config: no app_name -> 0");
+    assert_neq(pfconfig_from_json(str_cat(_sd(PC), _sd(",\"data_dir\":null}"))), 0, "config: data_dir null ok (Option)");
+
+    # v1.1.5 (ADR-0013): Unicode text handling, as Rust's to_lowercase / is_alphanumeric
+    assert_eq(str_eq_cstr(sanitize_filename(_sd("caf\xc3\xa9")), "caf\xc3\xa9"), 1, "sanitize: \u00e9 is a letter, kept");
+    assert_eq(str_eq(sanitize_filename(_sd("caf\xc3\xa9")), sanitize_filename(_sd("caf\xc3\xa8"))), 0,
+      "sanitize: caf\u00e9 and caf\u00e8 no longer share a cache file");
+    assert_eq(str_eq_cstr(sanitize_filename(_sd("\xe6\x97\xa5\xe6\x9c\xac")), "\xe6\x97\xa5\xe6\x9c\xac"), 1,
+      "sanitize: CJK letters kept");
+    assert_eq(str_eq_cstr(sanitize_filename(_sd("a\xe2\x82\xacb")), "a_b"), 1, "sanitize: a symbol is one '_' per character");
+    assert_eq(str_eq_cstr(sanitize_filename(_sd("\xd9\xa3x")), "\xd9\xa3x"), 1, "sanitize: a non-ASCII digit kept");
+    var bad8 = alloc(3);
+    store8(bad8, 97); store8(bad8 + 1, 255); store8(bad8 + 2, 0);
+    assert_eq(str_eq_cstr(sanitize_filename(str_new(bad8, 2)), "a_"), 1, "sanitize: invalid byte -> '_'");
+    var trunc = alloc(3);
+    store8(trunc, 97); store8(trunc + 1, 0xC3); store8(trunc + 2, 0);
+    assert_eq(str_eq_cstr(sanitize_filename(str_new(trunc, 2)), "a_"), 1, "sanitize: truncated sequence at the end -> '_'");
+    assert_eq(str_eq_cstr(sanitize_filename(_sd("../x y")), "___x_y"), 1, "sanitize: ASCII unchanged");
+    var mq = mk_manifest(str_from("x"), str_from("d"), str_from("1.0.0"), _sd("\xc3\x84RZTE Team"), str_from("k"));
+    assert_eq(str_eq_cstr(manifest_qualified_name(mq), "\xc3\xa4rzte-team/x"), 1, "qualified_name: \u00c4 lowercases to \u00e4");
+    var ur = registry_in_memory();
+    var um = mk_manifest(str_from("cafe"), _sd("Caf\xc3\xa9 \xc3\x9cBER tools"), str_from("1.0.0"), str_from("P"), str_from("k"));
+    registry_install(ur, um, str_from("h"), 1, 1);
+    assert_eq(vec_len(mela_registry_search(ur, _sd("\xc3\xbcber"))), 1, "search: \u00dcBER matches \u00fcber");
+    assert_eq(vec_len(mela_registry_search(ur, _sd("CAF\xc3\x89"))), 1, "search: CAF\u00c9 matches Caf\u00e9");
+    assert_eq(cat_parse("SECURITY"), CAT_SECURITY, "cat_parse: ASCII case still folds");
+
+    # v1.1.5: validation messages name the bad value, as Rust's format! strings did
+    var mrt = mk_fmanifest(); store64(mrt, str_from("native"));
+    assert_eq(errors_contain(validate_flutter_manifest(mrt), "runtime must be 'flutter', got 'native'"), 1,
+      "message: runtime value quoted");
+    var mev = mk_fmanifest(); store64(mev + 8, str_from("not-a-version"));
+    assert_eq(errors_contain(validate_flutter_manifest(mev),
+        "engine_version 'not-a-version' is not a valid version (expected x.y.z)"), 1, "message: engine version quoted");
+    var mdv2 = mk_fmanifest(); store64(mdv2 + 16, str_from("abc"));
+    assert_eq(errors_contain(validate_flutter_manifest(mdv2),
+        "dart_version 'abc' is not a valid version (expected x.y.z)"), 1, "message: dart version quoted");
+    var pacc = build_photis_nadi_profile();
+    store64(vec_get(profile_landlock_rules(pacc), 1) + 8, str_from("x"));
+    assert_eq(str_eq_cstr(validate_profile(pacc), "invalid Landlock access mode 'x' for path '/tmp' (expected 'ro' or 'rw')"), 1,
+      "message: access mode and path quoted");
+    var psec = build_photis_nadi_profile();
+    store64(psec + 16, str_from("nope"));
+    assert_eq(str_eq_cstr(validate_profile(psec), "unknown seccomp mode: 'nope' (expected basic, desktop, or strict)"), 1,
+      "message: seccomp mode quoted");
+    var pneg = build_photis_nadi_profile();
+    store64(pneg + 32, 0 - 1);
+    assert_eq(str_eq_cstr(validate_profile(pneg), "max_memory_mb must be greater than zero"), 1,
+      "validate: negative memory rejected (Rust u64)");
     return 0;
 }
 
@@ -2125,6 +2313,16 @@ fn test_pipeline() {
     vec_push(only, tentry_new(str_from("sandbox.json"), str_data(sbj), str_len(sbj)));
     assert_eq(pipeline_extract_manifest(_gzip_str(_tar_build(only))), 0, "no manifest.json -> 0");
     assert_eq(pipeline_extract_manifest(str_from("garbage")), 0, "not gzip -> 0");
+
+    # v1.1.5 (ADR-0013): installed_size is the extracted size, as Rust recorded it
+    var szreg = registry_in_memory();
+    pipeline_install(szreg, keyring, bundle, &sig, 64, content_hash, NOW);
+    var want_size = str_len(mela_manifest_to_json(manifest)) + str_len(sbprofile_to_json(sandbox));
+    assert_eq(agpkg_payload_size(str_data(bundle), str_len(bundle)), want_size, "payload size = manifest + sandbox bytes");
+    assert_eq(imp_installed_size(registry_get_package(szreg, str_from("test-pkg"))), want_size,
+      "installed_size records the extracted bytes, not the bundle length");
+    assert_neq(want_size, str_len(bundle), "the two sizes differ for this bundle");
+    assert_eq(agpkg_payload_size("garbage", 7), 0 - 1, "payload size of a non-bundle -> -1");
     return 0;
 }
 
@@ -2387,6 +2585,16 @@ fn test_fpackaging() {
     assert_eq(map_has(ex, str_from("WAYLAND_DISPLAY")), 0, "env xwayland: no WAYLAND_DISPLAY");
     assert_eq(str_eq_cstr(map_get(ex, str_from("FLUTTER_FORCE_SCALE_FACTOR")), "1"), 1, "env xwayland scale 1");
     assert_eq(str_eq_cstr(map_get(ex, str_from("AGNOS_APP_NAME")), "x-app"), 1, "env xwayland app name");
+
+    # v1.1.5 (ADR-0013): the scale factor prints as Rust's f64 Display
+    assert_eq(str_eq_cstr(_fp_f64_display(f64_div(f64_from(4), f64_from(3))), "1.3333333333333333"), 1, "scale 4/3 shortest");
+    assert_eq(str_eq_cstr(_fp_f64_display(f64_div(f64_from(9), f64_from(8))), "1.125"), 1, "scale 9/8 (was 1.13)");
+    assert_eq(str_eq_cstr(_fp_f64_display(f64_div(f64_from(3), f64_from(2))), "1.5"), 1, "scale 1.5");
+    assert_eq(str_eq_cstr(_fp_f64_display(f64_from(2)), "2"), 1, "scale 2 (no .0)");
+    assert_eq(str_eq_cstr(_fp_f64_display(f64_div(f64_from(0), f64_from(0))), "NaN"), 1, "scale NaN");
+    var c43 = build_launch_config(mk_fmanifest(), str_from("a"), str_from("wayland-0"), f64_div(f64_from(4), f64_from(3)));
+    assert_eq(str_eq_cstr(map_get(build_env_vars(c43), str_from("FLUTTER_FORCE_SCALE_FACTOR")), "1.3333333333333333"), 1,
+      "env scale 4/3 shortest");
     return 0;
 }
 
@@ -2427,16 +2635,16 @@ fn test_ratings_persist() {
     # v1.1.1 (D3): an out-of-range score in a ratings file is rejected on load,
     # before get_stats / top_rated could index the 6-slot distribution with it
     var OOR = "/tmp/mela-test-ratings-oor.json";
-    var hi = "{\"pkg\":{\"a\":{\"agent_id\":\"a\",\"package_name\":\"pkg\",\"score\":9,\"created_at\":1}}}";
+    var hi = "{\"pkg\":{\"a\":{\"agent_id\":\"a\",\"package_name\":\"pkg\",\"score\":9,\"created_at\":1,\"version_reviewed\":\"1.0.0\"}}}";
     file_write_all(str_data(str_from(OOR)), hi, strlen(hi));
     assert_eq(rstore_load(str_from(OOR)), 0, "score 9 -> load rejected");
-    var lo = "{\"pkg\":{\"a\":{\"agent_id\":\"a\",\"package_name\":\"pkg\",\"score\":-1,\"created_at\":1}}}";
+    var lo = "{\"pkg\":{\"a\":{\"agent_id\":\"a\",\"package_name\":\"pkg\",\"score\":-1,\"created_at\":1,\"version_reviewed\":\"1.0.0\"}}}";
     assert_eq(rstore_from_json(str_from(lo)), 0, "score -1 -> rejected");
-    var zero = "{\"pkg\":{\"a\":{\"agent_id\":\"a\",\"package_name\":\"pkg\",\"score\":0,\"created_at\":1}}}";
+    var zero = "{\"pkg\":{\"a\":{\"agent_id\":\"a\",\"package_name\":\"pkg\",\"score\":0,\"created_at\":1,\"version_reviewed\":\"1.0.0\"}}}";
     assert_eq(rstore_from_json(str_from(zero)), 0, "score 0 -> rejected");
-    var big = "{\"agent_id\":\"a\",\"package_name\":\"pkg\",\"score\":1000000000,\"created_at\":1}";
+    var big = "{\"agent_id\":\"a\",\"package_name\":\"pkg\",\"score\":1000000000,\"created_at\":1,\"version_reviewed\":\"1.0.0\"}";
     assert_eq(rating_from_json(str_from(big)), 0, "rating_from_json: score 1e9 -> 0");
-    var five = "{\"pkg\":{\"a\":{\"agent_id\":\"a\",\"package_name\":\"pkg\",\"score\":5,\"created_at\":1}}}";
+    var five = "{\"pkg\":{\"a\":{\"agent_id\":\"a\",\"package_name\":\"pkg\",\"score\":5,\"created_at\":1,\"version_reviewed\":\"1.0.0\"}}}";
     var st5 = rstore_from_json(str_from(five));
     assert_neq(st5, 0, "score 5 -> accepted");
     var s5 = rstore_get_stats(st5, str_from("pkg"));
@@ -2716,6 +2924,7 @@ fn main() {
     test_extraction();
     test_pipeline();
     test_install_txn();
+    test_strict_decode();
     return assert_summary();
 }
 

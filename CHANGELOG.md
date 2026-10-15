@@ -4,6 +4,74 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
+## [1.1.5] - 2026-10-15
+
+**Every divergence from rust-old decided.** Each behavior the audit found differing from Rust,
+with no ADR to say whether that was intended, now either matches Rust or is kept on purpose in
+[ADR-0013](docs/adr/0013-decided-divergences-from-rust-old.md). ADR-0013 records the Rust behavior
+too, so it survives the deletion of `rust-old/` at v1.1.6. Three of the choices were policy, made
+by the maintainer: strict decoding everywhere, Unicode text as Rust handled it, and refusing
+Rust-era ratings files. 979 passed / 0 failed (was 894); every CI gate passes, and `--agnos` and
+`--aarch64` build. `cyrius build` OK (3,380,536 B, +170 KB of Unicode tables).
+
+### Changed — every decoder is strict, as Rust's serde was
+
+The rule ADR-0011 and ADR-0012 applied to keys, ratings scores, bundles and categories now holds
+for every `*_from_json`:
+
+- **Required fields:** missing or of the wrong type means the input is rejected.
+- **Optional fields:** absent takes the default; present with the wrong type is rejected.
+- **Unsigned fields** reject negative values.
+- **Unknown enum names** are rejected. An unknown sandbox preset used to become Custom, and an
+  unknown Wayland protocol used to become Core.
+
+This covers manifests, publishers, transparency entries, registry index records, search results,
+publish responses, update records, ratings, rating stats, sandbox profiles, the Flutter sandbox
+profile and packaging configs. ADR-0013 has the per-decoder field table.
+
+- **Fewer silent defaults:** `{}` is no longer a valid search result, update record or sandbox
+  disclosure.
+- **`rstore_load`:** returns 0 for a file that is empty, unreadable, a directory or over 1 MiB,
+  as Rust's `load` returned an error. It used to return an empty store. A missing file is still
+  an empty store.
+- **`stats_from_json`:** reads each distribution key whole. Before, `"10"` counted as score 1.
+- **Rust-era ratings files** (a `ratings` wrapper and RFC 3339 timestamps) are refused rather than
+  loaded as garbage.
+- **Proof:** the new `strict-decode` group has 33 assertions that fail against the 1.1.4 decoders.
+
+### Changed — Unicode text, as Rust handled it
+
+- **Lowercasing** (`manifest_qualified_name`, registry search, `cat_parse`) uses the stdlib's
+  Unicode lowercase. `ÄRZTE Team` qualifies as `ärzte-team`, and `ÜBER` matches `über`. Rust's
+  context-sensitive special cases (final sigma, dotted İ) are noted in the ADR.
+- **`sanitize_filename`** keeps letters and digits in any script and turns each other character
+  into a single `_`. `café` used to become `caf__`, and `café` / `cafè` shared one cache file.
+- **The Unicode modules** are declared in `cyrius.cyml` and add about 170 KB to the binary.
+  `distlib` records them as one leaf, so a consumer of the bundle compiles in all of
+  `lib/unicode`.
+
+### Changed — the remaining text and accounting differences, matched
+
+- **Semver:** a segment over u64 is rejected, as Rust's parse rejected it. A leading `+` stays
+  rejected; that is stricter than Rust and kept on purpose.
+- **`FLUTTER_FORCE_SCALE_FACTOR`** is Rust's shortest round-trip form (`4/3` →
+  `1.3333333333333333`, not `1.33`; `2` → `2`; NaN / inf spelled as Rust).
+- **Validation messages** quote the bad value, word for word as Rust's `format!` strings did.
+  `validate_profile` also rejects a negative `max_memory_mb`.
+- **`installed_size`** records the extracted size (new `agpkg_payload_size`), as Rust did. The
+  quota check before install still uses the bundle size, as Rust's did.
+- **Keys:** a file named exactly `.json` is not a key file, matching Rust's `Path::extension()`.
+
+### Kept or deferred, with reasons (ADR-0013)
+
+- **Kept:** normalized archive metadata (reproducible bundles, so the digest is stable) and compact
+  JSON inside bundles.
+- **Kept, stronger:** path containment. Links, directories, absolute names and `..` are never
+  written.
+- **Deferred to v1.2.0:** keeping file modes on extraction.
+- **Deferred to v1.3.0:** the transparency hash-preimage ambiguity, which needs a versioned hash
+  format.
+
 ## [1.1.4] - 2026-10-15
 
 **Rust test coverage closed.** Every one of rust-old's 204 tests now has its assertions in the
