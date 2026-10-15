@@ -38,13 +38,13 @@ fn pfconfig_has_data_dir(c): i64 { return load64(c + 56); }
 fn pfconfig_data_dir(c): Str     { return load64(c + 64); }
 
 fn _ag_jstr(o, key): Str {
-    var v = json_v_obj_get(o, key);
+    var v = bayan_json_v_obj_get_by_cstr(o, key);
     if (v == 0) { return str_from(""); }
     if (json_v_is_str(v) == 0) { return str_from(""); }
     return json_v_str(v);
 }
 fn _ag_jbool(o, key): i64 {
-    var v = json_v_obj_get(o, key);
+    var v = bayan_json_v_obj_get_by_cstr(o, key);
     if (v == 0) { return 0; }
     if (json_v_is_bool(v) == 0) { return 0; }
     return json_v_bool(v);
@@ -58,11 +58,11 @@ fn pfconfig_from_json(json: Str): i64 {
     if (json_v_is_obj(root) == 0) { return 0; }
 
     var category = CAT_DESKTOP_APP;                 # default_category()
-    var cv = json_v_obj_get(root, "category");
+    var cv = bayan_json_v_obj_get_by_cstr(root, "category");
     if (json_v_is_str(cv) == 1) { category = cat_json_parse(json_v_str(cv)); }
 
     var wl = vec_new();
-    var wv = json_v_obj_get(root, "wayland_requirements");
+    var wv = bayan_json_v_obj_get_by_cstr(root, "wayland_requirements");
     if (json_v_is_arr(wv) == 1) {
         var n = json_v_arr_len(wv);
         var i = 0;
@@ -75,7 +75,7 @@ fn pfconfig_from_json(json: Str): i64 {
 
     var has_dd = 0;
     var dd = str_from("");
-    var ddv = json_v_obj_get(root, "data_dir");
+    var ddv = bayan_json_v_obj_get_by_cstr(root, "data_dir");
     if (json_v_is_str(ddv) == 1) { has_dd = 1; dd = json_v_str(ddv); }
 
     return pfconfig_new(_ag_jstr(root, "app_name"), _ag_jstr(root, "version"),
@@ -288,7 +288,7 @@ fn sbprofile_from_json(json: Str): i64 {
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
     var rules = vec_new();
-    var arr = json_v_obj_get(root, "landlock_paths");
+    var arr = bayan_json_v_obj_get_by_cstr(root, "landlock_paths");
     if (json_v_is_arr(arr) == 1) {
         var n = json_v_arr_len(arr);
         var i = 0;
@@ -300,10 +300,10 @@ fn sbprofile_from_json(json: Str): i64 {
     }
     var hosts = vec_new();
     var enabled = 0;
-    var net_in = json_v_obj_get(root, "network");
+    var net_in = bayan_json_v_obj_get_by_cstr(root, "network");
     if (json_v_is_obj(net_in) == 1) {
         enabled = _ag_jbool(net_in, "enabled");
-        var ha = json_v_obj_get(net_in, "allowed_hosts");
+        var ha = bayan_json_v_obj_get_by_cstr(net_in, "allowed_hosts");
         if (json_v_is_arr(ha) == 1) {
             var hn = json_v_arr_len(ha);
             var hi = 0;

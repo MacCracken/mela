@@ -287,13 +287,13 @@ fn _stats_better(x, y): i64 {
 var RATINGS_MAXLEN = 1048576;    # 1 MiB read buffer
 
 fn _r_jstr(o, key): Str {
-    var v = json_v_obj_get(o, key);
+    var v = bayan_json_v_obj_get_by_cstr(o, key);
     if (v == 0) { return str_from(""); }
     if (json_v_is_str(v) == 0) { return str_from(""); }
     return json_v_str(v);
 }
 fn _r_jint(o, key): i64 {
-    var v = json_v_obj_get(o, key);
+    var v = bayan_json_v_obj_get_by_cstr(o, key);
     if (v == 0) { return 0; }
     if (json_v_is_int(v) == 0) { return 0; }
     return json_v_int(v);
@@ -315,7 +315,7 @@ fn _rating_to_jv(r): i64 {
 }
 
 fn _rating_from_jv(o): i64 {
-    var rv = json_v_obj_get(o, "review");
+    var rv = bayan_json_v_obj_get_by_cstr(o, "review");
     var has_review = 0;
     var review = str_from("");
     if (json_v_is_str(rv) == 1) { has_review = 1; review = json_v_str(rv); }
@@ -358,7 +358,7 @@ fn stats_from_json(json: Str): i64 {
     if (root == 0) { return 0; }
     if (json_v_is_obj(root) == 0) { return 0; }
     var dist = _dist_new();
-    var dv = json_v_obj_get(root, "distribution");
+    var dv = bayan_json_v_obj_get_by_cstr(root, "distribution");
     if (json_v_is_obj(dv) == 1) {
         var n = json_v_obj_len(dv);
         var i = 0;
@@ -378,10 +378,10 @@ fn stats_from_json(json: Str): i64 {
     }
     var has_latest = 0;
     var latest = 0;
-    var lv = json_v_obj_get(root, "latest_review");
+    var lv = bayan_json_v_obj_get_by_cstr(root, "latest_review");
     if (json_v_is_int(lv) == 1) { has_latest = 1; latest = json_v_int(lv); }
     var avg = f64_from(0);
-    var av = json_v_obj_get(root, "average_score");
+    var av = bayan_json_v_obj_get_by_cstr(root, "average_score");
     if (json_v_is_float(av) == 1) { avg = json_v_float(av); }
     if (json_v_is_int(av) == 1)   { avg = f64_from(json_v_int(av)); }
     var s = alloc(48);

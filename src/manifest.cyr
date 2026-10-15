@@ -254,7 +254,7 @@ fn cat_json_parse(s: Str): i64 {
 # String value of object field `key`, or "" if absent / not a string
 # (serde #[serde(default)] semantics).
 fn _man_jstr(obj, key): Str {
-    var v = json_v_obj_get(obj, key);
+    var v = bayan_json_v_obj_get_by_cstr(obj, key);
     if (v == 0) { return str_from(""); }
     if (json_v_is_str(v) == 0) { return str_from(""); }
     return json_v_str(v);
@@ -354,11 +354,11 @@ fn manifest_from_jv(root): i64 {
     var version = _man_jstr(root, "version");
     var desc = _man_jstr(root, "description");
 
-    var pubv = json_v_obj_get(root, "publisher");
+    var pubv = bayan_json_v_obj_get_by_cstr(root, "publisher");
     var publisher = publisher_new(_man_jstr(pubv, "name"), _man_jstr(pubv, "key_id"),
       _man_jstr(pubv, "homepage"));
 
-    var catv = json_v_obj_get(root, "category");
+    var catv = bayan_json_v_obj_get_by_cstr(root, "category");
     var cat = CAT_PARSE_FAIL;
     if (json_v_is_str(catv) == 1) { cat = cat_json_parse(json_v_str(catv)); }
 
@@ -370,10 +370,10 @@ fn manifest_from_jv(root): i64 {
     man_set_changelog(m, _man_jstr(root, "changelog"));
     man_set_min_agnos_version(m, _man_jstr(root, "min_agnos_version"));
 
-    _man_vec_from_arr(json_v_obj_get(root, "screenshots"), man_screenshots(m));
-    _man_vec_from_arr(json_v_obj_get(root, "tags"), man_tags(m));
+    _man_vec_from_arr(bayan_json_v_obj_get_by_cstr(root, "screenshots"), man_screenshots(m));
+    _man_vec_from_arr(bayan_json_v_obj_get_by_cstr(root, "tags"), man_tags(m));
 
-    var depsv = json_v_obj_get(root, "dependencies");
+    var depsv = bayan_json_v_obj_get_by_cstr(root, "dependencies");
     if (json_v_is_obj(depsv) == 1) {
         var dm2 = man_dependencies(m);
         var dn = json_v_obj_len(depsv);

@@ -195,7 +195,7 @@ fn tlog_is_empty(log): i64 { if (vec_len(log) == 0) { return 1; } return 0; }
 
 # String value of object field `key`, or "" if absent / not a string.
 fn _log_jstr(obj, key): Str {
-    var v = json_v_obj_get(obj, key);
+    var v = bayan_json_v_obj_get_by_cstr(obj, key);
     if (v == 0) { return str_from(""); }
     if (json_v_is_str(v) == 0) { return str_from(""); }
     return json_v_str(v);
@@ -203,7 +203,7 @@ fn _log_jstr(obj, key): Str {
 
 # Integer value of object field `key`, or 0 if absent / not an integer.
 fn _log_jint(obj, key): i64 {
-    var v = json_v_obj_get(obj, key);
+    var v = bayan_json_v_obj_get_by_cstr(obj, key);
     if (v == 0) { return 0; }
     if (json_v_is_int(v) == 0) { return 0; }
     return json_v_int(v);

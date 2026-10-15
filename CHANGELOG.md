@@ -4,6 +4,34 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
+## [1.0.5] - 2026-10-14
+
+**Zero deprecation warnings.** `cyrius build` OK (3,140,544 B, unchanged), 492 passed / 0 failed.
+
+### Changed — `json_v_obj_get` → `bayan_json_v_obj_get_by_cstr`
+
+All 39 call sites across 8 modules migrated off the name bayan deprecated in 1.5.10. Every key is
+a C-string literal — the 21 direct calls, and all 70 calls into the per-module `_*_jstr` /
+`_*_jint` / `_*_jbool` helpers — so `_by_cstr` is the right lookup everywhere and none needed
+`_by_str`. No behavior change: the deprecated name already forwarded to `_by_cstr`. Build
+warnings drop from 43 to 4 (the remaining four predate the 6.6.20 bump).
+
+### Fixed — raw `sys_*` filesystem calls were wrong on agnos
+
+agnos's `sys_unlink` / `sys_rmdir` / `sys_mkdir` are length-carrying — `(path, pathlen)` — where
+Linux takes `(path)` / `(path, mode)`. Four call sites used the raw Linux shape:
+
+- `_rmtree` (`src/local_registry.cyr`): `sys_unlink(path)` and `sys_rmdir(path)` — an arity error,
+  so `dist/mela.cyr` did not compile for `x86_64-agnos` (the 1.0.4 `distlib` warning).
+- `registry_save_index` (`src/local_registry.cyr`) and the cache-dir walk in
+  `src/remote_client.cyr`: `sys_mkdir(path, 0o777)` — same arity on both targets, so it compiled
+  and silently passed the mode as agnos's `pathlen`.
+
+All four now go through the stdlib's portable bridges in `lib/io.cyr` (`xunlink` / `xrmdir` /
+`xmkdir`), which compute the length on agnos and route Windows through kernel32. Linux behavior is
+unchanged. `src/` has no raw `sys_*` calls left; `cyrius distlib` compile-verifies the bundle for
+agnos with no warning, and `cyrius build --agnos` succeeds (3,100,624 B).
+
 ## [1.0.4] - 2026-10-14
 
 **cyrius 6.6.2 → 6.6.20.** `cyrius build` OK (3,140,544 B), 492 passed / 0 failed.

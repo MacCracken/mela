@@ -70,19 +70,19 @@ fn instres_upgraded_from(x): Str { return load64(x + 32); }
 # ---------------------------------------------------------------------------
 
 fn _reg_jstr(o, key): Str {
-    var v = json_v_obj_get(o, key);
+    var v = bayan_json_v_obj_get_by_cstr(o, key);
     if (v == 0) { return str_from(""); }
     if (json_v_is_str(v) == 0) { return str_from(""); }
     return json_v_str(v);
 }
 fn _reg_jint(o, key): i64 {
-    var v = json_v_obj_get(o, key);
+    var v = bayan_json_v_obj_get_by_cstr(o, key);
     if (v == 0) { return 0; }
     if (json_v_is_int(v) == 0) { return 0; }
     return json_v_int(v);
 }
 fn _reg_jbool(o, key): i64 {
-    var v = json_v_obj_get(o, key);
+    var v = bayan_json_v_obj_get_by_cstr(o, key);
     if (v == 0) { return 0; }
     if (json_v_is_bool(v) == 0) { return 0; }
     return json_v_bool(v);
@@ -101,7 +101,7 @@ fn _reg_record_to_jv(p): i64 {
 
 fn _reg_record_from_jv(o): i64 {
     if (json_v_is_obj(o) == 0) { return 0; }
-    var manifest = manifest_from_jv(json_v_obj_get(o, "manifest"));
+    var manifest = manifest_from_jv(bayan_json_v_obj_get_by_cstr(o, "manifest"));
     if (manifest == 0) { return 0; }
     return imp_new(manifest, _reg_jint(o, "installed_at"), _reg_jstr(o, "install_dir"),
       _reg_jstr(o, "package_hash"), _reg_jbool(o, "auto_update"),
@@ -164,7 +164,7 @@ fn _registry_index_path(r): Str {
 # Save the index to <root>/index.json (creates root if needed). Returns bytes
 # written, or a negative error. Mirrors Rust `save_index`.
 fn registry_save_index(r): i64 {
-    sys_mkdir(str_data(registry_root(r)), REG_DIR_MODE);   # ok if it already exists
+    xmkdir(str_data(registry_root(r)), REG_DIR_MODE);   # ok if it already exists
     var js = registry_index_to_json(registry_index(r));
     return file_write_all(str_data(_registry_index_path(r)), str_data(js), str_len(js));
 }
@@ -271,10 +271,10 @@ fn _rmtree(dir: Str): i64 {
     while (i < n) {
         var full = path_join(dir, vec_get(entries, i));
         if (is_dir(full) == 1) { count = count + _rmtree(full); }
-        else { sys_unlink(str_data(full)); count = count + 1; }
+        else { xunlink(str_data(full)); count = count + 1; }
         i = i + 1;
     }
-    sys_rmdir(str_data(dir));
+    xrmdir(str_data(dir));
     return count;
 }
 

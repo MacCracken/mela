@@ -5,6 +5,10 @@
 
 ## Version
 
+**1.0.5** — JSON lookups migrated to `bayan_json_v_obj_get_by_cstr` (2026-10-14); zero
+deprecation warnings at build. Filesystem calls go through the portable `xunlink` / `xrmdir` /
+`xmkdir` bridges, so `dist/mela.cyr` compiles for agnos too.
+
 **1.0.4** — cyrius 6.6.20 (2026-10-14). sigil / sankoch / sandhi now come in as stdlib
 leaves; agnostik is the only package dep. `lib/` byte-identical to the 6.6.20 snapshot; 492/492.
 
