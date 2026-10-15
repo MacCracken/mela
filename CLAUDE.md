@@ -69,5 +69,5 @@ cyrius test                              # run tests/*.tcyr
 - [`docs/guides/`](docs/guides/) — Task-oriented how-tos
 - [`docs/examples/`](docs/examples/) — Runnable examples
 - [`docs/development/state.md`](docs/development/state.md) — Live state
-- [`docs/development/roadmap.md`](docs/development/roadmap.md) — Milestones through v1.0
+- [`docs/development/roadmap.md`](docs/development/roadmap.md) — Open milestones (v1.1.x, v1.x backlog)
 

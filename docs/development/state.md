@@ -125,12 +125,14 @@ Direct (declared in `cyrius.cyml`):
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). Module port complete (9/9); end-to-end flow wired (0.8.1); audit +
-threat model done (0.9.0); public API frozen + docs reconciled (0.9.1, [`../api/`](../api/)).
-As of **0.9.2** the previously-deferred pieces are done: mela is consumable (`dist/mela.cyr`),
-transport is real (HTTP+HTTPS+DNS via sandhi), and install extracts to disk. As of **0.9.5** the
-**v1.0 consumer gate is met** — ark is green against mela (see *Consumers*). **v1.0.0 is cut**
-(2026-06-18): every v1.0 criterion is checked. Post-1.0 work: retire `rust-old/` once test coverage
-≥ the Rust suite is confirmed; the Rust benchmark column is not a blocker (takes the last recorded
-Rust numbers where available, else omitted — `rust-old` needs `agnos-common` to build); paid
-distribution (`mudra`/`vinimaya`) stays out of scope until those repos land. No deferred seams remain.
+See [`roadmap.md`](roadmap.md). **v1.1.x** works the 2026-10-14 `rust-old/` parity audit
+([`rust-parity.md`](rust-parity.md)):
+- Rust tests: 171 of 204 covered, 23 partial, 10 not covered.
+- `cyrius coverage`: 75% of `src/` fns referenced.
+- Twelve defects (D1–D12) to fix before `rust-old/` can be deleted. The most severe: a crafted
+  bundle crashes `pipeline_install` before the signature gate (D1), uninstall follows symlinks
+  (D2), and artifact downloads cap at 256 KiB (D7).
+- CI does not yet run `cyrius test`.
+
+The **v1.x** backlog maps large-bundle support, hardening residuals, API and build hygiene,
+aarch64 and agnos runtime, and the unscheduled features (discovery, paid distribution).

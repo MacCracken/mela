@@ -119,8 +119,9 @@ A guided walkthrough lives in [`docs/guides/getting-started.md`](docs/guides/get
 - [`docs/api/`](docs/api/) — **frozen public API reference** (what consumers build against)
 - [`CHANGELOG.md`](CHANGELOG.md) — what changed, per version
 - [`docs/architecture/overview.md`](docs/architecture/overview.md) — module map, data flow, trust model
-- [`docs/development/roadmap.md`](docs/development/roadmap.md) — completed / backlog / future / v1.0 criteria
+- [`docs/development/roadmap.md`](docs/development/roadmap.md) — open work: v1.1.x audit fixes + rust-old retirement, v1.x backlog
 - [`docs/development/state.md`](docs/development/state.md) — live status snapshot
+- [`docs/development/rust-parity.md`](docs/development/rust-parity.md) — `rust-old/` parity audit: defects, divergences, coverage gaps
 - [`docs/development/threat-model.md`](docs/development/threat-model.md) + [`docs/audit/`](docs/audit/) — trust boundaries, controls, audit findings
 - [`docs/benchmarks-rust-v-cyrius.md`](docs/benchmarks-rust-v-cyrius.md) — hot-path benchmarks
 - [`docs/adr/`](docs/adr/) — architectural decision records

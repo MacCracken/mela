@@ -1,307 +1,190 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-06-18 (v0.9.5) · Live status: [`state.md`](state.md) · Per-version history:
-> [`../../CHANGELOG.md`](../../CHANGELOG.md)
+> **Last Updated**: 2026-10-14 (v1.1.0) · Live status: [`state.md`](state.md) · History:
+> [`../../CHANGELOG.md`](../../CHANGELOG.md) · Parity audit: [`rust-parity.md`](rust-parity.md)
 >
-> The path from the **v0.1.0 port scaffold** to a **v1.0 release**. mela is mid-port from Rust
-> to Cyrius; this roadmap sequences that port module-by-module, foundation-up, then wires the
-> marketplace end-to-end and hardens it. **Each milestone is self-contained** — an agent can
-> pick up any one cold from this file.
+> Open work only. Shipped milestones (v0.1.0 port scaffold → v1.0.0 release → v1.1.0) are
+> recorded in the CHANGELOG, not here. **v1.1.x** fixes what the 2026-10-14 parity audit found,
+> closes the coverage gap and retires `rust-old/`. **v1.x** maps the rest of the backlog. Each
+> item is self-contained, so an agent can pick one up cold.
 
-## How to work a milestone (the port discipline)
+## Working rules
 
-`rust-old/src/` is the **frozen parity oracle** — the reference for *what the code does*. Never
-edit it. For each milestone:
-
-1. **Read** the named `rust-old/src/*.rs` module(s) to understand the surface and behavior.
-2. **Port** it to `src/<module>.cyr` in Cyrius — redesign to Cyrius conventions (no serde:
-   hand-write ser/de; structs are `load64`/`store64` at 8-byte offsets; enums are `i64`
-   constants + functions; `streq` for cstring compare; see [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md)
-   § Cyrius conventions). `include` it from `src/main.cyr`.
-3. **Add the dep** to `cyrius.cyml` `[deps.*]` if the milestone names one; `cyrius deps`.
-4. **Assert parity** — add a `test_<module>()` group to `tests/mela.tcyr` that checks the
-   Cyrius behavior matches the Rust oracle (same inputs → same outputs). Fuzz any parser path
-   in `tests/mela.fcyr`.
-5. **Green gate** — `cyrius build src/main.cyr build/mela` + `cyrius test` clean; bump the
-   `VERSION`, write the CHANGELOG entry, refresh [`state.md`](state.md).
-
-Order is **foundation-up**: pure types → crypto gate → log → store → network → policy → packaging
-→ wire → harden. Don't skip ahead; later modules consume earlier ones.
+- **One item per patch release** where practical. Each release: `cyrius build` + `cyrius test`
+  green (plus `cyrius fuzz` / `cyrius bench` where the item touches them), then `VERSION`,
+  CHANGELOG and [`state.md`](state.md).
+- **Every fix lands with its regression test.** The D-numbers below refer to
+  [`rust-parity.md`](rust-parity.md) § Defects found.
+- **Public API is frozen** ([`../api/`](../api/)). Additive changes are fine. Changing what a
+  listed function accepts or returns needs an ADR, including a bug fix that starts rejecting
+  input that used to be accepted.
+- **`rust-old/` is the oracle until v1.1.x deletes it.** Do not edit it. A divergence from it
+  needs an ADR, or an entry in `rust-parity.md`.
+- **Toolchain bumps** follow cyrius's *Moving a pin* procedure (`ecosystem-migration.md`):
+  `cyrius lib sync --full --relock`, `cyrius deps`, `cyrius distlib`, then
+  `cyrius deps --locked`.
 
 ---
 
-## Completed
+## v1.1.x — Audit fixes, coverage catch-up, retire `rust-old/`
 
-### v0.9.5 — Format-agnostic artifact fetch (consumable by ark) ✅ (2026-06-18)
-- **`mela_fetch_artifact(c, name, version, dest_path)`** — the consumer-facing download primitive:
-  fetches over the sandhi transport and writes the body **verbatim to a caller-chosen path**, making
-  **no assumption about artifact type**. `rc_download` (mela's agent flow) now builds on it but keeps
-  its `.agnos-agent` convention.
-- **Unblocks ark** — ark's packages are takumi `.ark` binaries, not mela `.agnos-agent` bundles; ark
-  passes its own `.ark` cache path and interprets the bytes with its own installer instead of being
-  forced into mela's agent-bundle layout/extension. `dist/mela.cyr` regenerated. **492/492 tests** (+2 guards).
+Baseline at v1.1.0:
+- Rust tests: 171 of 204 covered, 23 partial, 10 not covered.
+- `cyrius coverage`: 247 of 326 `src/` fns (75%).
+- CI builds but runs no tests.
 
-### v0.9.4 — Every load-bearing seam is real on disk ✅ (2026-06-18)
-- **Closed the ark finding** ("mela's own artifact fetch+write still deferred"): `rc_download`
-  fetches the package and writes it to the cache (proven live); `rc_publish` POSTs the bundle with
-  Bearer auth and parses the response (proven live); `rc_check_updates` diffs latest manifests.
-- **`uninstall` now removes the extracted files** (recursive `_rmtree`), not just the index entry
-  (ADR-0005 §Negative resolved) — parity with rust-old `remove_dir_all`.
-- **Keyring disk `load()` implemented** (`keyring_load_dir` + `KeyVersion` JSON codec) — closes the
-  ADR-0003 deferral.
-- **Cyrius pin `6.2.19` → `6.2.21`** (matches installed `cycc`, clears the drift warning); `lib/`
-  re-vendored.
-- Corrected the stale "deferred seam" file headers. **No deferred seams remain.** 490/490 tests.
+### v1.1.1 — Memory safety and the trust gate
 
-### v0.9.3 — Namespaced API ✅ (2026-06-18)
-- **Co-bundle-safe namespacing**: 15 colliding public symbols `mela_`-prefixed (vs nous/sigil) so
-  ark can bundle mela alongside them without last-def-wins hazards. Zero collisions now.
+The defects an attacker or a local file can reach. Fix these first.
 
-### v0.9.2 — Consumable library + the deferred work, done ✅ (2026-06-17)
-- **Library packaging (ADR-0010)**: `[lib]` + `cyrius distlib` → `dist/mela.cyr`. mela was
-  binary-only, so ark couldn't depend on it; now it can (`[deps.mela]`). Proven: a dist-only
-  consumer runs the full pipeline.
-- **Real on-disk extraction (ADR-0005 resolved)**: `agpkg_extract_to_dir`; `pipeline_install`
-  extracts to disk after the gates. Tested (files written, traversal blocked).
-- **Real HTTP+HTTPS+DNS transport (ADR-0006 resolved)**: `_rc_http_get` rides `sandhi`. Proven
-  live — local HTTP server **and** `https://example.com/` (DNS + TLS). **472/472 tests** green
-  (the live fetch is a bash demo, not in `cyrius test`).
-- No deferred seams remain.
+- **D1, tar reader:**
+  - `_tar_read_size` accepts only `[0-7]` (plus NUL or space terminators) and rejects negative
+    or oversized sizes.
+  - Verify the header checksum.
+  - Bound every `off` against the buffer.
+  - Reject an archive with duplicate entry names (D12).
+  - `pipeline_install` must not hang or crash on a crafted bundle **before** the signature gate.
+    Regression test: the 138-byte bundle from the audit.
+  - Add fuzz seeds that pass the gzip CRC, so the tar parser is actually fuzzed.
+- **D2, uninstall:** `_rmtree` checks `is_symlink` before `is_dir` and unlinks links without
+  following them. Test: a symlink to an outside dir survives uninstall with its target intact.
+- **D3, ratings:**
+  - Reject scores outside 1..5 on load.
+  - Bounds-check `rstore_get_stats` / `stats_dist`.
+  - Fuzz `rstore_top_rated` on parsed stores.
+- **D4, `cat_parse`:** fail on input longer than the buffer.
+- **D5, keyring:**
+  - `keyring_load_dir` replaces the keyring's contents, so a deleted key file is revoked on
+    reload.
+  - `kv_from_jv` rejects a missing or mistyped `valid_from` / `has_until` / `key_id` /
+    `public_key_hex` instead of defaulting to "never expires". This needs an ADR (stricter decode).
 
-### v0.9.1 — API freeze + documentation cleanup ✅ (2026-06-17)
-- **`docs/api/`** — the frozen, v1.0-bound public surface (conventions + per-module stable
-  functions); changes to a listed function now require an ADR. `docs/examples/` end-to-end example.
-- **Docs reconciled** to the shipped port: README (status / module table / shipped trust
-  properties / api+audit+benchmarks links), `architecture/overview.md` (statuses + Cyrius deps),
-  `getting-started.md` (module chain + workflow), CLAUDE.md `Goal` filled. Docs-only; 463/463 tests.
+### v1.1.2 — CI gate
 
-### v0.9.0 — Security audit + hardening ✅ (2026-06-17)
-- **Audit** (`docs/audit/2026-06-17-audit.md`) + **threat model**
-  (`docs/development/threat-model.md`): current CVE/0-day classes mapped to mela's surface with
-  controls + residual risk; informed by web research (tar zip-slip, gzip bombs, Ed25519
-  malleability, supply-chain).
-- **Hardening**: `_tar_entry_safe` — the ustar reader rejects symlink/hardlink/non-regular entries
-  and `..`/absolute names (zip-slip class, CVE-2025-45582 / tar-fs CVE-2024-12905). `hardening`
-  test group. Bounded decompression, signature/digest gates, name validation, key windows, and
-  fuzzed parsers confirmed. **463/463 tests**.
+Lands right after the fixes, so CI guards everything that follows.
 
-### v0.8.1 — End-to-end wiring + benchmarks ✅ (2026-06-17)
-- **`src/pipeline.cyr`** wires the full flow: `pipeline_package` → `pipeline_publish` (Ed25519
-  sign + transparency-log append) → `pipeline_install` enforcing **both trust gates** (signature
-  over the bundle keyed by publisher key_id; SHA-256 content digest) before recording.
-- E2E test: happy path installs + is logged; tampered / digest-mismatch / untrusted / wrong-key
-  all rejected. `agpkg_read_entry` closed the ADR-0005 tarball-extraction gap.
-- **Benchmarks** captured (`benches/hotpaths.cyr` + `docs/benchmarks-rust-v-cyrius.md`); ADR-0009.
-  **457/457 tests**. (Rust-vs-Cyrius comparison deferred — `rust-old` unbuildable without agnos-common.)
+- `ci.yml` runs `cyrius deps --locked`, `cyrius build`, `cyrius test`, `cyrius fuzz` and
+  `cyrius bench`. `release.yml` inherits them through its CI Gate job.
+- Script the GNU `tar` cross-check from ADR-0008 (pack, then `tar -tzf` / `tar -xzf`; then
+  `tar -czf`, then `agpkg_inspect`) and run it in CI. After `rust-old/` goes, it is the only
+  independent format oracle.
+- `cyrius coverage --min 75` in CI, raised as v1.1.4 lands.
 
-### v0.8.0 — Packaging ✅ (2026-06-17) — **module port complete (9/9)**
-- **`flutter_packaging.rs` ported** → `src/flutter_packaging.cyr` (pure): manifest/layout/launch/
-  env types, `validate_flutter_manifest`, `determine_backend`, `build_env_vars`.
-- **`flutter_agpkg.rs` ported** → `src/flutter_agpkg.cyr`: build-dir validation, manifest/sandbox
-  generation, and the `.agnos-agent` packer/inspector — **`sankoch` gzip + hand-rolled ustar tar**.
-- build→inspect round-trips in Cyrius; **cross-validated against the system `tar` both directions**
-  (the independent oracle, since `rust-old` can't be built); inspector fuzzed. ADR-0008. **444/444 tests**.
+### v1.1.3 — Correctness fixes
 
-### v0.7.0 — Sandbox profiles + ratings ✅ (2026-06-17)
-- **`sandbox_profiles.rs` ported** → `src/sandbox_profiles.cyr`: `SandboxPreset`,
-  `PredefinedProfile`, Photis Nadi / Aequi / per-preset builders, `validate_profile`, JSON codec.
-- **`ratings.rs` ported** → `src/ratings.cyr`: deduplicating `RatingStore`, `add_rating` /
-  `get_ratings` / `get_stats` (real f64 averages) / `top_rated`, filters, save/load JSON.
-- Profiles surface declared capabilities pre-install; ratings round-trip on disk; both
-  parity-tested; importers fuzzed. f64 + i64-time + rule-type decisions in ADR-0007. **355/355 tests**.
+Defects that make a feature not work.
 
-### v0.6.0 — Remote client ✅ (2026-06-17)
-- **`remote_client.rs` logic ported** → `src/remote_client.cyr`: url_encode / sanitize /
-  validate_path_segment, URL builders, response types + JSON codec, `RegistryClient` (base-url
-  trim + offline), offline guards, fs response cache.
-- The four flows demonstrated against **canned mock responses** (response-parse parity); response
-  parsers fuzzed; offline + cache round-trips tested on disk. **240/240 tests**.
-- Live HTTP/TLS transport (`sandhi`/`tls`) is a seam deferred to **v0.9.0** end-to-end (ADR-0006) —
-  the Rust test suite is itself socket-free, so no live path is exercised yet.
+- **D6, sandbox presets:** `_rule` takes the `data_dir` Str directly. Test: each preset's first
+  rule is the app's data dir.
+- **D7, transport:**
+  - `mela_fetch_artifact` / `rc_download` stream to the destination through
+    `sandhi_http_download(url, fd, opts)`, which lifts the 256 KiB cap, with a mela-side size
+    ceiling and partial-file cleanup.
+  - Apply `REQUEST_TIMEOUT` / `DOWNLOAD_TIMEOUT`, follow redirects, and send a User-Agent.
+- **D8, size policy (fail closed now):**
+  - The packer fails on any file it cannot read in full, instead of truncating at 8 MiB.
+  - Install fails cleanly on a bundle over the cap.
+  - Full large-bundle support is v1.2.0.
+- **D9, install transaction:**
+  - Extract first, record second, and fail on an extraction or index-save error.
+  - A corrupt or oversized `index.json` fails closed instead of loading as empty.
+  - `registry_save_index` creates parent dirs.
+- **D10, publish:** `rc_publish` sends the signature (`X-Package-Metadata`, as Rust did).
+- **D11, assets:** walk `flutter_assets/` recursively. Correct ADR-0008's rationale.
+- **D12, manifest:** an unknown or missing `category` rejects the manifest.
 
-### v0.5.0 — Local registry ✅ (2026-06-17)
-- **`local_registry.rs` index/lifecycle ported** → `src/local_registry.cyr`:
-  `InstalledMarketplacePackage` + `LocalRegistry` (install/uninstall/get/list/search/quota/
-  total-size), `index.json` persisted via stdlib `fs` (ADR-0005), signature-verify gate.
-- install→query→remove round-trips **on disk**; the index survives a reopen (parity-tested);
-  signature valid/wrong-key/unknown-key paths covered; index importer fuzzed. **184/184 tests**.
-- Deferred to v0.8.0 (`sankoch`): gzip/tar tarball extraction + `.sig` sidecar + `count_files`.
+### v1.1.4 — Coverage catch-up
 
-### v0.4.0 — Transparency log ✅ (2026-06-17)
-- **`transparency.rs` ported** → `src/transparency.cyr`: `LogEntry` (`compute_hash` /
-  `verify_self`) + `TransparencyLog` (`append` / `verify_chain` / `find` /
-  `entries_for_package` / `latest` / `len` / `is_empty`), SHA-256 hash-chained.
-- JSON codec re-verifies the chain on import (tampered entry rejected, invalid JSON rejected);
-  append + full-log verify pass; a mutated entry is detected. Import parser fuzzed.
-- No new dep (hashing reuses `sigil`); timestamp as `i64` epoch (ADR-0004). **147/147 tests** green.
+- Close the 23 partial and 10 uncovered Rust tests, or mark each N/A in `rust-parity.md` with the
+  reason. `RatingFilter` / `DisplayBackend` codecs have no consumer, so they are N/A candidates.
+- Add the untested-behavior assertions listed per group in `rust-parity.md` § Coverage to add.
+  The ones that matter most for the trust boundary:
+  - The transparency link, sequence and entry-0 checks, each exercised on its own. Today every
+    tamper test breaks the entry hash first.
+  - An **on-disk** end-to-end `pipeline_install`, with files under `packages/<name>`, reopen, and
+    uninstall.
+  - Signature edge cases: `sig_len` 63 / 65, bit flips in R or S, S + L, small-order key.
+  - Keyring rotation and inclusive validity edges.
+- Raise the `cyrius coverage --min` gate to the level reached.
 
-### v0.3.0 — Trust gate ✅ (2026-06-17)
-- **`trust.rs` ported** → `src/trust.cyr` over **sigil** (`dist/sigil.cyr`): Ed25519
-  sign/verify + SHA-256 hashing, hex codec, `KeyVersion` (`is_valid_at` / `verifying_key`),
-  in-memory `PublisherKeyring`. Disk `load()` deferred to the fs milestone.
-- Sign→verify round-trips; tampered + wrong-key + bad-length signatures all rejected;
-  SHA-256 + RFC 8032 Ed25519 known-answer vectors match. Trust parsers fuzzed.
-- Time as `i64` epoch, explicit `now`, deferred loader (ADR-0003). **114/114 tests** green.
+### v1.1.5 — Decide the unrecorded divergences
 
-### v0.2.0 — Core manifest model ✅ (2026-06-17)
-- **`lib.rs` fully ported.** `src/manifest.cyr` (`PublisherInfo`, `MarketplaceManifest` +
-  `validate`/`qualified_name`, `is_valid_semver`, JSON codec) and `src/depgraph.cyr` (`DepNode`,
-  `DependencyGraph`: `add`/`len`/`is_empty`/`check_missing`/`detect_cycle`/Kahn `resolve`).
-- **`agnostik` dep wired** (`dist/agnostik.cyr`) as the `AgentManifest` source.
-- Manifest wire format pinned (ADR-0001 JSON) + version-as-`Str` divergence (ADR-0002).
-- **76/76 parity tests** green; malformed-manifest fuzz harness.
+One ADR per decision, covering every item in `rust-parity.md` § Behavior changes with no ADR:
 
-### v0.1.0 — Port scaffold ✅ (2026-06-17)
-- `cyrius port` scaffold: 6208 lines of Rust → `rust-old/` (oracle); `cyrius.cyml` (pin
-  6.2.19), `src/main.cyr`, CI workflows, `tests/mela.{tcyr,bcyr,fcyr}`.
-- First module ported: **`MarketplaceCategory`** → `src/category.cyr` (`cat_name` / `cat_parse`,
-  19 parity tests).
-- First-party doc set (README, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, CHANGELOG, `docs/`).
+- Strict vs lenient JSON decoding at trust-boundary inputs: one rule for every decoder.
+- Install accounting: `installed_size` (compressed vs extracted, which changes the quota), file
+  modes, resolved-path containment.
+- Archive writer: normalized mode/uid/mtime (reproducible), long names, unreadable inputs,
+  compact JSON.
+- Text: ASCII vs Unicode lowercasing, `sanitize_filename`, semver `+` and overflow,
+  scale-factor formatting.
+- The ratings wire format vs Rust-written files.
+- Keyring per-element vs per-file validation.
+- The transparency hash-preimage ambiguity: record it now; fixing it is v1.3.0.
+
+### v1.1.6 — Retire `rust-old/`
+
+- Every box in `rust-parity.md` § Retirement checklist is ticked.
+- Delete `rust-old/`. Mark its CHANGELOG entry as the end of the Rust oracle.
+- Replace the CLAUDE.md "cross-check against `rust-old/`" principle and its *Scaffolding*
+  section: the parity suite plus `rust-parity.md` are the oracle.
+- `docs/benchmarks-rust-v-cyrius.md`: close the "Rust comparison — deferred" section. No Rust
+  numbers were ever recorded, so the column is dropped, not deferred.
 
 ---
 
-## Port milestones (v0.2.0 → v0.8.0)
+## v1.x — Mapped backlog
 
-### v0.2.0 — Core manifest model (rest of `lib.rs`)
-- **Goal**: the data model every other module consumes.
-- **Port**: `rust-old/src/lib.rs` (remaining ~470 lines) — `PublisherInfo`, `MarketplaceManifest`
-  + its `validate()`, `DepNode` / `DependencyGraph` resolver.
-- **Dep gate**: **`agnostik`** (the Cyrius shared-types crate — `agent.cyr` / `types.cyr` /
-  `security.cyr`) supplies the `AgentManifest` that `MarketplaceManifest` flattens. Add
-  `[deps.agnostik]` (`dist/agnostik.cyr`).
-- **Tasks**: port the structs (8-byte field layout), the manifest `validate()` rules, the
-  dependency-graph build + resolve; hand-write the manifest (de)serialization (the Rust side is
-  serde-JSON — pick the wire format and pin it in an ADR).
-- **Done when**: manifest build/validate + dep-graph resolve are parity-tested against the Rust
-  oracle on the same fixtures; a malformed-manifest fuzz harness exists.
+Ordered by value to the trust boundary. Version numbers are a plan, not a promise. Re-sequence
+here first when something lands early.
 
-### v0.3.0 — Trust gate (`trust`)
-- **Goal**: the load-bearing invariant — *nothing is trusted without a valid signature + digest.*
-- **Port**: `rust-old/src/trust.rs` (16 pub fns, 474 lines) — Ed25519 publisher-signature
-  verification, SHA-256 download-integrity gating, publisher trust.
-- **Dep gate**: **`sigil`** — `ed25519_sign` / `ed25519_verify` / `ed25519_keypair`, `sha256` /
-  `sha256_hex`. Add `[deps.sigil]`.
-- **Tasks**: port sign/verify + digest-verify; the reject-unsigned and digest-mismatch paths.
-- **Done when**: sign→verify round-trips, a tampered artifact + an unsigned artifact are both
-  **rejected**, and a known-answer SHA-256/Ed25519 vector matches — all parity-tested + fuzzed.
+### v1.2.0 — Large bundles
 
-### v0.4.0 — Transparency log (`transparency`)
-- **Goal**: every publication recorded in an append-only, verifiable log.
-- **Port**: `rust-old/src/transparency.rs` (12 pub fns, 500 lines).
-- **Dep gate**: `sigil` (hashing) + stdlib `fs` (persistence).
-- **Tasks**: append-entry, log verification, and tamper/inclusion-proof logic (Merkle/hash-chain
-  — port exactly what the Rust does).
-- **Done when**: append + full-log verify pass; a mutated entry is **detected**; parity-tested.
+Real Flutter engines are tens of MB.
 
-### v0.5.0 — Local registry (`local_registry`)
-- **Goal**: the on-device store — install / record / query / remove, persisted.
-- **Port**: `rust-old/src/local_registry.rs` (19 pub fns, 970 lines — the largest module; break
-  into bites).
-- **Dep gate**: the v0.2.0 manifest model + stdlib `fs`.
-- **Tasks**: registry index, install/record, query/search, remove; on-disk format (pin it in an
-  ADR).
-- **Done when**: install→query→remove round-trips on disk, the index survives a reopen, parity-
-  tested against the Rust registry on the same operations.
+- Streaming extraction: gunzip and untar to disk without the whole tar in memory.
+- A real `MAX_PACKAGE_SIZE`: Rust used 100 MB compressed, plus a decompressed ceiling against
+  gzip bombs.
+- Keep file modes (the exec bit); an ADR decides `mode & 0o755` vs normalize.
+- Long names: write the ustar `prefix` and read GNU `L` / PAX path records, or reject them
+  explicitly. No silent truncation.
+- Count extracted size toward the quota (Rust parity), once v1.1.5's ADR decides.
 
-### v0.6.0 — Remote client (`remote_client`)
-- **Goal**: talk to a marketplace — search / fetch / download / publish, over TLS, no OpenSSL.
-- **Port**: `rust-old/src/remote_client.rs` (4 pub fns, 751 lines).
-- **Dep gate**: stdlib **`tls`** / `tls_native` + **`sandhi`** (HTTP client). (Targets the Linux
-  host first; an `--agnos` build later rides the sandhi agnos-socket fix — out of scope here.)
-- **Tasks**: HTTP(S) request/response, the search/fetch/download/publish flows, response parsing.
-- **Done when**: the four flows work against a mock (or live) endpoint with response-parse parity;
-  TLS is rustls→stdlib-`tls`, OpenSSL absent; response parsers fuzzed.
+### v1.3.0 — Hardening residuals
 
-### v0.7.0 — Sandbox profiles + ratings (`sandbox_profiles`, `ratings`)
-- **Goal**: capability disclosure before install, and ratings/reviews.
-- **Port**: `rust-old/src/sandbox_profiles.rs` (4 fns, 740 lines) + `rust-old/src/ratings.rs`
-  (9 fns, 897 lines).
-- **Dep gate**: the manifest model + `agnostik` (`security.cyr` capability/sandbox types).
-- **Tasks**: profile parse + capability surfacing; ratings store/aggregate/query.
-- **Done when**: profiles surface the declared capabilities pre-install; ratings round-trip;
-  both parity-tested.
+- **Extraction confinement:** create every output with `O_NOFOLLOW`, or check the resolved path
+  stays under the destination. Pre-existing symlinks in an install dir must not redirect writes.
+  This closes the audit's finding-A follow-up properly.
+- **Refresh `threat-model.md` and the audit residuals.** Their "Known gaps" still list on-disk
+  extraction and live transport as deferred; both shipped in v0.9.2. Restate what is open.
+- **Keyring provenance:** document how trusted publisher keys are distributed and rotated, with
+  key-pinning guidance for consumers (ark). Open since v0.9.0, meant for before v1.0.
+- **Transparency hash v2:** an unambiguous preimage with length prefixes or separators. It must
+  be versioned, so v1 logs still verify on import.
 
-### v0.8.0 — Packaging (`flutter_packaging`, `flutter_agpkg`)
-- **Goal**: build and read the `.agpkg` (AGNOS package) format.
-- **Port**: `rust-old/src/flutter_packaging.rs` (5 fns, 561 lines) + `rust-old/src/flutter_agpkg.rs`
-  (4 fns, 660 lines).
-- **Dep gate**: **`sankoch`** (LZ4/DEFLATE/gzip — replaces Rust `tar` + `flate2`). Add `[deps.sankoch]`.
-- **Tasks**: `.agpkg` archive build/inspect/validate; the packaging pipeline.
-- **Done when**: build→inspect→validate round-trips, **and a Rust-built `.agpkg` validates in
-  Cyrius (cross-validation)** — the format is identical, not merely self-consistent.
+### v1.4.0 — API and build hygiene
 
----
+- Commit a `cyrius api-surface --scope=project` snapshot and gate CI on it. This turns the
+  [`../api/`](../api/) freeze into a check.
+- Clear the three `assigning non-pointer to typed pointer` warnings
+  (`src/ratings.cyr`, `src/flutter_agpkg.cyr`). Check that none hides a real bug first.
+- Move `assert` / `bench` to `[test] stdlib` (cyrius 6.7.6), so they leave the build's stdlib
+  list.
 
-## Release run (v0.8.1 → v1.0.0)
+### v1.5.0 — Targets beyond x86_64 Linux
 
-> Re-sequenced 2026-06-17: the original v0.9.0 "wiring + hardening" is split —
-> wiring + benchmarks shipped in **v0.8.1**; the security audit is its own
-> **v0.9.0**; the API freeze + docs cleanup is **v0.9.1**. `rust-old/` is retired
-> after v1.0, not during the run.
+- **aarch64:** builds today. Run the suite under qemu-user in CI (agnostik's precedent).
+- **agnos:** builds today (v1.0.5 routed filesystem calls through `xunlink` / `xrmdir` /
+  `xmkdir`). Runtime is unvalidated: registry filesystem operations, and sandhi's transport,
+  whose agnos runtime correctness sandhi still lists as open. Validate it once an agnos runner
+  exists.
 
-### v0.8.1 — End-to-end wiring + benchmarks ✅ (2026-06-17)
-- **Done.** Full flow wired in `src/pipeline.cyr` (package → sign → log → verify →
-  capability-surface → install) with **both trust gates enforced**; hot-path benchmarks captured.
-  See *Completed*. (Live `sandhi`/`tls` transport stays a local seam — ADR-0006/0009.)
+### Later — features (unscheduled)
 
-### v0.9.0 — Security audit + hardening ✅ (2026-06-17)
-- **Done.** `docs/audit/2026-06-17-audit.md` + `docs/development/threat-model.md`; web research on
-  the relevant 0-day / CVE classes folded into findings + the threat model. Concrete hardening:
-  the ustar reader's `_tar_entry_safe` zip-slip guard. See *Completed*. Follow-ups (on-disk
-  extractor path-confinement, live-transport TLS, keyring provenance) tracked in the audit.
-
-### v0.9.1 — API freeze + documentation cleanup ✅ (2026-06-17)
-- **Done.** Public API frozen in `docs/api/` (conventions + per-module stable surface; ser/de
-  roundtrip-tested in the parity suite; `0`-sentinel error model, no panics). README / guides /
-  examples / architecture refreshed; ADRs reconciled. See *Completed*.
-
-### v1.0.0 — Release ✅ (2026-06-18)
-- **Released.** Every v1.0 gate met (see *v1.0 criteria* below). 492/492 parity tests + fuzz green;
-  end-to-end flow with both trust gates enforced; security audit + frozen public API; `dist/mela.cyr`
-  reproducible. No deferred seams.
-- **Downstream consumer green** — **`ark`** consumes mela 0.9.5 and builds green (263 tests),
-  calling `mela_fetch_artifact` / `registry_client_new` / `sanitize_filename` to fetch `.ark`
-  packages through mela's transport. The consumer gate is satisfied. (daimon was the alternative.)
-- **Carried to post-1.0**: retire the oracle — delete `rust-old/` once Cyrius test coverage is
-  confirmed ≥ the Rust suite (per the porting standard). The Rust benchmark column is not a blocker —
-  it takes the last recorded Rust numbers where available, else is omitted (`rust-old` needs
-  `agnos-common` to build).
-- The `mudra` / `vinimaya` boundary decision stays as framed in *Out of scope* — paid distribution
-  is post-1.0 unless those repos land first.
-
----
-
-## v1.0 criteria (the gate)
-
-- [x] All 9 Rust modules ported to Cyrius with **function-level parity** vs `rust-old/`. *(v0.8.0)*
-- [x] End-to-end publish→verify→install flow wired; both trust gates **enforced**. *(v0.8.1)*
-- [x] Every external-data parser fuzzed. *(coverage ≥ Rust suite to confirm before v1.0)*
-- [x] `docs/benchmarks-rust-v-cyrius.md` captured — Cyrius baseline done; Rust column uses the last
-  recorded Rust benchmarks where available, else omitted (`rust-old` needs `agnos-common` to build).
-  Not a v1.0 blocker. *(v0.8.1)*
-- [x] Pre-release security audit passed (`docs/audit/`). *(v0.9.0)*
-- [x] Public API frozen + `docs/api/`; CHANGELOG complete from 0.1.0. *(v0.9.1)*
-- [x] ≥1 downstream consumer (**ark**, package pull) green against mela. *(v1.0 — 2026-06-18)*
-- [ ] `rust-old/` deleted (parity + coverage met). *(after v1.0)*
-
----
-
-## Out of scope (post-1.0)
-
-- **Paid distribution** — integrate `mudra` (asset identity / ownership) + `vinimaya`
-  (atomic transfers / escrow / settlement). **Both are not yet scaffolded;** until they exist,
-  the value surface stays stubbed and the free-distribution path must never block on it. When
-  they land, integrate them behind a thin internal boundary (interim stubs first).
-- **An `--agnos` target build** — mela runs on the Linux host through the port; an agnos-native
-  build follows the other userland tools, and its `remote_client` rides the sandhi agnos
-  socket-backend fix (`sandhi/docs/issues/2026-06-14-agnos-socket-backend-gap.md`).
-- Advanced discovery (recommendations, federated marketplaces) — feature work after the port
-  reaches parity.
-
-## cyrius 6.7.6 git-first — applied at v1.1.0 (cyrius 6.7.9)
-
-- No `path` overrides remain: sigil / sankoch / sandhi are stdlib leaves (v1.0.4) and agnostik
-  resolves from its tag only, so a local build and CI compile the same code.
-- `cyrius.lock` carries agnostik's commit pin; `cyrius deps --locked` passes.
-- For local work on agnostik, add `path = "../agnostik"` back beside `git` / `tag` and build with
-  `CYRIUS_LOCAL=agnostik` (or `--local`); a default build ignores it.
+- **Advanced discovery:** recommendations, federated marketplaces.
+- **Paid distribution:** integrate `mudra` (asset identity / ownership) and `vinimaya` (transfers
+  / escrow / settlement) behind a thin internal boundary, with interim stubs first. Blocked until
+  those repos exist. The free-distribution path must never block on them.
+- **Signature throughput:** `ed25519_verify` is ~5 ms/op ([`../benchmarks-rust-v-cyrius.md`](../benchmarks-rust-v-cyrius.md)).
+  That is fine per install, but a DoS factor for any server-side bulk verify. It is a `sigil`
+  optimisation, tracked upstream.

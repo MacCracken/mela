@@ -4,6 +4,21 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
+## [Unreleased]
+
+### Docs — `rust-old/` parity audit; roadmap rewritten
+
+- **New `docs/development/rust-parity.md`.** All 204 Rust tests mapped to the Cyrius suite:
+  171 covered, 23 partial, 10 not covered.
+- **Twelve defects (D1–D12)** recorded with severity and proof status. Two were reproduced: a
+  138-byte unsigned bundle crashes `pipeline_install` before the signature gate, and six sandbox
+  presets carry a garbage data-dir rule.
+- **Behavior changes with no ADR** listed, each with the Rust behavior written down so it
+  survives the deletion of `rust-old/`.
+- **`roadmap.md` rewritten.** Completed milestones are dropped (they live here). v1.1.x holds the
+  fixes, a CI test gate, coverage catch-up, the divergence ADRs and the `rust-old/` retirement.
+  v1.x maps the backlog.
+
 ## [1.1.0] - 2026-10-14
 
 **cyrius 6.6.20 → 6.7.9.** `cyrius build` OK (3,201,960 B), 492 passed / 0 failed, fuzz 1 / 0,
