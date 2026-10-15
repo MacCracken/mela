@@ -4,6 +4,50 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
+## [1.0.4] - 2026-10-14
+
+**cyrius 6.6.2 → 6.6.20.** `cyrius build` OK (3,140,544 B), 492 passed / 0 failed.
+
+### Changed — sigil, sankoch, sandhi come in as stdlib leaves
+
+All three ship folded into the 6.6.20 stdlib, so their `[deps.*]` git blocks are gone and they
+are listed in `[deps] stdlib` instead. This also ends the stacked `ERR_*` / `LOG_*`
+duplicate-symbol warning the separate bundles produced.
+
+| dep | was | now |
+|---|---|---|
+| agnostik | 1.6.0 (git) | **1.7.1** (git — last tag pinned to 6.6.20) |
+| sigil | 3.12.16 (git) | **3.13.10** (stdlib) |
+| sankoch | 2.7.14 (git) | **2.8.1** (stdlib) |
+| sandhi | 1.9.16 (git) | **1.10.8** (stdlib) |
+
+`lib/agnostik.cyr` is byte-identical to agnostik 1.7.1's `dist/`.
+
+### Changed — `cyrius.cyml` is a manifest again
+
+Dropped the commentary from `[lib]` and `[deps]`. Also dropped `path = "../agnostik"`: under
+6.6.20 a `path` beside `git`/`tag` still wins locally, so it would have built against the sibling
+checkout (agnostik main, pinned to 6.7.9) instead of the 1.7.1 tag that CI resolves.
+
+### Changed — vendored stdlib re-synced to the 6.6.20 snapshot
+
+`cyrius lib sync --full --relock` after the pin move: every stdlib leaf in `lib/` is byte-identical
+to `~/.cyrius/versions/6.6.20/lib`, including the files outside the declared closure that
+`cyrius deps` does not refresh.
+
+### Changed — `dist/mela.deps` is now compile-derived
+
+6.6.20's `cyrius distlib` verifies the bundle and records only the leaves it needs:
+`thread_local`, `sigil`, `fs`, `sandhi`, `sankoch` (was a 37-entry copy of the stdlib list).
+
+### Known — new warnings, not fixed here
+
+- 39 `json_v_obj_get` deprecation warnings (bayan in 6.6.20 points at
+  `bayan_json_v_obj_get_by_cstr` / `_by_str`). Build output is unaffected.
+- `distlib` now also compile-checks `x86_64-agnos` and reports that `_rmtree` in
+  `src/local_registry.cyr` calls `sys_unlink` / `sys_rmdir` with one argument, where agnos takes
+  `(path, pathlen)`. Informational: agnos is checked but not required, and Linux is unaffected.
+
 ## [1.0.3] - 2026-09-10
 
 **Every lib and dep brought current.** `cyrius build` OK (2,746,728 B), tests pass.

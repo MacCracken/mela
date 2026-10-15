@@ -5,6 +5,9 @@
 
 ## Version
 
+**1.0.4** — cyrius 6.6.20 (2026-10-14). sigil / sankoch / sandhi now come in as stdlib
+leaves; agnostik is the only package dep. `lib/` byte-identical to the 6.6.20 snapshot; 492/492.
+
 **1.0.0** — Marketplace trust boundary, released (2026-06-18). Every v1.0 gate is met: full
 Rust→Cyrius port with function-level parity (492/492 tests + fuzz), both trust gates enforced
 end-to-end, security audit + frozen public API, reproducible `dist/mela.cyr`, and **ark green as
@@ -27,8 +30,8 @@ remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once 
 
 ## Toolchain
 
-- **Cyrius pin**: `6.2.21` (in `cyrius.cyml [package].cyrius`) — matches the installed `cycc`, so
-  the pin-drift warning is cleared. `lib/` re-vendored to the pin via `cyrius lib sync`.
+- **Cyrius pin**: `6.6.20` (in `cyrius.cyml [package].cyrius`). `lib/` is the full 6.6.20 stdlib
+  snapshot (`cyrius lib sync --full`) plus the agnostik bundle.
 
 ## Source
 
@@ -88,17 +91,17 @@ Benchmarks at [`benches/hotpaths.cyr`](../../benches/hotpaths.cyr) /
 Direct (declared in `cyrius.cyml`):
 
 - stdlib — string, fmt, alloc, vec, str, syscalls, io, args, assert, hashmap, tagged, result,
-  fnptr, trait, bayan (JSON codec), chrono, plus the transitive set the dep bundles need
-  (fs, freelist, slice, process, sakshi, ct, keccak, thread, thread_local, random, bench, net,
-  async, atomic, mmap, dynlib, fdlopen, regression, http, tls, ws)
-- **agnostik** (`dist/agnostik.cyr`, tag 1.3.1) — shared-types crate; supplies the `AgentManifest`.
-- **sigil** (`dist/sigil.cyr`, tag 3.8.0) — Ed25519 + SHA-256 + hex (trust gate).
-- **sankoch** (`dist/sankoch.cyr`, tag 2.4.3) — gzip/deflate/lz4 (the `.agnos-agent` packer; tar
-  is hand-rolled ustar, ADR-0008).
-- **sandhi** (`dist/sandhi.cyr`, tag 1.6.7) — HTTP/HTTPS client (DNS resolver + TLS) backing the
-  `remote_client` transport (ADR-0006).
-- The dep bundles stack shared error/log constants (`ERR_*` / `LOG_*`) → benign "last definition
-  wins" duplicate-symbol warnings at build.
+  fnptr, trait, bayan (JSON codec), chrono, fs, freelist, slice, process, sakshi, ct, keccak,
+  thread, thread_local, random, bench, net, async, atomic, mmap, dynlib, fdlopen, regression,
+  http, tls, ws, plus the folded stdlib bundles:
+  - **sigil** (3.13.10) — Ed25519 + SHA-256 + hex (trust gate).
+  - **sankoch** (2.8.1) — gzip/deflate/lz4 (the `.agnos-agent` packer; tar is hand-rolled
+    ustar, ADR-0008).
+  - **sandhi** (1.10.8) — HTTP/HTTPS client (DNS resolver + TLS) backing the `remote_client`
+    transport (ADR-0006).
+- **agnostik** (`dist/agnostik.cyr`, tag 1.7.1) — shared-types crate; supplies the `AgentManifest`.
+- `dist/mela.deps` (consumer-facing sidecar) lists the stdlib leaves the bundle needs:
+  thread_local, sigil, fs, sandhi, sankoch.
 
 ## Consumers
 

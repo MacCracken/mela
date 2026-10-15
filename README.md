@@ -69,10 +69,7 @@ git = "https://github.com/MacCracken/mela.git"
 modules = ["dist/mela.cyr"]
 # plus mela's own deps:
 [deps.agnostik]   # dist/agnostik.cyr
-[deps.sigil]      # dist/sigil.cyr   — Ed25519 + SHA-256
-[deps.sankoch]    # dist/sankoch.cyr — gzip
-[deps.sandhi]     # dist/sandhi.cyr  — HTTP/HTTPS client (DNS + TLS)
-# and the stdlib mela uses (string, vec, str, hashmap, bayan, fs, net, tls, async, …)
+# and the stdlib leaves in dist/mela.deps (sigil, sankoch, sandhi, fs, thread_local)
 ```
 
 ```cyrius
@@ -88,9 +85,9 @@ See [`docs/api/`](docs/api/) for the frozen surface. (Verified: a program includ
 
 - **Consumers**: [`ark`](https://github.com/MacCracken/ark) (pulls marketplace packages),
   [`daimon`](https://github.com/MacCracken/daimon) (agent discovery).
-- **Depends on**: [`sigil`](https://github.com/MacCracken/sigil) (Ed25519/SHA-256),
-  [`agnostik`](https://github.com/MacCracken/agnostik) (shared types),
-  [`sankoch`](https://github.com/MacCracken/sankoch) (gzip),
+- **Depends on**: [`agnostik`](https://github.com/MacCracken/agnostik) (shared types), plus the
+  stdlib-folded [`sigil`](https://github.com/MacCracken/sigil) (Ed25519/SHA-256),
+  [`sankoch`](https://github.com/MacCracken/sankoch) (gzip) and
   [`sandhi`](https://github.com/MacCracken/sandhi) (HTTP/HTTPS client).
 - **Planned — not yet scaffolded**: `mudra` (asset identity / ownership primitives) +
   `vinimaya` (atomic transfers / escrow / settlement), the value/transaction cluster for

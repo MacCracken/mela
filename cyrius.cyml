@@ -4,17 +4,12 @@ version = "${file:VERSION}"
 description = "mela — the app & agent marketplace for AGNOS: signed, integrity-checked, transparency-logged discovery and distribution"
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "6.6.2"
+cyrius = "6.6.20"
 
 [build]
 entry = "src/main.cyr"
 output = "mela"
 
-# `[lib]` declares the src modules `cyrius distlib` concatenates into
-# dist/mela.cyr — the single-file bundle downstream consumers (ark) pull via
-# `[deps.mela] modules = ["dist/mela.cyr"]`. Order = src/main.cyr's include
-# chain (dependency order). Consumers also pin mela's own deps (agnostik / sigil
-# / sankoch + the stdlib list below).
 [lib]
 modules = [
     "src/category.cyr",
@@ -32,55 +27,17 @@ modules = [
 ]
 
 [deps]
-# Base stdlib + the modules agnostik's dist bundle needs (hashmap/tagged/result/
-# fnptr/trait/bayan/chrono) — see agnostik cyrius.cyml [deps]. bayan carries the
-# JSON codec (the standalone `json` module was folded into bayan at 6.1.25).
 stdlib = [
     "string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args", "assert",
     "hashmap", "tagged", "result", "fnptr", "trait", "bayan", "chrono",
-    # sigil's dist needs these transitively (crypto scratch + entropy + hashing
-    # + persistence) — mirrors the libro sigil-consumer recipe. sakshi is the
-    # 6.2.19 stdlib snapshot module (no separate git dep needed).
     "fs", "freelist", "slice", "process", "sakshi", "ct", "keccak",
     "thread", "thread_local", "random", "bench",
-    # net + sandhi's transitive stdlib: the remote_client HTTP/HTTPS transport
-    # rides sandhi's full client (DNS resolver + TLS), not a hand-rolled socket.
     "net", "async", "atomic", "mmap", "dynlib", "fdlopen", "regression",
     "http", "tls", "ws",
+    "sigil", "sankoch", "sandhi",
 ]
 
-# agnostik — the Cyrius shared-types crate; supplies the AgentManifest that
-# MarketplaceManifest flattens (agent.cyr: agent_manifest_new / amanifest_*).
 [deps.agnostik]
 git = "https://github.com/MacCracken/agnostik.git"
-path = "../agnostik"
-tag = "1.6.0"
+tag = "1.7.1"
 modules = ["dist/agnostik.cyr"]
-
-# sigil — the Cyrius crypto crate; supplies Ed25519 (ed25519_keypair / _sign /
-# _verify) and SHA-256 (sha256 / sha256_hex) + hex_encode/decode for the trust
-# gate (src/trust.cyr).
-[deps.sigil]
-git = "https://github.com/MacCracken/sigil.git"
-path = "../sigil"
-tag = "3.12.16"
-modules = ["dist/sigil.cyr"]
-
-# sankoch — the Cyrius compression crate (gzip/deflate/lz4); replaces Rust
-# flate2 for the `.agnos-agent` packer (src/flutter_agpkg.cyr). Tar archiving is
-# hand-rolled (ustar) on top — sankoch is compression only. Its stdlib deps are
-# already present.
-[deps.sankoch]
-git = "https://github.com/MacCracken/sankoch.git"
-path = "../sankoch"
-tag = "2.7.14"
-modules = ["dist/sankoch.cyr"]
-
-# sandhi — the Cyrius HTTP client (HTTP/1.1 + H2, TLS, and a real DNS resolver).
-# Backs the remote_client transport: sandhi_http_get_auto does connect → TLS →
-# request → response over real sockets, hostname-resolved. (replaces Rust reqwest)
-[deps.sandhi]
-git = "https://github.com/MacCracken/sandhi.git"
-path = "../sandhi"
-tag = "1.9.16"
-modules = ["dist/sandhi.cyr"]
