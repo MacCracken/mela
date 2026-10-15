@@ -17,8 +17,8 @@ cyrius test                              # run tests/*.tcyr
 - `tests/mela.tcyr` — parity test suite (auto-discovered by `cyrius test`); `tests/mela.fcyr` —
   fuzz harness for every external-data parser; `tests/mela.bcyr` — hot-path benchmarks
   (`cyrius bench`).
-- `rust-old/` — original Rust source, the frozen parity oracle. Do not modify. It is **not built
-  here** (needs `agnos-common`); parity is asserted by hand in the tests.
+- `docs/development/rust-parity.md` — the parity record: the Rust original (retired at v1.1.6),
+  its tests, and every intentional change from it.
 
 ## The end-to-end flow
 

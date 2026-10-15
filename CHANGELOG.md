@@ -4,6 +4,60 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
+## [1.1.6] - 2026-10-15
+
+**`rust-old/` retired: the end of the Rust oracle.** The 6,208-line Rust original was mela's parity
+reference from the v0.1.0 port scaffold until now. Everything it specified is carried by:
+- the parity suite (`tests/mela.tcyr`, 202 of its 204 tests covered, 2 not applicable);
+- the GNU tar and live transport checks in CI;
+- [`docs/development/rust-parity.md`](docs/development/rust-parity.md) and ADR-0011/0012/0013.
+
+It remains in git history before this release. No `src/` change apart from `MELA_VERSION`. All 979
+tests pass, and every CI gate passes.
+
+### Removed — `rust-old/`
+
+`rust-old/` (`src/`, the Cargo files, `deny.toml`, `codecov.yml`, `rust-toolchain.toml`,
+`LINES_OF_RUST.txt`) and its `.gitignore` line are gone. Nothing referenced it at build or test
+time. Source and test comments that cite `rust-old/src/*.rs` stay as provenance, and the parity
+record says so.
+
+### Docs — the Rust-vs-Cyrius benchmark comparison, filled in
+
+The comparison section of `docs/benchmarks-rust-v-cyrius.md` had been "deferred" since v0.8.1,
+on the grounds that the Rust original depended on an `agnos-common` checkout. No such checkout
+exists: its one external type, `AgentManifest`, comes from agnostik's own Rust crate. So, before
+the deletion, the Rust original was built from git with that dependency pointed at agnostik
+`3507c46` (the last commit whose `AgentManifest.version` is a `String`). Rust's own suite passed on
+that build, 204/204.
+
+It was then benchmarked against mela on the same host and inputs, with the batches of
+`tests/mela.bcyr` and a clock-floor correction on both sides. Medians of three alternating runs,
+Rust / Cyrius:
+
+| Hot path | Rust | Cyrius |
+|---|---|---|
+| `registry_get` | 18 ns | 70 ns |
+| `manifest_validate` | 62 ns | 168 ns |
+| `sha256_hash` | 139 ns | 816 ns |
+| `agpkg_inspect` | 7.8 µs | 110.1 µs |
+| `ed25519_verify` | 30.7 µs | 5.50 ms |
+
+Only that section of the document changed.
+
+### Docs — the parity record is the oracle
+
+- **CLAUDE.md** (wording approved by the maintainer):
+  - "Cross-check against `rust-old/`" becomes "The parity record is the oracle".
+  - "Do not modify `rust-old/`" becomes "Do not weaken or delete a parity assertion in
+    `tests/mela.tcyr` without an ADR".
+  - The *Scaffolding* and *Project Identity* text says the Rust original was retired.
+  - The parity record is added under Documentation.
+- **README, CONTRIBUTING, the getting-started guide, state.md, the roadmap and the parity record**
+  describe the Rust original as retired. With this release, the parity record's retirement
+  checklist is complete.
+- **The roadmap's v1.1.x section is complete and removed.** v1.x is the open work.
+
 ## [1.1.5] - 2026-10-15
 
 **Every divergence from rust-old decided.** Each behavior the audit found differing from Rust,

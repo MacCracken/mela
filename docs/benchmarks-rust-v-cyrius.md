@@ -55,15 +55,37 @@ is the path to watch.)
   marketplace's once-per-install verification it is acceptable, and it is the
   obvious first target if signature throughput ever matters.
 
-## Rust comparison — deferred
+## Rust comparison
 
-The roadmap asks for a Cyrius-vs-`rust-old` comparison on these paths. The Rust
-oracle **cannot be built in this environment**: `rust-old/Cargo.toml` depends on
-`agnos-common` at `../agnosticos/userland/agnos-common`, which is not present, so
-`cargo bench` will not resolve. The comparison column is therefore **left open**
-until the Rust workspace is available; the Cyrius figures above stand on their
-own as the baseline and will be diffed against Rust when `agnos-common`
-can be checked out alongside the port.
+Captured 2026-10-15 on the development host (AMD Ryzen 7 5800H, Linux 7.2.8, clocksource hpet),
+in one session: the Rust and Cyrius benches ran alternately, three times each, and the table gives
+the median of the three run averages. Both harnesses subtract the measured cost of one clock read
+per timed window (Rust ~1.42 µs, Cyrius ~1.35 µs on this host).
+
+| Hot path            | Rust ns/op | Cyrius ns/op | Cyrius ÷ Rust |
+|---------------------|-----------:|-------------:|--------------:|
+| `registry_get`      |         18 |           70 |          3.9× |
+| `manifest_validate` |         62 |          168 |          2.7× |
+| `sha256_hash`       |        139 |          816 |          5.9× |
+| `agpkg_inspect`     |      7,793 |      110,102 |         14.1× |
+| `ed25519_verify`    |     30,742 |    5,504,000 |          179× |
+
+How the Rust side was built and measured:
+
+- **The code** is the Rust original, the `rust-old/` crate as committed before its retirement in
+  v1.1.6, built with rustc 1.97.1 `--release`. Its only external piece, the `AgentManifest` type,
+  comes from agnostik's Rust crate (agnostik commit `3507c46`, 2026-03-25, the last one whose
+  `AgentManifest.version` is a `String`, which is what this code expects). Rust's own suite passes
+  on that build: 204/204.
+- **The harness** mirrors `tests/mela.bcyr`: the same seed, message and manifest values, the same
+  batch sizes and rounds, with `std::hint::black_box` around inputs and results.
+- **`agpkg_inspect`** gunzips and lists the identical 416-byte bundle the Cyrius bench inspects,
+  with the `flate2` and `tar` crates the Rust original packed with. Rust had no inspect function of
+  its own. mela's inspector also decompresses into an 8 MiB working buffer on every call, where the
+  Rust crates stream; the wide spread on the Cyrius row (min 73.5 µs, max 149.7 µs) comes from that.
+- **`ed25519_verify`** is `ed25519-dalek` against sigil. The gap is the one *Reading the numbers*
+  above describes: a portable, constant-time, pure-Cyrius implementation with no assembly field
+  arithmetic, against a tuned native library.
 
 ## Caveats
 

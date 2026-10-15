@@ -1,56 +1,29 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-10-14 (v1.1.0) · Live status: [`state.md`](state.md) · History:
-> [`../../CHANGELOG.md`](../../CHANGELOG.md) · Parity audit: [`rust-parity.md`](rust-parity.md)
+> **Last Updated**: 2026-10-15 (v1.1.6) · Live status: [`state.md`](state.md) · History:
+> [`../../CHANGELOG.md`](../../CHANGELOG.md) · Parity record: [`rust-parity.md`](rust-parity.md)
 >
-> Open work only. Shipped milestones (v0.1.0 port scaffold → v1.0.0 release → v1.1.0) are
-> recorded in the CHANGELOG, not here. **v1.1.x** fixes what the 2026-10-14 parity audit found,
-> closes the coverage gap and retires `rust-old/`. **v1.x** maps the rest of the backlog. Each
-> item is self-contained, so an agent can pick one up cold.
+> Open work only. Shipped milestones (v0.1.0 port scaffold → v1.0.0 release → v1.1.6) are
+> recorded in the CHANGELOG, not here. **v1.1.x** — the 2026-10-14 parity audit's fixes, the
+> coverage catch-up, the divergence ADRs and the retirement of `rust-old/` — is complete
+> (CHANGELOG 1.1.1–1.1.6). **v1.x** maps the backlog. Each item is self-contained, so an agent
+> can pick one up cold.
 
 ## Working rules
 
 - **One item per patch release** where practical. Each release: `cyrius build` + `cyrius test`
   green (plus `cyrius fuzz` / `cyrius bench` where the item touches them), then `VERSION`,
   CHANGELOG and [`state.md`](state.md).
-- **Every fix lands with its regression test.** The D-numbers below refer to
-  [`rust-parity.md`](rust-parity.md) § Defects found.
+- **Every fix lands with its regression test.**
 - **Public API is frozen** ([`../api/`](../api/)). Additive changes are fine. Changing what a
   listed function accepts or returns needs an ADR, including a bug fix that starts rejecting
   input that used to be accepted.
-- **`rust-old/` is the oracle until v1.1.x deletes it.** Do not edit it. A divergence from it
-  needs an ADR, or an entry in `rust-parity.md`.
+- **The parity record is the oracle** since `rust-old/` was retired (v1.1.6): `tests/mela.tcyr`,
+  the GNU tar and transport checks, [`rust-parity.md`](rust-parity.md) and ADR-0011/0012/0013. A
+  behavior change needs an ADR; a parity assertion is never weakened without one.
 - **Toolchain bumps** follow cyrius's *Moving a pin* procedure (`ecosystem-migration.md`):
   `cyrius lib sync --full --relock`, `cyrius deps`, `cyrius distlib`, then
   `cyrius deps --locked`.
-
----
-
-## v1.1.x — Audit fixes, coverage catch-up, retire `rust-old/`
-
-Baseline at v1.1.0:
-- Rust tests: 171 of 204 covered, 23 partial, 10 not covered.
-- `cyrius coverage`: 247 of 326 `src/` fns (75%).
-- CI builds but runs no tests.
-
-v1.1.1 shipped the memory-safety group, D1–D5, plus D12's duplicate-name half (see the
-CHANGELOG and ADR-0011).
-v1.1.2 shipped the CI gate: `deps --locked`, test, fuzz, bench, `coverage --min 76`, and the
-GNU tar cross-check (`scripts/tar-crosscheck.sh`).
-v1.1.3 shipped the correctness group, D6–D12 (ADR-0012), plus a live transport check in CI. All
-twelve audit defects are now fixed.
-v1.1.4 closed Rust test coverage: 202 of 204 covered, 2 N/A; coverage floor 88%.
-v1.1.5 decided every divergence from Rust (ADR-0013): strict decoding everywhere, Unicode text,
-Rust-era ratings files refused.
-
-### v1.1.6 — Retire `rust-old/`
-
-- Every box in `rust-parity.md` § Retirement checklist is ticked.
-- Delete `rust-old/`. Mark its CHANGELOG entry as the end of the Rust oracle.
-- Replace the CLAUDE.md "cross-check against `rust-old/`" principle and its *Scaffolding*
-  section: the parity suite plus `rust-parity.md` are the oracle.
-- `docs/benchmarks-rust-v-cyrius.md`: close the "Rust comparison — deferred" section. No Rust
-  numbers were ever recorded, so the column is dropped, not deferred.
 
 ---
 

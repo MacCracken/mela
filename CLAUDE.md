@@ -8,7 +8,8 @@
 
 ## Project Identity
 
-**mela** — Cyrius port of a Rust project (6208 lines preserved at `rust-old/`).
+**mela** — Cyrius port of a Rust project. The Rust original was retired at v1.1.6; what it
+specified lives in the parity suite and [`docs/development/rust-parity.md`](docs/development/rust-parity.md).
 
 - **Type**: Port (Rust → Cyrius)
 - **License**: GPL-3.0-only
@@ -33,7 +34,8 @@ This file (`CLAUDE.md`) is durable rules.
 
 ## Scaffolding
 
-Project was scaffolded with `cyrius port`. Original Rust at `rust-old/` is the reference oracle — do not modify it; cross-check the port against it.
+Project was scaffolded with `cyrius port`. The Rust original (`rust-old/`) was the parity oracle until
+v1.1.6, when it was deleted; it remains in git history.
 
 ## Quick Start
 
@@ -45,8 +47,10 @@ cyrius test                              # run tests/*.tcyr
 
 ## Key Principles
 
-- **Cross-check against `rust-old/`** — the port's correctness bar is "matches what Rust did". Diverge only with an ADR.
-- **Correctness over cleverness** — if the Cyrius behavior diverges silently from Rust, the bugs win
+- **The parity record is the oracle** — `tests/mela.tcyr`, `scripts/tar-crosscheck.sh`,
+  `scripts/transport-check.sh`, `docs/development/rust-parity.md` and ADR-0011/0012/0013 hold what
+  the Rust original specified. A behavior change needs an ADR.
+- **Correctness over cleverness** — if behavior changes silently, the bugs win
 - Test after every change, not after the feature is "done"
 - ONE change at a time — never bundle unrelated changes
 - Build with `cyrius build`, not raw `cat file | cc5` — the manifest auto-resolves deps
@@ -57,7 +61,7 @@ cyrius test                              # run tests/*.tcyr
 
 - **Do not commit or push** — the user handles all git operations
 - **Never use `gh` CLI** — use `curl` to the GitHub API if needed
-- Do not modify `rust-old/` — it's the parity oracle
+- Do not weaken or delete a parity assertion in `tests/mela.tcyr` without an ADR
 - Do not skip tests before claiming changes work
 - Do not modify `lib/` files (vendored stdlib / dep symlinks)
 - Do not hardcode toolchain versions in CI YAML — `cyrius = "X.Y.Z"` in `cyrius.cyml` is the source of truth
@@ -70,4 +74,5 @@ cyrius test                              # run tests/*.tcyr
 - [`docs/examples/`](docs/examples/) — Runnable examples
 - [`docs/development/state.md`](docs/development/state.md) — Live state
 - [`docs/development/roadmap.md`](docs/development/roadmap.md) — Open milestones (v1.1.x, v1.x backlog)
+- [`docs/development/rust-parity.md`](docs/development/rust-parity.md) — the parity record (the oracle since v1.1.6)
 

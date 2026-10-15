@@ -5,6 +5,10 @@
 
 ## Version
 
+**1.1.6** — `rust-old/` retired (2026-10-15): the Rust oracle is deleted; the parity suite,
+`rust-parity.md` and ADR-0011/0012/0013 are the oracle. The Rust-vs-Cyrius benchmark comparison is
+filled in from the Rust original before its deletion. v1.1.x is complete.
+
 **1.1.5** — every divergence from rust-old decided (2026-10-15, ADR-0013): strict decoding in every
 decoder, Unicode text handling, Rust-era ratings files refused; semver overflow, scale-factor text,
 messages and `installed_size` matched. 979/979.
@@ -66,7 +70,8 @@ remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once 
 
 ## Source
 
-- Rust reference: 6208 lines at `rust-old/` (frozen, do not edit).
+- Rust reference: retired at v1.1.6 (6208 lines; in git history before that release). The parity
+  record ([`rust-parity.md`](rust-parity.md)) and the parity suite replace it.
 - Cyrius port: **all 9 modules complete** —
   - `src/category.cyr` — `MarketplaceCategory` (`cat_name` / `cat_parse`, Rust `Display`/`FromStr`).
   - `src/manifest.cyr` — `PublisherInfo`, `MarketplaceManifest` (`validate` / `qualified_name`),
@@ -150,14 +155,10 @@ Direct (declared in `cyrius.cyml`):
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). **v1.1.x** works the 2026-10-14 `rust-old/` parity audit
-([`rust-parity.md`](rust-parity.md)):
-- Rust tests: 202 of 204 covered, 2 N/A (no consumer of either codec).
-- `cyrius coverage`: 88% of `src/` fns referenced (292/330; the CI floor).
-- All twelve defects are fixed (v1.1.1, v1.1.3), Rust test coverage is closed (v1.1.4) and every
-  divergence is decided (v1.1.5, ADR-0013). Only the retirement of `rust-old/` (v1.1.6) remains.
-- CI runs test, fuzz, bench, an 88% coverage floor, the GNU tar cross-check and a live transport
-  check.
+See [`roadmap.md`](roadmap.md). **v1.1.x is complete**: the 2026-10-14 parity audit's twelve
+defects are fixed, 202 of the Rust original's 204 tests are covered (2 N/A), every divergence is
+decided (ADR-0013) and `rust-old/` is retired. CI runs test, fuzz, bench, an 88% coverage floor
+(292/330), the GNU tar cross-check and a live transport check.
 
 The **v1.x** backlog maps large-bundle support, hardening residuals, API and build hygiene,
 aarch64 and agnos runtime, and the unscheduled features (discovery, paid distribution).

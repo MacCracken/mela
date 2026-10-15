@@ -1,9 +1,13 @@
 # rust-old parity record
 
+> **`rust-old/` was retired at v1.1.6.** This record, the parity suite (`tests/mela.tcyr`), the GNU
+> tar and transport checks, and ADR-0011/0012/0013 are the oracle now. Source and test comments
+> that cite `rust-old/src/*.rs` name the retired code they port; it is in git history before v1.1.6.
+
 > Audited 2026-10-14 against v1.1.0 (cyrius 6.7.9). D1–D5 fixed in v1.1.1, D6–D12 in v1.1.3; Rust test
 > coverage closed in v1.1.4; every divergence decided in v1.1.5 (ADR-0013). This file is the record that outlives
-> `rust-old/`: once the oracle is deleted, every Rust behavior mela chose to keep, drop or change
-> must be written here or in an ADR. Work items live in [`roadmap.md`](roadmap.md) § v1.1.x.
+> `rust-old/`: every Rust behavior mela chose to keep, drop or change is written here or in an ADR.
+> The work it drove is CHANGELOG 1.1.1–1.1.6.
 
 ## Summary
 
@@ -120,7 +124,7 @@ Every Rust test listed as partial or uncovered at the audit now has its assertio
 
 ## Retirement checklist
 
-`rust-old/` can be deleted when all of these hold:
+`rust-old/` was deleted at v1.1.6, when all of these held:
 
 - [x] D1–D12 fixed, each with a regression test. *(D1–D5: v1.1.1; D6–D12: v1.1.3.)*
 - [x] Each "behavior change with no ADR" above is either matched to Rust or recorded in an ADR.
@@ -130,5 +134,5 @@ Every Rust test listed as partial or uncovered at the audit now has its assertio
 - [x] CI runs `cyrius test`, `cyrius fuzz` and the GNU-tar cross-check. *(v1.1.2)*
 - [x] `cyrius coverage --min` is gated in CI at the level reached. *(76% in v1.1.2, 77% in v1.1.3,
   88% in v1.1.4.)*
-- [ ] The CLAUDE.md "cross-check against `rust-old/`" principle is replaced by "the parity suite
-  and this record are the oracle".
+- [x] The CLAUDE.md "cross-check against `rust-old/`" principle is replaced by "the parity suite
+  and this record are the oracle". *(v1.1.6.)*

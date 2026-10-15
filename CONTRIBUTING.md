@@ -2,14 +2,15 @@
 
 mela is the **app & agent marketplace for AGNOS** — discovery, distribution, and trust
 verification (Ed25519 signatures, SHA-256 integrity, an append-only transparency log). It is
-**mid-port from Rust to Cyrius**: the original Rust source is frozen at `rust-old/` as the
-parity oracle, and the Cyrius port grows under `src/`.
+a **Cyrius port of a Rust original**, now complete. The Rust source was the parity oracle until
+v1.1.6, when it was retired; the parity suite and `docs/development/rust-parity.md` carry what it
+specified.
 
 ## Ground rules
 
-- **Port for parity, then improve.** `rust-old/` is the reference for *what the code does*.
-  Port a module into Cyrius, verify it matches the Rust behavior, then optimize. Don't edit
-  `rust-old/` — it's the frozen oracle.
+- **Keep parity, then improve.** `tests/mela.tcyr`, `docs/development/rust-parity.md` and
+  ADR-0011/0012/0013 record what the Rust original did. Change behavior only with an ADR, and
+  never weaken or delete a parity assertion without one.
 - **Correctness is the optimum sovereignty.** Test after every change, not after the feature
   is "done."
 - **One change at a time.** Don't bundle unrelated changes.
@@ -36,8 +37,8 @@ CI runs all of these, plus `cyrius deps --locked` and a `cyrius coverage --min` 
 
 Every change passes the same gates as existing code:
 
-- **Tests green** — add coverage for ported/new behavior in `tests/mela.tcyr`. A ported
-  module isn't done until its parity is asserted against the `rust-old/` behavior.
+- **Tests green** — add coverage for new behavior in `tests/mela.tcyr`. A change isn't done until
+  its behavior is asserted; a change to existing behavior also needs an ADR.
 - **Fuzz every parser path** — anything consuming external data (manifests, package bytes,
   signatures, URLs) earns a harness in `tests/mela.fcyr`.
 - **Benchmark before claiming perf** — numbers in `tests/mela.bcyr`, against the Rust
@@ -55,7 +56,8 @@ mela's port follows the AGNOS Cyrius conventions. The sharp edges:
   serialization is hand-written, and every type ported gets a roundtrip test.
 
 Study a working Cyrius program before writing new code (`yukti/src/main.cyr`,
-`patra/programs/demo.cyr`), and check the Rust original in `rust-old/src/` for the logic.
+`patra/programs/demo.cyr`), and read `docs/development/rust-parity.md` and the ADRs for why
+existing behavior is the way it is.
 
 ## Documentation
 

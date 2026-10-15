@@ -22,5 +22,4 @@ tarpaulin-report.*
 *.key
 
 # Cyrius port
-/rust-old/target/
 /build/

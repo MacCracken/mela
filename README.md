@@ -7,15 +7,16 @@ for desktop applications *and* AI agents. The design goal — every artifact it 
 Ed25519-signed, SHA-256-integrity-checked, and recorded in an append-only transparency log:
 a package manager's convenience with a supply-chain auditor's guarantees.
 
-- **Type**: binary + library — **Rust → Cyrius port** (Rust oracle at `rust-old/`;
-  Cyrius port under `src/`)
+- **Type**: binary + library — **Rust → Cyrius port**, complete (the Rust original was retired at
+  v1.1.6; [`docs/development/rust-parity.md`](docs/development/rust-parity.md) records what it specified)
 - **License**: GPL-3.0-only
 - **Genesis repo**: [agnosticos](https://github.com/MacCracken/agnosticos)
 - **Status**: **v1.0.0** (released) — binary **and** library (`dist/mela.cyr`) — see [`docs/development/state.md`](docs/development/state.md)
 
 > **v1.0 — released.** All 9 Rust modules are ported to Cyrius (the 6208-line
-> Rust implementation stays frozen at [`rust-old/`](rust-old/) as the **parity oracle**, retired
-> after v1.0). The end-to-end publish→verify→install flow is wired with **both trust gates
+> Rust implementation was the **parity oracle** until v1.1.6, when it was retired; its tests and
+> every intentional change from it are recorded in the parity suite and
+> [`docs/development/rust-parity.md`](docs/development/rust-parity.md)). The end-to-end publish→verify→install flow is wired with **both trust gates
 > enforced**, a pre-release [security audit](docs/audit/) + [threat model](docs/development/threat-model.md)
 > are in place, and the public API is frozen ([`docs/api/`](docs/api/)). The trust properties below
 > are **shipped and tested** (492 parity tests), not aspirations.
@@ -39,7 +40,7 @@ A sovereign OS still needs a front door for software. Mela is that front door, b
 
 ## What's inside
 
-The marketplace surface — Rust source preserved at `rust-old/src/`, ported module-by-module to
+The marketplace surface — ported module-by-module from the Rust original (retired at v1.1.6) to
 Cyrius under `src/`:
 
 | Module / type | Role | Cyrius port |
@@ -108,9 +109,10 @@ cyrius test                              # parity tests (tests/mela.tcyr)
 cyrius bench                             # hot-path benchmarks (tests/mela.bcyr)
 ```
 
-The Rust oracle at [`rust-old/`](rust-old/) is the frozen parity reference. It is **not built
-here** — it depends on `agnos-common` (a sibling crate not vendored in this repo); the Cyrius
-tests assert behavior against it by hand, module by module.
+The Rust original was the parity oracle until v1.1.6, when it was retired. Its 204 tests are
+covered by `tests/mela.tcyr` (202, plus 2 recorded as not applicable), and every behavior mela
+changed is recorded in [`docs/development/rust-parity.md`](docs/development/rust-parity.md) and
+ADR-0011/0012/0013.
 
 A guided walkthrough lives in [`docs/guides/getting-started.md`](docs/guides/getting-started.md).
 
@@ -119,9 +121,9 @@ A guided walkthrough lives in [`docs/guides/getting-started.md`](docs/guides/get
 - [`docs/api/`](docs/api/) — **frozen public API reference** (what consumers build against)
 - [`CHANGELOG.md`](CHANGELOG.md) — what changed, per version
 - [`docs/architecture/overview.md`](docs/architecture/overview.md) — module map, data flow, trust model
-- [`docs/development/roadmap.md`](docs/development/roadmap.md) — open work: v1.1.x audit fixes + rust-old retirement, v1.x backlog
+- [`docs/development/roadmap.md`](docs/development/roadmap.md) — open work: the v1.x backlog
 - [`docs/development/state.md`](docs/development/state.md) — live status snapshot
-- [`docs/development/rust-parity.md`](docs/development/rust-parity.md) — `rust-old/` parity audit: defects, divergences, coverage gaps
+- [`docs/development/rust-parity.md`](docs/development/rust-parity.md) — the parity record: what the retired Rust original specified, and every change from it
 - [`docs/development/threat-model.md`](docs/development/threat-model.md) + [`docs/audit/`](docs/audit/) — trust boundaries, controls, audit findings
 - [`docs/benchmarks-rust-v-cyrius.md`](docs/benchmarks-rust-v-cyrius.md) — hot-path benchmarks
 - [`docs/adr/`](docs/adr/) — architectural decision records
