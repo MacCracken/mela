@@ -26,7 +26,12 @@ cyrius deps                              # resolve [deps.*] from cyrius.cyml int
 cyrius build src/main.cyr build/mela     # build
 cyrius test                              # run tests/*.tcyr (auto-discovered)
 cyrius bench tests/mela.bcyr             # benchmarks
+cyrius fuzz                              # fuzz harness (tests/mela.fcyr)
+bash scripts/tar-crosscheck.sh           # bundle format vs GNU tar, both directions
 ```
+
+CI runs all of these, plus `cyrius deps --locked` and a `cyrius coverage --min` floor
+(`.github/workflows/ci.yml`).
 
 Every change passes the same gates as existing code:
 

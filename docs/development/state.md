@@ -5,6 +5,10 @@
 
 ## Version
 
+**1.1.2** — CI runs the gates (2026-10-14): `cyrius deps --locked`, test, fuzz, bench (smoke),
+`cyrius coverage --min 76`, and the new GNU tar cross-check (`scripts/tar-crosscheck.sh`,
+ADR-0008). No `src/` change.
+
 **1.1.1** — audit defects D1–D5 fixed (2026-10-14): the tar reader validates the whole archive
 before use (a crafted bundle no longer crashes `pipeline_install` pre-signature), uninstall no
 longer follows symlinks, rating scores and KeyVersions decode fail-closed, `keyring_load_dir`
@@ -138,7 +142,7 @@ See [`roadmap.md`](roadmap.md). **v1.1.x** works the 2026-10-14 `rust-old/` pari
 - D1–D5 fixed in v1.1.1. Still open before `rust-old/` can be deleted: D6–D11, and D12's
   unknown-category half. The most severe left are the 256 KiB download cap (D7), silent 8 MiB
   truncation (D8) and the garbage sandbox data-dir rule (D6).
-- CI does not yet run `cyrius test`.
+- CI runs test, fuzz, bench, a 76% coverage floor and the GNU tar cross-check (v1.1.2).
 
 The **v1.x** backlog maps large-bundle support, hardening residuals, API and build hygiene,
 aarch64 and agnos runtime, and the unscheduled features (discovery, paid distribution).

@@ -42,6 +42,11 @@ Two facts shape the approach:
    the done-when targets. (These run via the harness/CI shell, not inside
    `cyrius test`, which cannot spawn processes.)
 
+   *Update (v1.1.2):* until v1.1.2 this check was run once by hand. It is now
+   `scripts/tar-crosscheck.sh` and runs in CI on every push. Both directions are
+   byte-exact per entry, and GNU-built archives are checked in all three of
+   GNU tar's formats (gnu, ustar, pax).
+
 ## Consequences
 
 - **Positive** — packaging produces and consumes standard gzipped-ustar

@@ -4,6 +4,46 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
+## [1.1.2] - 2026-10-14
+
+**CI now tests what it ships.** Until this release `ci.yml` resolved dependencies and built, and
+nothing else: no tests, no fuzzing, no format check. The 1.1.1 fixes and everything after them
+now land under a gate. No `src/` change: 553 passed / 0 failed.
+
+### CI — the build job runs the gates
+
+`.github/workflows/ci.yml`, which `release.yml` calls as its CI Gate, now runs:
+
+- **`cyrius deps --locked`** (replaces `cyrius deps`, also in `release.yml`'s build). It
+  resolves the tags and writes nothing; it fails, naming the file, if the committed `lib/` or
+  `cyrius.lock` differ. Checked: one appended byte in `lib/agnostik.cyr` fails it.
+- **`cyrius test`**, **`cyrius fuzz`**, and **`cyrius bench`** (a smoke run: the exit status is
+  the gate; runner timings are not compared). Checked: a failing `.tcyr` makes `cyrius test`
+  exit 1.
+- **`cyrius coverage --min 76`**: the floor is the level reached, 249 of 326 `src/` fns. The
+  v1.1.x coverage catch-up raises it and never lowers it.
+- **The GNU tar cross-check** (below).
+
+All seven steps were run in a clean copy of the tree, holding only the files git tracks plus the
+new ones, and each exits 0. (`act` is not installed here, so the workflow itself has not run.)
+The job keeps its name, `Build`, so a branch-protection rule that requires it still matches.
+
+### Added — `scripts/tar-crosscheck.sh`, the format oracle
+
+ADR-0008's cross-validation against GNU tar was run once, by hand, at v0.8.0. Once `rust-old/`
+is deleted it is the only independent check that mela's bundles are real gzip + ustar, so it is
+now a script and runs in CI. A small helper, `scripts/tar-crosscheck.cyr`, exposes mela's real
+packer and reader (`pack` / `list` / `get`).
+
+- **mela → GNU tar:** a Flutter build dir is packed with `pack_flutter_app`. `gzip -t` passes;
+  GNU `tar -tzf` lists exactly the six expected entries, all regular files; `tar -xzf` extracts
+  them. Each entry matches its source and mela's own reader byte for byte.
+- **GNU tar → mela:** archives built by `tar --format=gnu|ustar|pax` list the same regular files
+  in mela, and every one reads back byte for byte.
+
+It runs in about 3 s. Checked: a packer that writes an off-by-one header checksum fails it at
+"GNU tar cannot list mela's bundle".
+
 ## [1.1.1] - 2026-10-14
 
 **Memory safety and the trust gate: audit defects D1–D5 fixed** (from

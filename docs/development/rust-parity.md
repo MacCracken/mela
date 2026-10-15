@@ -166,8 +166,8 @@ Grouped by `tests/mela.tcyr` group. The Rust tests named here are the 33 partial
 - **fuzz:** *(done v1.1.1)* the seeds never passed the gzip CRC, so the tar parser had never
   been fuzzed, which is why D1 survived. The harness now runs `_tar_scan` on raw input and
   mutates a real archive's header.
-- **Independent format oracle:** script the GNU `tar` cross-check from ADR-0008. It ran once by
-  hand, and once `rust-old/` is gone it is the only outside check on the bundle format.
+- **Independent format oracle:** *(done v1.1.2)* the GNU `tar` cross-check from ADR-0008 is now
+  `scripts/tar-crosscheck.sh` and runs in CI.
 
 ## Retirement checklist
 
@@ -176,7 +176,8 @@ Grouped by `tests/mela.tcyr` group. The Rust tests named here are the 33 partial
 - [ ] D1–D12 fixed, each with a regression test. *(D1–D5 and D12's duplicate-name half: v1.1.1.)*
 - [ ] Each "behavior change with no ADR" above is either matched to Rust or recorded in an ADR.
 - [ ] The 33 partial or uncovered Rust tests are covered, or marked N/A here with the reason.
-- [ ] CI runs `cyrius test`, `cyrius fuzz` and the GNU-tar cross-check.
-- [ ] `cyrius coverage --min` is gated in CI at the level reached.
+- [x] CI runs `cyrius test`, `cyrius fuzz` and the GNU-tar cross-check. *(v1.1.2)*
+- [ ] `cyrius coverage --min` is gated in CI at the level reached. *(gated at 76% in v1.1.2; raise it
+  as v1.1.4 lands)*
 - [ ] The CLAUDE.md "cross-check against `rust-old/`" principle is replaced by "the parity suite
   and this record are the oracle".

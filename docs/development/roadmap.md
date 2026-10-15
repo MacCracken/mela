@@ -35,17 +35,8 @@ Baseline at v1.1.0:
 
 v1.1.1 shipped the memory-safety group, D1–D5, plus D12's duplicate-name half (see the
 CHANGELOG and ADR-0011).
-
-### v1.1.2 — CI gate
-
-Lands right after the fixes, so CI guards everything that follows.
-
-- `ci.yml` runs `cyrius deps --locked`, `cyrius build`, `cyrius test`, `cyrius fuzz` and
-  `cyrius bench`. `release.yml` inherits them through its CI Gate job.
-- Script the GNU `tar` cross-check from ADR-0008 (pack, then `tar -tzf` / `tar -xzf`; then
-  `tar -czf`, then `agpkg_inspect`) and run it in CI. After `rust-old/` goes, it is the only
-  independent format oracle.
-- `cyrius coverage --min 75` in CI, raised as v1.1.4 lands.
+v1.1.2 shipped the CI gate: `deps --locked`, test, fuzz, bench, `coverage --min 76`, and the
+GNU tar cross-check (`scripts/tar-crosscheck.sh`).
 
 ### v1.1.3 — Correctness fixes
 
@@ -83,7 +74,7 @@ Defects that make a feature not work.
     uninstall.
   - Signature edge cases: `sig_len` 63 / 65, bit flips in R or S, S + L, small-order key.
   - Keyring rotation and inclusive validity edges.
-- Raise the `cyrius coverage --min` gate to the level reached.
+- Raise the `cyrius coverage --min` gate in `ci.yml` (76 at v1.1.2) to the level reached.
 
 ### v1.1.5 — Decide the unrecorded divergences
 

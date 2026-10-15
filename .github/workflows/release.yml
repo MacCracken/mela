@@ -40,7 +40,7 @@ jobs:
 
       - name: Build
         run: |
-          cyrius deps
+          cyrius deps --locked
           mkdir -p build
           cyrius build src/main.cyr build/${{ github.event.repository.name }}
 

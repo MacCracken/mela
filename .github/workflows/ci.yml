@@ -31,13 +31,34 @@ jobs:
             CYRIUS_VERSION="$CYRIUS_VERSION" sh
           echo "$HOME/.cyrius/bin" >> "$GITHUB_PATH"
 
-      - name: Resolve dependencies
-        run: cyrius deps
+      - name: Verify dependencies (locked)
+        # Resolves the tags and writes nothing; fails, naming the file, if the
+        # committed lib/ or cyrius.lock differ from what the tags resolve to.
+        run: cyrius deps --locked
 
       - name: Build
         run: |
           mkdir -p build
           cyrius build src/main.cyr build/${{ github.event.repository.name }}
+
+      - name: Test
+        run: cyrius test
+
+      - name: Fuzz
+        run: cyrius fuzz
+
+      - name: Bench (smoke)
+        # Exit status is the gate; timings on shared runners are not compared.
+        run: cyrius bench
+
+      - name: Coverage floor
+        # Reference coverage of src/ fns named by the suite. Raise --min as the
+        # v1.1.x coverage catch-up lands; never lower it.
+        run: cyrius coverage --min 76
+
+      - name: GNU tar cross-check (ADR-0008)
+        # The independent format oracle: mela <-> GNU tar, both directions.
+        run: bash scripts/tar-crosscheck.sh
 
   docs:
     name: Documentation
