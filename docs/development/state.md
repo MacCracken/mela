@@ -5,6 +5,9 @@
 
 ## Version
 
+**1.1.0** — cyrius 6.7.9 (2026-10-14). agnostik 1.12.0; sigil 3.13.11 / sankoch 2.8.3 /
+sandhi 1.10.9 from the stdlib. No source change; 492/492; builds for agnos and aarch64.
+
 **1.0.5** — JSON lookups migrated to `bayan_json_v_obj_get_by_cstr` (2026-10-14); zero
 deprecation warnings at build. Filesystem calls go through the portable `xunlink` / `xrmdir` /
 `xmkdir` bridges, so `dist/mela.cyr` compiles for agnos too.
@@ -34,8 +37,8 @@ remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once 
 
 ## Toolchain
 
-- **Cyrius pin**: `6.6.20` (in `cyrius.cyml [package].cyrius`). `lib/` is the full 6.6.20 stdlib
-  snapshot (`cyrius lib sync --full`) plus the agnostik bundle.
+- **Cyrius pin**: `6.7.9` (in `cyrius.cyml [package].cyrius`). `lib/` is the full 6.7.9 stdlib
+  snapshot (`cyrius lib sync --full`) plus the agnostik bundle; `cyrius deps --locked` passes.
 
 ## Source
 
@@ -98,12 +101,12 @@ Direct (declared in `cyrius.cyml`):
   fnptr, trait, bayan (JSON codec), chrono, fs, freelist, slice, process, sakshi, ct, keccak,
   thread, thread_local, random, bench, net, async, atomic, mmap, dynlib, fdlopen, regression,
   http, tls, ws, plus the folded stdlib bundles:
-  - **sigil** (3.13.10) — Ed25519 + SHA-256 + hex (trust gate).
-  - **sankoch** (2.8.1) — gzip/deflate/lz4 (the `.agnos-agent` packer; tar is hand-rolled
+  - **sigil** (3.13.11) — Ed25519 + SHA-256 + hex (trust gate).
+  - **sankoch** (2.8.3) — gzip/deflate/lz4 (the `.agnos-agent` packer; tar is hand-rolled
     ustar, ADR-0008).
-  - **sandhi** (1.10.8) — HTTP/HTTPS client (DNS resolver + TLS) backing the `remote_client`
+  - **sandhi** (1.10.9) — HTTP/HTTPS client (DNS resolver + TLS) backing the `remote_client`
     transport (ADR-0006).
-- **agnostik** (`dist/agnostik.cyr`, tag 1.7.1) — shared-types crate; supplies the `AgentManifest`.
+- **agnostik** (`dist/agnostik.cyr`, tag 1.12.0) — shared-types crate; supplies the `AgentManifest`.
 - `dist/mela.deps` (consumer-facing sidecar) lists the stdlib leaves the bundle needs:
   thread_local, sigil, fs, sandhi, sankoch.
 

@@ -4,7 +4,7 @@ version = "${file:VERSION}"
 description = "mela — the app & agent marketplace for AGNOS: signed, integrity-checked, transparency-logged discovery and distribution"
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "6.6.20"
+cyrius = "6.7.9"
 
 [build]
 entry = "src/main.cyr"
@@ -39,5 +39,5 @@ stdlib = [
 
 [deps.agnostik]
 git = "https://github.com/MacCracken/agnostik.git"
-tag = "1.7.1"
+tag = "1.12.0"
 modules = ["dist/agnostik.cyr"]

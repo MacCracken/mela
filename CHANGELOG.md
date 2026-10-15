@@ -4,6 +4,45 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
+## [1.1.0] - 2026-10-14
+
+**cyrius 6.6.20 → 6.7.9.** `cyrius build` OK (3,201,960 B), 492 passed / 0 failed, fuzz 1 / 0.
+No source change was needed: the build has the same four warnings as 1.0.5, and it also builds for
+`--agnos` and `--aarch64`.
+
+### Changed — deps on the 6.7.9 line
+
+| dep | was | now |
+|---|---|---|
+| agnostik | 1.7.1 | **1.12.0** (git; additive only — no removals or signature changes since 1.7.1) |
+| sigil | 3.13.10 | **3.13.11** (stdlib) |
+| sankoch | 2.8.1 | **2.8.3** (stdlib) |
+| sandhi | 1.10.8 | **1.10.9** (stdlib) |
+
+`lib/agnostik.cyr` is byte-identical to agnostik 1.12.0's `dist/`, and every stdlib leaf in `lib/`
+is byte-identical to `~/.cyrius/versions/6.7.9/lib` (`cyrius lib sync --full --relock`).
+
+### Changed — git-first resolution (cyrius 6.7.6)
+
+`cyrius.lock` gains agnostik's commit pin, the one-time diff 6.7.6 announces. `cyrius deps --locked`
+reports `lib/` and the lock exactly as the tags resolve. The roadmap's 6.7.6 pin-move note is
+marked applied.
+
+### Verified — hot paths, no regression
+
+`benches/hotpaths.cyr` (run from a copy with the fix below): manifest_validate 159 ns,
+sha256_hash 830 ns, registry_get 69 ns, agpkg_inspect 82 µs, ed25519_verify 5.76 ms per op. Each
+is at or under the recorded figures in `docs/benchmarks-rust-v-cyrius.md`. This was a single run,
+so it only shows there is no regression.
+
+### Known — both bench harnesses fail to compile (not from this bump)
+
+- `benches/hotpaths.cyr` calls `manifest_new`, renamed to `mela_manifest_new` in the
+  pre-1.0 namespace pass.
+- `tests/mela.bcyr` is the original `cyrius init` scaffold calling `bench(...)`, a function
+  no stdlib version has defined (the template was fixed in cyrius 5.11.62). `cyrius bench`
+  therefore fails. CI does not run it.
+
 ## [1.0.5] - 2026-10-14
 
 **Zero deprecation warnings.** `cyrius build` OK (3,140,544 B, unchanged), 492 passed / 0 failed.
