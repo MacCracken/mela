@@ -5,6 +5,12 @@
 
 ## Version
 
+**1.1.3** — audit defects D6–D12 fixed (2026-10-15): artifacts stream with Rust's timeouts,
+redirects, User-Agent and a 100 MiB cap; publish sends its signature; sandbox presets get their
+data dir; the packer fails instead of truncating and walks assets recursively; install extracts
+before recording and a corrupt index refuses to open; a manifest needs a valid category
+(ADR-0012). 626/626; live transport check in CI.
+
 **1.1.2** — CI runs the gates (2026-10-14): `cyrius deps --locked`, test, fuzz, bench (smoke),
 `cyrius coverage --min 76`, and the new GNU tar cross-check (`scripts/tar-crosscheck.sh`,
 ADR-0008). No `src/` change.
@@ -92,9 +98,9 @@ remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once 
 
 ## Tests
 
-**553/553** tests green (`tests/mela.tcyr` — groups across the 9 modules, plus `pipeline`
+**626/626** tests green (`tests/mela.tcyr` — groups across the 9 modules, plus `pipeline`
 (end-to-end), `hardening` (zip-slip), `tar-reader` (v1.1.1: checksum, strict octal, bounds,
-duplicate names, the D1 crash input), `transport` (HTTP logic), `extraction` (on-disk unpack),
+duplicate names, the D1 crash input), `install-txn` (v1.1.3: fail-closed index, save rollback), `transport` (HTTP logic), `extraction` (on-disk unpack),
 `keyring-load` (disk `load()` + `KeyVersion` JSON round-trip), and `registry-uninstall-fs` (files
 gone after uninstall)). `trust` has SHA-256 + RFC 8032 Ed25519 KAT vectors; `registry-persist`
 / `ratings-persist` do real on-disk round-trips; `agpkg-archive` packs + inspects a gzipped-ustar
@@ -137,12 +143,13 @@ Direct (declared in `cyrius.cyml`):
 
 See [`roadmap.md`](roadmap.md). **v1.1.x** works the 2026-10-14 `rust-old/` parity audit
 ([`rust-parity.md`](rust-parity.md)):
-- Rust tests: 172 of 204 covered, 23 partial, 9 not covered.
-- `cyrius coverage`: 75% of `src/` fns referenced.
-- D1–D5 fixed in v1.1.1. Still open before `rust-old/` can be deleted: D6–D11, and D12's
-  unknown-category half. The most severe left are the 256 KiB download cap (D7), silent 8 MiB
-  truncation (D8) and the garbage sandbox data-dir rule (D6).
-- CI runs test, fuzz, bench, a 76% coverage floor and the GNU tar cross-check (v1.1.2).
+- Rust tests: 174 of 204 covered, 22 partial, 8 not covered.
+- `cyrius coverage`: 77% of `src/` fns referenced (253/328; the CI floor).
+- All twelve defects are fixed: D1–D5 in v1.1.1, D6–D12 in v1.1.3. What remains before
+  `rust-old/` can be deleted is coverage (v1.1.4), the divergence ADRs (v1.1.5) and the
+  retirement (v1.1.6).
+- CI runs test, fuzz, bench, a 77% coverage floor, the GNU tar cross-check and a live transport
+  check.
 
 The **v1.x** backlog maps large-bundle support, hardening residuals, API and build hygiene,
 aarch64 and agnos runtime, and the unscheduled features (discovery, paid distribution).

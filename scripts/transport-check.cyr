@@ -1,0 +1,80 @@
+# Live transport check helper (D7 / D10), driven by scripts/transport-check.sh.
+# Runs mela's real HTTP client against a local server:
+#   fetch <base_url> <name> <version> <dest> [max_bytes] [timeout_secs]
+#       mela_fetch_artifact; prints the bytes written. Exit 0 if >0, else 1.
+#       max_bytes overrides RC_DOWNLOAD_MAX_BYTES (0 keeps it); timeout_secs
+#       overrides REQUEST_TIMEOUT_SECS and DOWNLOAD_TIMEOUT_SECS.
+#   publish <base_url> <bundle_file>
+#       rc_publish_signed with a fixed 64-byte signature; prints the response
+#       name. Exit 0 if the registry answered, else 1.
+
+include "src/category.cyr"
+include "src/manifest.cyr"
+include "src/depgraph.cyr"
+include "src/trust.cyr"
+include "src/transparency.cyr"
+include "src/local_registry.cyr"
+include "src/remote_client.cyr"
+include "src/sandbox_profiles.cyr"
+include "src/ratings.cyr"
+include "src/flutter_packaging.cyr"
+include "src/flutter_agpkg.cyr"
+include "src/pipeline.cyr"
+
+fn _tc_int(cstr): i64 {
+    var v = 0;
+    var i = 0;
+    while (load8(cstr + i) != 0) {
+        v = v * 10 + (load8(cstr + i) - 48);
+        i = i + 1;
+    }
+    return v;
+}
+
+fn _tc_fetch(base, name, version, dest, n) {
+    if (n >= 7) {
+        var mb = _tc_int(argv(6));
+        if (mb > 0) { RC_DOWNLOAD_MAX_BYTES = mb; }
+    }
+    if (n >= 8) {
+        var t = _tc_int(argv(7));
+        REQUEST_TIMEOUT_SECS = t;
+        DOWNLOAD_TIMEOUT_SECS = t;
+    }
+    var c = registry_client_new(str_from(base), str_from("/tmp/mela-transport-check-cache"));
+    var got = mela_fetch_artifact(c, str_from(name), str_from(version), str_from(dest));
+    var s = str_from_int(got);
+    print(str_data(s), str_len(s));
+    println("");
+    if (got > 0) { return 0; }
+    return 1;
+}
+
+fn _tc_publish(base, bundle_path) {
+    var buf = alloc(AGPKG_BUF_MAXLEN);
+    var bn = file_read_all(bundle_path, buf, AGPKG_BUF_MAXLEN);
+    if (bn <= 0) { return 1; }
+    var sig = alloc(64);
+    memset(sig, 171, 64);    # 0xAB x 64: the server checks it arrives as hex
+    var c = registry_client_new(str_from(base), str_from("/tmp/mela-transport-check-cache"));
+    var resp = rc_publish_signed(c, str_new(buf, bn), str_from("check.agnos-agent"), sig, 64, str_from("tok"));
+    if (resp == 0) { return 1; }
+    var nm = presp_name(resp);
+    print(str_data(nm), str_len(nm));
+    println("");
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    args_init();
+    var n = argc();
+    if (n >= 6) { if (streq(argv(1), "fetch") == 1) { return _tc_fetch(argv(2), argv(3), argv(4), argv(5), n); } }
+    if (n == 4) { if (streq(argv(1), "publish") == 1) { return _tc_publish(argv(2), argv(3)); } }
+    println("usage: transport-check fetch <base> <name> <version> <dest> [max_bytes] [timeout_secs]");
+    println("       transport-check publish <base> <bundle_file>");
+    return 2;
+}
+
+var r = main();
+syscall(60, r);

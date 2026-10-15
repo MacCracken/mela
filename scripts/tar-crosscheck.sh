@@ -10,8 +10,6 @@
 #      every regular file matches the source byte for byte.
 #
 # Run from anywhere: scripts/tar-crosscheck.sh. Needs GNU tar and gzip.
-# The fixture's flutter_assets/ is one level deep: nested assets are defect D11
-# (docs/development/rust-parity.md); add a nested file here when it is fixed.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -29,11 +27,12 @@ H=build/tar-crosscheck
 
 # --- fixture: a Flutter build dir (engine, AOT binary, assets) --------------
 B="$T/flutter-build"
-mkdir -p "$B/lib" "$B/flutter_assets"
+mkdir -p "$B/lib" "$B/flutter_assets/fonts"
 head -c 300000 /dev/urandom > "$B/lib/libflutter_linux_gtk.so"
 head -c 50000  /dev/urandom > "$B/lib/libapp.so"
 printf '{"assets":["NOTICES.Z"]}' > "$B/flutter_assets/AssetManifest.json"
 head -c 1000   /dev/urandom > "$B/flutter_assets/NOTICES.Z"
+head -c 4000   /dev/urandom > "$B/flutter_assets/fonts/M.otf"   # nested (D11, v1.1.3)
 
 # --- 1. mela writes, GNU tar reads ------------------------------------------
 bundle="$("$H" pack "$B" "$T/out")" || fail "mela could not pack the fixture"
@@ -43,6 +42,7 @@ expected="$T/expected"
 printf '%s\n' \
   assets/flutter_assets/AssetManifest.json \
   assets/flutter_assets/NOTICES.Z \
+  assets/flutter_assets/fonts/M.otf \
   bin/flutter_engine.so \
   bin/xcheck-app \
   manifest.json \
@@ -65,6 +65,7 @@ cmp "$B/lib/libapp.so" "$X/bin/xcheck-app" || fail "AOT binary differs after GNU
 cmp "$B/flutter_assets/AssetManifest.json" "$X/assets/flutter_assets/AssetManifest.json" \
   || fail "AssetManifest.json differs after GNU extract"
 cmp "$B/flutter_assets/NOTICES.Z" "$X/assets/flutter_assets/NOTICES.Z" || fail "NOTICES.Z differs after GNU extract"
+cmp "$B/flutter_assets/fonts/M.otf" "$X/assets/flutter_assets/fonts/M.otf" || fail "fonts/M.otf differs after GNU extract"
 
 while read -r e; do
   "$H" get "$bundle" "$e" "$T/entry" || fail "mela cannot read its own entry $e"
@@ -73,10 +74,11 @@ done < "$T/gnu-list"
 
 # --- 2. GNU tar writes, mela reads ------------------------------------------
 S="$T/src"
-mkdir -p "$S/bin" "$S/assets/flutter_assets"
+mkdir -p "$S/bin" "$S/assets/flutter_assets/fonts"
 cp "$B/lib/libflutter_linux_gtk.so" "$S/bin/flutter_engine.so"
 cp "$X/manifest.json" "$X/sandbox.json" "$S/"
 cp "$B/flutter_assets/AssetManifest.json" "$B/flutter_assets/NOTICES.Z" "$S/assets/flutter_assets/"
+cp "$B/flutter_assets/fonts/M.otf" "$S/assets/flutter_assets/fonts/"
 
 for fmt in gnu ustar pax; do
   a="$T/gnu-$fmt.tgz"
@@ -90,4 +92,4 @@ for fmt in gnu ustar pax; do
   done < "$T/gnu-list"
 done
 
-echo "tar-crosscheck: ok (mela -> GNU tar: 6 entries byte-exact; GNU tar gnu/ustar/pax -> mela: byte-exact)"
+echo "tar-crosscheck: ok (mela -> GNU tar: 7 entries byte-exact; GNU tar gnu/ustar/pax -> mela: byte-exact)"

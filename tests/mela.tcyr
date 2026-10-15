@@ -310,6 +310,24 @@ fn test_json() {
     assert_eq(str_eq_cstr(man_runtime(m2),     "native"),       1, "json runtime");
     assert_eq(vec_len(man_tags(m2)),           1,                  "json tags len");
     assert_eq(str_eq_cstr(vec_get(man_tags(m2), 0), "test"),    1, "json tag value");
+    # v1.1.3 (D12): an unknown, missing or non-string category rejects the manifest
+    var mj = "{\"name\":\"x\",\"version\":\"1.0.0\",\"description\":\"d\",\"publisher\":{\"name\":\"P\",\"key_id\":\"k\"},\"category\":";
+    assert_eq(manifest_from_json(str_cat(str_from(mj), str_from("\"Nope\"}"))), 0, "unknown category -> 0");
+    assert_eq(manifest_from_json(str_cat(str_from(mj), str_from("\"utility\"}"))), 0,
+      "Display form is not the wire form -> 0");
+    assert_eq(manifest_from_json(str_cat(str_from(mj), str_from("3}"))), 0, "numeric category -> 0");
+    var nocat = "{\"name\":\"x\",\"version\":\"1.0.0\",\"description\":\"d\",\"publisher\":{\"name\":\"P\",\"key_id\":\"k\"}}";
+    assert_eq(manifest_from_json(str_from(nocat)), 0, "missing category -> 0");
+    # every category round-trips through its wire name (ADR-0001)
+    var ci = 0;
+    var cat_rt = 0;
+    while (ci < CAT_COUNT) {
+        var mc = manifest_from_json(str_cat(str_cat(str_from(mj), str_from("\"")),
+            str_cat(cat_json_name(ci), str_from("\"}"))));
+        if (mc != 0) { if (man_category(mc) == ci) { cat_rt = cat_rt + 1; } }
+        ci = ci + 1;
+    }
+    assert_eq(cat_rt, CAT_COUNT, "all categories round-trip by wire name");
     return 0;
 }
 
@@ -774,7 +792,7 @@ fn test_registry_uninstall_fs() {
     # v1.1.1 (D2): a symlink inside the install dir points outside it
     var VICTIM = "/tmp/mela-test-rm-victim";
     sys_mkdir(VICTIM, 493);
-    var keep = str_cat(str_from(VICTIM), str_from("/keep.txt"));
+    var keep = path_join(str_from(VICTIM), str_from("keep.txt"));
     file_write_all(str_data(keep), "K", 1);
     xsymlink(VICTIM, str_data(path_join(dir, str_from("data"))));
     xsymlink(str_data(keep), str_data(path_join(dir, str_from("keep-link"))));
@@ -1267,7 +1285,7 @@ fn _t_tar_set_size(buf, off, field) {
 
 # A one-entry raw (uncompressed) tar holding manifest.json.
 fn _t_tar_manifest() {
-    var m = str_from("{\"name\":\"x\"}");
+    var m = str_from("{\"name\":\"x\",\"category\":\"Utility\"}");
     var es = vec_new();
     vec_push(es, tentry_new(str_from("manifest.json"), str_data(m), str_len(m)));
     return _tar_build(es);
@@ -1406,6 +1424,68 @@ fn test_transport() {
     assert_eq(mela_fetch_artifact(on, str_from("../evil"), str_from("1.0.0"),
         str_from("/tmp/mela-dl-guard/x.ark")), 0,
       "invalid-name fetch_artifact -> 0");
+
+    # Rust test_default_constants
+    assert_eq(str_starts_with(str_from(DEFAULT_REGISTRY_URL), str_from("https://")), 1, "default registry is https");
+    assert_eq(REQUEST_TIMEOUT_SECS > 0, 1, "request timeout > 0");
+    assert_eq(DOWNLOAD_TIMEOUT_SECS > REQUEST_TIMEOUT_SECS, 1, "download timeout > request timeout");
+
+    # v1.1.3 (D7): every request carries timeouts, follows redirects, and sends a
+    # User-Agent; sandhi's defaults were no timeout and no redirects
+    var ro = _rc_options(REQUEST_TIMEOUT_SECS);
+    assert_eq(sandhi_http_options_follow(ro), 1, "options: redirects followed");
+    assert_eq(sandhi_http_options_hops(ro), RC_MAX_HOPS, "options: hop cap");
+    assert_eq(sandhi_http_options_get_connect_ms(ro), 30000, "options: connect timeout 30 s");
+    assert_eq(sandhi_http_options_get_read_ms(ro), 30000, "options: read timeout 30 s");
+    assert_eq(sandhi_http_options_get_total_ms(ro), 30000, "options: request deadline 30 s");
+    assert_eq(sandhi_http_options_bytes(ro), RC_BUF_MAXLEN, "options: buffered cap = cache read cap");
+    assert_eq(sandhi_http_options_get_total_ms(_rc_options(DOWNLOAD_TIMEOUT_SECS)), 300000,
+      "options: download deadline 300 s");
+    var ua = sandhi_headers_get(_rc_headers(), "User-Agent");
+    assert_neq(ua, 0, "headers: User-Agent present");
+    assert_eq(streq(ua, str_data(str_clone(str_cat(str_from("agnos-marketplace/"), str_from(MELA_VERSION))))), 1,
+      "headers: User-Agent is agnos-marketplace/<version>");
+    assert_eq(streq(MELA_VERSION, CYRIUS_PKG_VERSION), 1, "MELA_VERSION matches VERSION");
+
+    # the download sink writes through and enforces the artifact ceiling
+    var SP = "/tmp/mela-sink-test.bin";
+    var sfd = file_open(SP, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);
+    var sctx = alloc(24);
+    store64(sctx, sfd); store64(sctx + 8, 0); store64(sctx + 16, 0);
+    var saved_cap = RC_DOWNLOAD_MAX_BYTES;
+    RC_DOWNLOAD_MAX_BYTES = 15;
+    assert_eq(_rc_dl_sink(sctx, "0123456789", 10), 1, "sink: chunk under the cap written");
+    assert_eq(_rc_dl_sink(sctx, "abcdefghij", 10), 0 - 1, "sink: chunk past the cap aborts");
+    assert_eq(load64(sctx + 16), 1, "sink: over-limit flagged");
+    assert_eq(load64(sctx + 8), 10, "sink: only the first chunk counted");
+    RC_DOWNLOAD_MAX_BYTES = saved_cap;
+    file_close(sfd);
+    var sbuf = alloc(32);
+    assert_eq(file_read_all(SP, sbuf, 32), 10, "sink: file holds exactly the first chunk");
+    xunlink(SP);
+
+    # v1.1.3 (D10): publish sends X-Package-Metadata, with the signature when signed
+    var meta = json_v_parse_buf(str_data(_rc_publish_metadata(str_from("p.agnos-agent"), str_from("abc"), 42, 0, 0)),
+      str_len(_rc_publish_metadata(str_from("p.agnos-agent"), str_from("abc"), 42, 0, 0)));
+    assert_neq(meta, 0, "metadata: valid JSON");
+    assert_eq(str_eq_cstr(json_v_str(bayan_json_v_obj_get_by_cstr(meta, "bundle_name")), "p.agnos-agent"), 1,
+      "metadata: bundle_name");
+    assert_eq(str_eq_cstr(json_v_str(bayan_json_v_obj_get_by_cstr(meta, "bundle_sha256")), "abc"), 1,
+      "metadata: bundle_sha256");
+    assert_eq(json_v_int(bayan_json_v_obj_get_by_cstr(meta, "bundle_size")), 42, "metadata: bundle_size");
+    assert_eq(json_v_is_null(bayan_json_v_obj_get_by_cstr(meta, "signature")), 1, "metadata: unsigned -> null");
+    var sig64 = alloc(64);
+    memset(sig64, 171, 64);
+    var sm = _rc_publish_metadata(str_from("p"), str_from("abc"), 1, sig64, 64);
+    var smv = json_v_parse_buf(str_data(sm), str_len(sm));
+    assert_eq(str_eq(json_v_str(bayan_json_v_obj_get_by_cstr(smv, "signature")), trust_hex_encode(sig64, 64)), 1,
+      "metadata: signature as hex");
+    assert_eq(rc_publish_signed(off, str_from("b"), str_from("p.agnos-agent"), sig64, 64, str_from("t")), 0,
+      "publish_signed offline -> 0");
+    assert_eq(rc_publish_signed(on, str_from("b"), str_from("p.agnos-agent"), sig64, 63, str_from("t")), 0,
+      "publish_signed: 63-byte signature -> 0 (no request)");
+    assert_eq(rc_publish_signed(on, str_from("b"), str_from("p.agnos-agent"), 0, 64, str_from("t")), 0,
+      "publish_signed: no signature -> 0 (no request)");
     return 0;
 }
 
@@ -1509,6 +1589,102 @@ fn test_pipeline() {
     mela_keyring_add_key(kr_wrong, kv_new(key_id, NOW - 100, 0, 0, trust_hex_encode(&pk2, 32)));
     var reg5 = registry_in_memory();
     assert_eq(pipeline_install(reg5, kr_wrong, bundle, &sig, 64, str_from(""), NOW), 0, "wrong key rejected");
+
+    # v1.1.3 (D9): the first on-disk end-to-end install. Every case above uses an
+    # in-memory registry, so nothing showed the files land under packages/<name>.
+    var EDIR = "/tmp/mela-e2e-disk";
+    rclean(EDIR);
+    var epk = path_join(str_from(EDIR), str_from("packages/test-pkg"));
+    if (is_dir(epk) == 1) { _rmtree(epk); }
+    var ereg = mela_registry_new(str_from(EDIR));
+    assert_neq(ereg, 0, "disk: registry opens");
+    var eres = pipeline_install(ereg, keyring, bundle, &sig, 64, content_hash, NOW);
+    assert_neq(eres, 0, "disk: install succeeds");
+    assert_eq(file_exists(str_data(path_join(epk, str_from("manifest.json")))), 1, "disk: manifest.json extracted");
+    assert_eq(file_exists(str_data(path_join(epk, str_from("sandbox.json")))), 1, "disk: sandbox.json extracted");
+    assert_eq(registry_len(mela_registry_new(str_from(EDIR))), 1, "disk: reopen sees the install");
+    assert_eq(registry_uninstall(ereg, str_from("test-pkg")), 1, "disk: uninstall");
+    assert_eq(is_dir(epk), 0, "disk: install dir removed");
+    assert_eq(registry_len(mela_registry_new(str_from(EDIR))), 0, "disk: reopen sees the uninstall");
+
+    # extraction that cannot land aborts the install: packages/test-pkg is a file
+    var BDIR = "/tmp/mela-e2e-blocked";
+    rclean(BDIR);
+    var bpk = path_join(str_from(BDIR), str_from("packages/test-pkg"));
+    if (is_dir(bpk) == 1) { _rmtree(bpk); }
+    _rc_mkdir_p(path_join(str_from(BDIR), str_from("packages")));
+    file_write_all(str_data(bpk), "block", 5);
+    var breg = mela_registry_new(str_from(BDIR));
+    assert_eq(pipeline_install(breg, keyring, bundle, &sig, 64, content_hash, NOW), 0,
+      "blocked extraction: install refused");
+    assert_eq(registry_is_empty(breg), 1, "blocked extraction: nothing recorded");
+    assert_eq(registry_len(mela_registry_new(str_from(BDIR))), 0, "blocked extraction: nothing persisted");
+    assert_eq(file_exists(str_data(bpk)), 1, "blocked extraction: the blocking file is untouched");
+    xunlink(str_data(bpk));
+    return 0;
+}
+
+# v1.1.3 (D9): the index fails closed, saves create their parents, and an install
+# whose save fails is undone.
+fn test_install_txn() {
+    test_group("install-txn");
+    var D = "/tmp/mela-txn";
+    var idx = path_join(str_from(D), str_from("index.json"));   # path_join NUL-terminates; str_cat does not
+    _rc_mkdir_p(str_from(D));
+
+    # no index yet: opens empty
+    xunlink(str_data(idx));
+    var r0 = mela_registry_new(str_from(D));
+    assert_neq(r0, 0, "no index: opens");
+    assert_eq(registry_len(r0), 0, "no index: empty");
+
+    # a corrupt index is refused and left as it was
+    file_write_all(str_data(idx), "not json", 8);
+    assert_eq(mela_registry_new(str_from(D)), 0, "corrupt index: open refused");
+    var keep = alloc(16);
+    assert_eq(file_read_all(str_data(idx), keep, 16), 8, "corrupt index: file not overwritten");
+
+    # a record that no longer decodes (unknown category) makes the index corrupt
+    var bad = "{\"p\":{\"manifest\":{\"name\":\"p\",\"version\":\"1.0.0\",\"category\":\"Nope\"},\"installed_at\":1}}";
+    file_write_all(str_data(idx), bad, strlen(bad));
+    assert_eq(mela_registry_new(str_from(D)), 0, "undecodable record: open refused");
+
+    # an index over REG_INDEX_MAXLEN is refused, not truncated
+    var huge = alloc(REG_INDEX_MAXLEN + 2);
+    memset(huge, 32, REG_INDEX_MAXLEN + 2);
+    file_write_all(str_data(idx), huge, REG_INDEX_MAXLEN + 2);
+    assert_eq(mela_registry_new(str_from(D)), 0, "oversized index: open refused");
+    xunlink(str_data(idx));
+
+    # index.json that is a directory
+    xmkdir(str_data(idx), 493);
+    assert_eq(mela_registry_new(str_from(D)), 0, "index.json is a dir: open refused");
+    xrmdir(str_data(idx));
+
+    # saving creates the root and its missing parents
+    var NP = "/tmp/mela-txn-np";
+    xunlink("/tmp/mela-txn-np/a/b/index.json");
+    xrmdir("/tmp/mela-txn-np/a/b");
+    xrmdir("/tmp/mela-txn-np/a");
+    xrmdir(NP);
+    var rn = mela_registry_new(str_from("/tmp/mela-txn-np/a/b"));
+    assert_neq(registry_install(rn, mk_pkg("np-pkg", "1.0.0"), str_from("h"), 10, 1000), 0,
+      "missing parents: install ok");
+    assert_eq(registry_len(mela_registry_new(str_from("/tmp/mela-txn-np/a/b"))), 1, "missing parents: persisted");
+
+    # a save that fails undoes the install
+    var rp = mela_registry_new(str_from("/proc/mela-txn-ro"));
+    assert_neq(rp, 0, "unwritable root: opens (no index)");
+    assert_eq(registry_install(rp, mk_pkg("ro-pkg", "1.0.0"), str_from("h"), 10, 1000), 0,
+      "unwritable root: install refused");
+    assert_eq(registry_is_empty(rp), 1, "unwritable root: insert undone");
+
+    # quota is checked before anything else, and admits has no side effects
+    var rq = registry_in_memory();
+    registry_set_storage_quota(rq, 100);
+    assert_eq(registry_admits(rq, mk_pkg("q", "1.0.0"), 100), 1, "quota: exactly full admitted");
+    assert_eq(registry_admits(rq, mk_pkg("q", "1.0.0"), 101), 0, "quota: over refused");
+    assert_eq(registry_is_empty(rq), 1, "admits: no side effects");
     return 0;
 }
 
@@ -1533,6 +1709,72 @@ fn test_agpkg_archive() {
     assert_eq(names_contain(names, "manifest.json"),         1, "has manifest entry");
     assert_eq(names_contain(names, "sandbox.json"),          1, "has sandbox entry");
     assert_eq(names_have_prefix(names, "assets/flutter_assets/"), 1, "has assets entries");
+
+    # v1.1.3 (D11): flutter_assets/ is walked recursively, as Rust's add_dir_to_tar did
+    var ND = "/tmp/mela-pack-nested";
+    setup_build(ND, "lib/libflutter_engine.so", 0, 1);
+    var fa = path_join(str_from(ND), str_from("flutter_assets"));
+    _rc_mkdir_p(path_join(fa, str_from("fonts")));
+    _rc_mkdir_p(path_join(fa, str_from("packages/pkg/assets")));
+    file_write_all(str_data(path_join(fa, str_from("AssetManifest.json"))), "{}", 2);
+    file_write_all(str_data(path_join(fa, str_from("fonts/M.otf"))), "font", 4);
+    file_write_all(str_data(path_join(fa, str_from("packages/pkg/assets/i.png"))), "png!", 4);
+    xunlink(str_data(path_join(fa, str_from("link.otf"))));
+    xsymlink("fonts/M.otf", str_data(path_join(fa, str_from("link.otf"))));
+    var nout = pack_flutter_app(str_from(ND), mk_pfconfig(), str_from("/tmp/mela-pack-nested-out"));
+    assert_neq(nout, 0, "nested: pack ok");
+    var nn = agpkg_inspect(nout);
+    assert_eq(names_contain(nn, "assets/flutter_assets/fonts/M.otf"), 1, "nested: one level down packed");
+    assert_eq(names_contain(nn, "assets/flutter_assets/packages/pkg/assets/i.png"), 1,
+      "nested: three levels down packed");
+    assert_eq(names_contain(nn, "assets/flutter_assets/link.otf"), 0, "nested: symlinked asset skipped");
+    # engine + AssetManifest + M.otf + i.png + manifest + sandbox (no AOT)
+    assert_eq(vec_len(nn), 6, "nested: exact entry count");
+    var nb = _read_file(nout);
+    var font = agpkg_read_entry(str_data(nb), str_len(nb), str_from("assets/flutter_assets/fonts/M.otf"));
+    assert_eq(str_eq_cstr(font, "font"), 1, "nested: content byte-exact");
+
+    # v1.1.3 (D8): the packer fails closed instead of truncating
+    var NINE = 9437184;    # 9 MiB, over AGPKG_BUF_MAXLEN
+    var big = alloc(NINE);
+    memset(big, 65, NINE);
+    var BD = "/tmp/mela-pack-big";
+    setup_build(BD, "lib/libflutter_engine.so", 0, 1);
+    file_write_all(str_data(path_join(str_from(BD), str_from("lib/libflutter_engine.so"))), big, NINE);
+    assert_eq(_read_file(path_join(str_from(BD), str_from("lib/libflutter_engine.so"))), 0,
+      "9 MiB file: _read_file refuses, no truncation");
+    assert_eq(pack_flutter_app(str_from(BD), mk_pfconfig(), str_from("/tmp/mela-pack-big-out")), 0,
+      "9 MiB engine: pack fails");
+    var LD = "/tmp/mela-pack-longname";
+    setup_build(LD, "lib/libflutter_engine.so", 0, 1);
+    var lname = alloc(121);
+    memset(lname, 108, 120);    # 'l' x 120: the entry name would be 142 bytes
+    store8(lname + 120, 0);
+    var lpath = path_join(path_join(str_from(LD), str_from("flutter_assets")), str_from(lname));
+    file_write_all(str_data(lpath), "x", 1);
+    assert_eq(pack_flutter_app(str_from(LD), mk_pfconfig(), str_from("/tmp/mela-pack-longname-out")), 0,
+      "entry name over 100 bytes: pack fails, no truncation");
+    xunlink(str_data(lpath));
+    if (sys_geteuid() != 0) {   # root reads a mode-000 file, so only check as a user
+        var UD = "/tmp/mela-pack-unreadable";
+        setup_build(UD, "lib/libflutter_engine.so", 0, 1);
+        var upath = path_join(path_join(str_from(UD), str_from("flutter_assets")), str_from("locked.bin"));
+        file_write_all(str_data(upath), "x", 1);
+        sys_chmod(str_data(upath), 0);
+        assert_eq(pack_flutter_app(str_from(UD), mk_pfconfig(), str_from("/tmp/mela-pack-unreadable-out")), 0,
+          "unreadable asset: pack fails (Rust errored; mela skipped it)");
+        sys_chmod(str_data(upath), 420);
+        xunlink(str_data(upath));
+    }
+    # install side: a bundle whose tar does not fit the 8 MiB inflate buffer
+    var bes = vec_new();
+    var bm = str_from("{\"name\":\"x\",\"category\":\"Utility\"}");
+    vec_push(bes, tentry_new(str_from("manifest.json"), str_data(bm), str_len(bm)));
+    vec_push(bes, tentry_new(str_from("bin/big.so"), big, NINE));
+    var bgz = _gzip_str(_tar_build(bes));
+    assert_neq(bgz, 0, "oversized fixture builds");
+    assert_eq(agpkg_inspect_bytes(str_data(bgz), str_len(bgz)), 0, "over-cap bundle: inspect fails");
+    assert_eq(pipeline_extract_manifest(bgz), 0, "over-cap bundle: manifest not read");
     return 0;
 }
 
@@ -1792,6 +2034,22 @@ fn test_sandbox() {
     assert_eq(profile_max_memory_mb(rt), profile_max_memory_mb(pn), "roundtrip memory");
     assert_eq(vec_len(profile_landlock_rules(rt)), vec_len(profile_landlock_rules(pn)), "roundtrip rules len");
     assert_eq(nr_enabled(profile_network(rt)), nr_enabled(profile_network(pn)), "roundtrip network enabled");
+    # v1.1.3 (D6): every preset's first rule is the app's own data dir
+    var presets = vec_new();
+    vec_push(presets, SP_PHOTO_EDITOR); vec_push(presets, SP_PRODUCTIVITY); vec_push(presets, SP_BROWSER);
+    vec_push(presets, SP_GAME); vec_push(presets, SP_CLI_TOOL); vec_push(presets, SP_GPU_COMPUTE);
+    vec_push(presets, SP_CUSTOM);
+    var pi = 0;
+    var dd_ok = 0;
+    while (pi < vec_len(presets)) {
+        var pp = build_profile_for_preset(vec_get(presets, pi), str_from("app"), str_from("/data/app-x"));
+        var r0 = vec_get(profile_landlock_rules(pp), 0);
+        if (str_eq_cstr(ll_path(r0), "/data/app-x") == 1) {
+            if (str_eq_cstr(ll_access(r0), "rw") == 1) { dd_ok = dd_ok + 1; }
+        }
+        pi = pi + 1;
+    }
+    assert_eq(dd_ok, 7, "all 7 presets: rule 0 is the data dir, rw");
     return 0;
 }
 
@@ -1828,6 +2086,7 @@ fn main() {
     test_transport();
     test_extraction();
     test_pipeline();
+    test_install_txn();
     return assert_summary();
 }
 

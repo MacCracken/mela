@@ -53,7 +53,8 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   `man_min_agnos_version` / `man_dependencies` / `man_tags`; setters for the optional fields.
 - `manifest_validate(m): Vec<Str>` — list of error messages; empty Vec ⇒ valid.
 - `manifest_qualified_name(m): Str` — `publisher/agent-name` (publisher lowercased, spaces→`-`).
-- Codec: `mela_manifest_to_json(m): Str` / `manifest_from_json(Str): m|0`;
+- Codec: `mela_manifest_to_json(m): Str` / `manifest_from_json(Str): m|0` (0 for an unknown,
+  missing or non-string `category`, v1.1.3, ADR-0012);
   `manifest_to_jv` / `manifest_from_jv` (json-value tree, for nesting);
   `publisher_to_json` / `publisher_from_json`; `cat_json_name(cat): Str` /
   `cat_json_parse(Str): cat` (PascalCase wire form).
@@ -104,9 +105,14 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
 
 ## local_registry — `src/local_registry.cyr`
 
-- `mela_registry_new(root_dir: Str): reg` (loads `index.json` if present); `registry_in_memory(): reg`.
+- `mela_registry_new(root_dir: Str): reg|0` — loads `index.json` if present; **0 if one exists
+  but cannot be loaded** (unreadable, over 1 MiB, invalid, or a record that does not decode —
+  v1.1.3, ADR-0012). `registry_in_memory(): reg`.
+- `registry_admits(reg, manifest, installed_size): i64` *(added v1.1.3)* — 1 if the manifest
+  validates and fits the quota; no side effects.
 - `registry_install(reg, manifest, package_hash: Str, installed_size, installed_at): InstallResult*|0`
-  — quota check, manifest validation, upgrade detection, index insert + persist. Result:
+  — quota check, manifest validation, upgrade detection, index insert + persist; 0 (with the
+  insert undone) if the index cannot be saved. Result:
   `instres_name` / `instres_version` / `instres_install_dir` / `instres_has_upgrade` /
   `instres_upgraded_from`.
 - `registry_uninstall(reg, name: Str): i64` — removes the extracted files from disk (recursive)
@@ -118,7 +124,8 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   `imp_installed_at` / `imp_install_dir` / `imp_package_hash` / `imp_installed_size`.
 - `registry_verify_package(keyring, key_id, content, content_len, sig, sig_len, now): i64`
   — the trust gate (current-key lookup → decode → `trust_verify`).
-- Persistence: `registry_save_index(reg)` / `registry_load_index(reg)`;
+- Persistence: `registry_save_index(reg): bytes|<0` (creates parent dirs) /
+  `registry_load_index(reg): 1|0|-1` (loaded / no index / unloadable);
   `registry_index_to_json` / `registry_index_from_json_into`.
 
 ## remote_client — `src/remote_client.cyr`
@@ -141,7 +148,9 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   `registry_cached_manifest`.
 - Flows (all real over sandhi): `rc_search` / `rc_fetch_manifest` (GET → parse → cache);
   **`rc_download`** (GET → write `<cache>/downloads/<name>-<version>.agnos-agent`, returns the
-  path); **`rc_publish`** (POST bundle + Bearer auth → `PublishResponse`); `rc_check_updates`
+  path); **`rc_publish`** (POST bundle + Bearer auth + `X-Package-Metadata` → `PublishResponse`);
+  **`rc_publish_signed(c, bundle, name, sig, sig_len, token)`** *(added v1.1.3)* — the same with
+  the 64-byte Ed25519 signature, hex, in the metadata; `rc_check_updates`
   (per-package latest diff → `UpdateAvailable[]`). Guards: `rc_download_allowed` /
   `rc_publish_allowed`.
 - **`mela_fetch_artifact(c, name, version, dest_path: Str): i64`** *(added v0.9.5)* — the
@@ -150,7 +159,14 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   (no `.agnos-agent` extension/layout). `rc_download` now builds on it but keeps mela's agent-bundle
   convention. This is **ark's** download entry point (ark's packages are takumi `.ark` binaries):
   ark passes its own `.ark` cache path and interprets the bytes with its own installer.
-- Constants: `DEFAULT_REGISTRY_URL`, `REQUEST_TIMEOUT_SECS`, `DOWNLOAD_TIMEOUT_SECS`.
+  *v1.1.3 (ADR-0012):* the body streams to disk (no 256 KiB buffered cap); returns 0 and removes
+  `dest_path` on a transport error, timeout, non-2xx, empty body, or more than
+  `RC_DOWNLOAD_MAX_BYTES` (100 MiB).
+- Every request: connect/read timeouts of `REQUEST_TIMEOUT_SECS`, an overall deadline of
+  `REQUEST_TIMEOUT_SECS` (API) or `DOWNLOAD_TIMEOUT_SECS` (download, publish), redirects followed
+  up to `RC_MAX_HOPS`, `User-Agent: agnos-marketplace/<MELA_VERSION>` (v1.1.3).
+- Constants: `DEFAULT_REGISTRY_URL`, `REQUEST_TIMEOUT_SECS`, `DOWNLOAD_TIMEOUT_SECS`,
+  `RC_MAX_HOPS`, `RC_DOWNLOAD_MAX_BYTES`, `MELA_VERSION`.
 
 ## sandbox_profiles — `src/sandbox_profiles.cyr`
 
@@ -202,12 +218,16 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
 - `generate_manifest(config): MarketplaceManifest*`; `generate_sandbox_profile(config): SandboxProfile*`
   (`sbprofile_landlock_paths` / `sbprofile_seccomp_mode` / `sbprofile_network`,
   `sbprofile_to_json` / `from_json`).
-- Archive (gzip + ustar): `pack_flutter_app(build_dir, config, output_dir: Str): path|0`;
+- Archive (gzip + ustar): `pack_flutter_app(build_dir, config, output_dir: Str): path|0` — walks
+  `flutter_assets/` recursively (symlinks skipped); 0 if any file cannot be read in full or is over
+  8 MiB, an entry name is over 100 bytes, or the archive would not fit the reader (v1.1.3,
+  ADR-0012);
   `agpkg_inspect(path: Str): Vec<name>|0`; `agpkg_inspect_bytes(data, len): Vec|0`;
   `agpkg_read_entry(data, len, name: Str): content|0`. The reader skips symlink/hardlink and
   `..`/absolute entries (v0.9.0 hardening), and rejects the whole archive (`0`, or `-1` from
   `agpkg_extract_to_dir`) on a bad header checksum, a non-octal numeric field, data past the end
   of the archive, or two entries with the same name (v1.1.1, ADR-0011).
+  `agpkg_extract_to_dir` also returns `-1` if any file fails to write (v1.1.3).
 
 ## pipeline — `src/pipeline.cyr`
 
@@ -217,8 +237,10 @@ The end-to-end flow (ADR-0009); both trust gates are enforced at install.
 - `pipeline_publish(tlog, bundle, sk, sig_out[64], now): LogEntry*` — sign + transparency-log.
 - `pipeline_extract_manifest(bundle): manifest|0`; `pipeline_extract_sandbox(bundle): sandbox|0`.
 - `pipeline_install(reg, keyring, bundle, sig, sig_len, expected_hash: Str, now): InstallResult*|0`
-  — **gate 1** (signature, keyed by publisher key_id) + **gate 2** (SHA-256 digest), then record.
-  Returns `0` on any gate failure / malformed bundle / invalid manifest (installs nothing).
+  — **gate 1** (signature, keyed by publisher key_id) + **gate 2** (SHA-256 digest), then quota,
+  then **extract** to `packages/<name>`, then record and save (v1.1.3: extract-first, as Rust).
+  Returns `0` on any gate failure / malformed bundle / invalid manifest / quota / failed
+  extraction / failed index save; a fresh install's partial directory is removed.
 
 ---
 

@@ -361,6 +361,9 @@ fn manifest_from_jv(root): i64 {
     var catv = bayan_json_v_obj_get_by_cstr(root, "category");
     var cat = CAT_PARSE_FAIL;
     if (json_v_is_str(catv) == 1) { cat = cat_json_parse(json_v_str(catv)); }
+    # Rust's serde rejected an unknown or missing category; decoding it as -1
+    # let the manifest install with no category at all (D12, ADR-0012).
+    if (cat == CAT_PARSE_FAIL) { return 0; }
 
     var agent = agent_manifest_new(name);
     store64(agent + 8, desc);              # agnostik AgentManifest: description @ 8

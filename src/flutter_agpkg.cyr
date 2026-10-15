@@ -384,12 +384,15 @@ fn _tar_header(buf, off, name: Str, size): i64 {
     return 0;
 }
 
-# Build a ustar archive (Str) from a Vec of tar entries.
+# Build a ustar archive (Str) from a Vec of tar entries, or 0 if a name is over
+# the 100-byte ustar name field: it used to be truncated silently (D8). Long
+# names (ustar prefix / GNU LongLink) are roadmap v1.2.0.
 fn _tar_build(entries): Str {
     var n = vec_len(entries);
     var total = 0;
     var i = 0;
     while (i < n) {
+        if (str_len(tentry_name(vec_get(entries, i))) > 100) { return 0; }
         total = total + 512 + _roundup512(tentry_len(vec_get(entries, i)));
         i = i + 1;
     }
@@ -410,8 +413,9 @@ fn _tar_build(entries): Str {
     return str_new(buf, total);
 }
 
-# gzip a Str -> Str (or 0 on error).
+# gzip a Str -> Str (or 0 on error, including a 0 input).
 fn _gzip_str(s: Str): i64 {
+    if (s == 0) { return 0; }
     var cap = str_len(s) + 65536;
     var dst = alloc(cap);
     var clen = gzip_compress(str_data(s), str_len(s), dst, cap);
@@ -419,20 +423,54 @@ fn _gzip_str(s: Str): i64 {
     return str_new(dst, clen);
 }
 
-# Read an entire file into a Str, or 0 on error.
+# Read an entire file into a Str, or 0 on error or if it is larger than
+# AGPKG_BUF_MAXLEN. file_read_all stops at its limit without an error, so a
+# bigger file used to come back silently truncated (D8): read one byte past the
+# limit to tell the two apart.
 fn _read_file(path: Str): i64 {
     if (file_exists(str_data(path)) == 0) { return 0; }
-    var buf = alloc(AGPKG_BUF_MAXLEN);
-    var n = file_read_all(str_data(path), buf, AGPKG_BUF_MAXLEN);
+    var buf = alloc(AGPKG_BUF_MAXLEN + 1);
+    var n = file_read_all(str_data(path), buf, AGPKG_BUF_MAXLEN + 1);
     if (n < 0) { return 0; }
+    if (n > AGPKG_BUF_MAXLEN) { return 0; }
     return str_new(buf, n);
+}
+
+# Add every regular file under `src` to `entries` as `<prefix>/<relative path>`,
+# recursing into subdirectories (Rust add_dir_to_tar; a one-level walk dropped
+# flutter_assets/fonts, shaders and packages, D11). Symlinks are skipped, as
+# Rust's DirEntry::file_type (which does not follow links) skipped them. Returns
+# 0, or -1 if a file cannot be read in full (Rust errored; mela used to skip it).
+fn _add_dir_entries(entries, src: Str, prefix: Str): i64 {
+    var names = dir_list(src);
+    var n = vec_len(names);
+    var i = 0;
+    while (i < n) {
+        var nm = vec_get(names, i);
+        var fpath = path_join(src, nm);
+        var tpath = str_cat(str_cat(prefix, str_from("/")), nm);
+        if (is_symlink(fpath) == 0) {
+            if (is_dir(fpath) == 1) {
+                if (_add_dir_entries(entries, fpath, tpath) != 0) { return 0 - 1; }
+            } else {
+                # not a link, not a dir: a file. One that cannot be read in full
+                # (no permission, over the cap) fails the pack. A readability
+                # test here used to class an unreadable file as "not a file".
+                var fb = _read_file(fpath);
+                if (fb == 0) { return 0 - 1; }
+                vec_push(entries, tentry_new(tpath, str_data(fb), str_len(fb)));
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
 }
 
 # pack_flutter_app — validate the build dir, then write
 # <output_dir>/<app>-<version>.agnos-agent (gzipped ustar) containing
 # bin/flutter_engine.so, bin/<app> (if AOT), assets/flutter_assets/<files>,
 # manifest.json, sandbox.json. Returns the tarball path Str, or 0 on failure.
-# Mirrors Rust `pack_flutter_app` (asset walk is one level — the build layout).
+# Mirrors Rust `pack_flutter_app` (the asset walk recurses, as Rust's did).
 fn pack_flutter_app(build_dir: Str, config, output_dir: Str): i64 {
     var res = fbuild_validate(build_dir);
     if (fbres_ok(res) == 0) { return 0; }
@@ -447,35 +485,25 @@ fn pack_flutter_app(build_dir: Str, config, output_dir: Str): i64 {
 
     if (fbuild_has_aot(b) == 1) {
         var aot_bytes = _read_file(path_join(build_dir, fbuild_aot_binary(b)));
-        if (aot_bytes != 0) {
-            vec_push(entries, tentry_new(str_cat(str_from("bin/"), pfconfig_app_name(config)),
-                str_data(aot_bytes), str_len(aot_bytes)));
-        }
+        if (aot_bytes == 0) { return 0; }
+        vec_push(entries, tentry_new(str_cat(str_from("bin/"), pfconfig_app_name(config)),
+            str_data(aot_bytes), str_len(aot_bytes)));
     }
 
     var assets_src = path_join(build_dir, fbuild_assets_dir(b));
-    var names = dir_list(assets_src);
-    var an = vec_len(names);
-    var ai = 0;
-    while (ai < an) {
-        var nm = vec_get(names, ai);
-        var fpath = path_join(assets_src, nm);
-        if (_is_file(fpath) == 1) {
-            var fb = _read_file(fpath);
-            if (fb != 0) {
-                vec_push(entries, tentry_new(str_cat(str_from("assets/flutter_assets/"), nm),
-                    str_data(fb), str_len(fb)));
-            }
-        }
-        ai = ai + 1;
-    }
+    if (_add_dir_entries(entries, assets_src, str_from("assets/flutter_assets")) != 0) { return 0; }
 
     var manifest_json = mela_manifest_to_json(generate_manifest(config));
     vec_push(entries, tentry_new(str_from("manifest.json"), str_data(manifest_json), str_len(manifest_json)));
     var sandbox_json = sbprofile_to_json(generate_sandbox_profile(config));
     vec_push(entries, tentry_new(str_from("sandbox.json"), str_data(sandbox_json), str_len(sandbox_json)));
 
-    var gz = _gzip_str(_tar_build(entries));
+    var tar = _tar_build(entries);
+    if (tar == 0) { return 0; }
+    # a bundle the reader cannot inflate could never be installed: refuse it
+    # here (the 8 MiB ceiling is lifted by streaming extraction, v1.2.0)
+    if (str_len(tar) > AGPKG_BUF_MAXLEN) { return 0; }
+    var gz = _gzip_str(tar);
     if (gz == 0) { return 0; }
     _rc_mkdir_p(output_dir);
     var tarball_name = str_cat(str_cat(str_cat(pfconfig_app_name(config), str_from("-")),
@@ -670,7 +698,8 @@ fn agpkg_read_entry(data, len, name: Str): i64 {
 # agpkg_extract_to_dir — gunzip + extract every safe regular-file entry of the
 # bundle to disk under `dest` (creating parent dirs). The whole archive is
 # validated before anything is written. Returns the number of files written, or
-# -1 on a decompress error or a malformed archive (closes ADR-0005).
+# -1 on a decompress error, a malformed archive, or any file that fails to write
+# (closes ADR-0005; a failed write used to be skipped, D9).
 fn agpkg_extract_to_dir(data, len, dest: Str): i64 {
     var dst = alloc(AGPKG_BUF_MAXLEN);
     var dlen = gzip_decompress(data, len, dst, AGPKG_BUF_MAXLEN);
@@ -685,9 +714,8 @@ fn agpkg_extract_to_dir(data, len, dest: Str): i64 {
         var e = vec_get(entries, i);
         var outpath = path_join(dest, tentry_name(e));
         _rc_mkdir_p(path_dirname(outpath));   # ensure parent dirs
-        if (file_write_all(str_data(outpath), tentry_data(e), tentry_len(e)) >= 0) {
-            count = count + 1;
-        }
+        if (file_write_all(str_data(outpath), tentry_data(e), tentry_len(e)) < 0) { return 0 - 1; }
+        count = count + 1;
         i = i + 1;
     }
     return count;

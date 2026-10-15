@@ -133,7 +133,8 @@ fn registry_index_from_json_into(js: Str, index): i64 {
     while (i < n) {
         var key = json_v_obj_key(root, i);
         var rec = _reg_record_from_jv(json_v_obj_val(root, i));
-        if (rec != 0) { map_set(index, key, rec); }
+        if (rec == 0) { return 0; }    # one unreadable record: the index is corrupt (D9)
+        map_set(index, key, rec);
         i = i + 1;
     }
     return 1;
@@ -161,26 +162,43 @@ fn _registry_index_path(r): Str {
     return path_join(registry_root(r), str_from(REG_INDEX_FILENAME));
 }
 
-# Save the index to <root>/index.json (creates root if needed). Returns bytes
-# written, or a negative error. Mirrors Rust `save_index`.
+# Save the index to <root>/index.json, creating the root and its parents (Rust
+# create_dir_all). Returns bytes written, or a negative error. Mirrors Rust
+# `save_index`.
 fn registry_save_index(r): i64 {
-    xmkdir(str_data(registry_root(r)), REG_DIR_MODE);   # ok if it already exists
+    xmkdir_p(str_data(str_clone(registry_root(r))), REG_DIR_MODE);   # ok if it exists
     var js = registry_index_to_json(registry_index(r));
     return file_write_all(str_data(_registry_index_path(r)), str_data(js), str_len(js));
 }
 
-# Load the index from disk into the registry (no-op if the file is absent).
+# Load the index from disk into the registry. Returns 1 if loaded, 0 if there is
+# no index yet, and -1 if one exists but is unreadable, over REG_INDEX_MAXLEN,
+# not valid, or holds a record that does not decode. Before v1.1.3 all of those
+# loaded as an empty registry and the next save overwrote the index (D9).
 # Mirrors Rust `load_index`.
 fn registry_load_index(r): i64 {
     var path = _registry_index_path(r);
-    if (file_exists(str_data(path)) == 0) { return 0; }
-    var buf = alloc(REG_INDEX_MAXLEN);
-    var n = file_read_all(str_data(path), buf, REG_INDEX_MAXLEN);
-    if (n <= 0) { return 0; }
-    return registry_index_from_json_into(str_new(buf, n), registry_index(r));
+    if (file_exists(str_data(path)) == 0) {
+        if (is_dir(path) == 1) { return 0 - 1; }
+        return 0;
+    }
+    var buf = alloc(REG_INDEX_MAXLEN + 1);
+    var n = file_read_all(str_data(path), buf, REG_INDEX_MAXLEN + 1);
+    if (n <= 0) { return 0 - 1; }
+    if (n > REG_INDEX_MAXLEN) { return 0 - 1; }
+    if (registry_index_from_json_into(str_new(buf, n), registry_index(r)) == 0) { return 0 - 1; }
+    return 1;
 }
 
-# new(root_dir) — file-backed registry; loads any existing index. Mirrors Rust `new`.
+# 1 for a registry backed by a directory, 0 for registry_in_memory().
+fn _registry_on_disk(r): i64 {
+    if (str_eq_cstr(registry_root(r), "/dev/null") == 1) { return 0; }
+    return 1;
+}
+
+# new(root_dir) — file-backed registry; loads any existing index. Returns 0 if
+# an index exists but cannot be loaded: Rust's new() errored, and opening it as
+# empty would let the next install overwrite every record (D9). Mirrors Rust `new`.
 fn mela_registry_new(root_dir: Str): i64 {
     var r = alloc(40);
     store64(r,      root_dir);
@@ -188,7 +206,7 @@ fn mela_registry_new(root_dir: Str): i64 {
     store64(r + 16, mela_keyring_new());
     store64(r + 24, tlog_new());
     store64(r + 32, 0);
-    registry_load_index(r);
+    if (registry_load_index(r) < 0) { return 0; }
     return r;
 }
 
@@ -224,16 +242,25 @@ fn registry_packages_dir(r): Str {
     return path_join(registry_root(r), str_from("packages"));
 }
 
-# install — record an (already-extracted) package: quota check, manifest
-# validate, upgrade detection, index insert, persist. Returns an install-result,
-# or 0 on a quota or validation failure. Mirrors Rust `install_package` minus the
-# tarball extraction (ADR-0005). auto_update defaults to 0, as in Rust.
-fn registry_install(r, manifest, package_hash: Str, installed_size, installed_at): i64 {
+# admits — 1 if `manifest` may be installed at `installed_size`: it validates and
+# fits the storage quota. No side effects; pipeline_install checks it before
+# extracting anything to disk.
+fn registry_admits(r, manifest, installed_size): i64 {
     var quota = registry_quota(r);
     if (quota > 0) {
         if (registry_total_installed_size(r) + installed_size > quota) { return 0; }
     }
     if (vec_len(manifest_validate(manifest)) != 0) { return 0; }
+    return 1;
+}
+
+# install — record an (already-extracted) package: quota check, manifest
+# validate, upgrade detection, index insert, persist. Returns an install-result,
+# or 0 on a quota or validation failure, or if the index cannot be saved (the
+# insert is then undone). Mirrors Rust `install_package` minus the
+# tarball extraction (ADR-0005). auto_update defaults to 0, as in Rust.
+fn registry_install(r, manifest, package_hash: Str, installed_size, installed_at): i64 {
+    if (registry_admits(r, manifest, installed_size) == 0) { return 0; }
 
     var name = man_name(manifest);
     var version = man_version(manifest);
@@ -249,7 +276,14 @@ fn registry_install(r, manifest, package_hash: Str, installed_size, installed_at
     var install_dir = path_join(registry_packages_dir(r), name);
     var rec = imp_new(manifest, installed_at, install_dir, package_hash, 0, installed_size);
     map_set(registry_index(r), name, rec);
-    registry_save_index(r);
+    if (_registry_on_disk(r) == 1) {
+        if (registry_save_index(r) < 0) {
+            # not persisted: undo, so memory and disk agree (Rust returned the error)
+            if (existing != 0) { map_set(registry_index(r), name, existing); }
+            else { map_delete(registry_index(r), name); }
+            return 0;
+        }
+    }
 
     var res = alloc(40);
     store64(res,      name);

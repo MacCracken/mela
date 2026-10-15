@@ -54,11 +54,16 @@ jobs:
       - name: Coverage floor
         # Reference coverage of src/ fns named by the suite. Raise --min as the
         # v1.1.x coverage catch-up lands; never lower it.
-        run: cyrius coverage --min 76
+        run: cyrius coverage --min 77
 
       - name: GNU tar cross-check (ADR-0008)
         # The independent format oracle: mela <-> GNU tar, both directions.
         run: bash scripts/tar-crosscheck.sh
+
+      - name: Live transport check (ADR-0012)
+        # mela's real HTTP client against a local python3 server: streaming,
+        # size cap, timeouts, redirects, User-Agent, publish metadata.
+        run: bash scripts/transport-check.sh
 
   docs:
     name: Documentation

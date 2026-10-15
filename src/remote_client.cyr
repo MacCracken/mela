@@ -16,6 +16,9 @@
 var DEFAULT_REGISTRY_URL = "https://registry.agnos.org";
 var REQUEST_TIMEOUT_SECS  = 30;
 var DOWNLOAD_TIMEOUT_SECS  = 300;
+var RC_MAX_HOPS           = 10;          # reqwest's default redirect limit
+var RC_DOWNLOAD_MAX_BYTES = 104857600;   # 100 MiB: Rust MAX_PACKAGE_SIZE
+var MELA_VERSION          = "1.1.3";     # == VERSION; pinned by a test (User-Agent)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -431,16 +434,40 @@ fn registry_cached_manifest(c, name: Str, version: Str): i64 {
 # (https) + HTTP/1.1-or-H2 + response framing, over real sockets. No hand-rolled
 # socket loop, no IPv4-only / no-HTTPS caveats — sandhi handles all of it.
 
+# Request headers every call sends: Rust's client identified itself as
+# agnos-marketplace/<version>.
+fn _rc_headers(): i64 {
+    var h = sandhi_headers_new();
+    var ua = str_clone(str_cat(str_from("agnos-marketplace/"), str_from(MELA_VERSION)));
+    sandhi_headers_add(h, "User-Agent", str_data(ua));
+    return h;
+}
+
+# Transport options. Rust's reqwest client timed requests out at
+# REQUEST_TIMEOUT_SECS (downloads and publish at DOWNLOAD_TIMEOUT_SECS) and
+# followed redirects. sandhi's defaults are no timeout at all and no redirects,
+# so a stalled registry hung the caller (D7). Buffered responses are capped at
+# RC_BUF_MAXLEN, the size the response cache reads back.
+fn _rc_options(timeout_secs): i64 {
+    var o = sandhi_http_options_new();
+    sandhi_http_options_follow_redirects(o, 1);
+    sandhi_http_options_max_hops(o, RC_MAX_HOPS);
+    sandhi_http_options_connect_ms(o, REQUEST_TIMEOUT_SECS * 1000);
+    sandhi_http_options_read_ms(o, REQUEST_TIMEOUT_SECS * 1000);
+    sandhi_http_options_total_ms(o, timeout_secs * 1000);
+    sandhi_http_options_max_response_bytes(o, RC_BUF_MAXLEN);
+    return o;
+}
+
 # _rc_http_get — a real GET via sandhi's HTTP client: URL parse + DNS resolve +
 # TLS (for https) + HTTP/1.1-or-H2 + response framing, over real sockets. Returns
-# the 2xx response body as a Str, or 0 (non-2xx, transport error, or empty URL).
-# Both http:// and https:// work, and hosts are resolved by name (no IPv4-only
-# limitation). `url` is passed as a NUL-terminated cstring (str_clone ensures it).
+# the 2xx response body as a Str, or 0 (non-2xx, transport error, timeout, or
+# empty URL). For API responses (JSON); artifacts stream via mela_fetch_artifact.
+# `url` is passed as a NUL-terminated cstring (str_clone ensures it).
 fn _rc_http_get(url: Str): i64 {
     if (str_len(url) == 0) { return 0; }
     var curl = str_clone(url);                       # NUL-terminated for sandhi
-    var opts = sandhi_http_options_new();
-    var r = sandhi_http_get_auto(str_data(curl), 0, opts);   # no extra headers
+    var r = sandhi_http_get_auto(str_data(curl), _rc_headers(), _rc_options(REQUEST_TIMEOUT_SECS));
     if (r == 0) { return 0; }
     var status = sandhi_http_status(r);
     if (status < 200) { return 0; }
@@ -484,31 +511,71 @@ fn rc_download_allowed(c, name: Str, version: Str): i64 {
     return 1;
 }
 
-# download — actually FETCH the package and WRITE it to the cache, returning the
-# saved path (or 0 on a blocked/invalid/transport/write failure). Mirrors Rust
-# `download_package`: GET {base}/v1/packages/{name}/{version}/download over the
-# real sandhi transport, then write the body to
-# <cache_dir>/downloads/<name>-<version>.agnos-agent. No longer a guard-only stub.
+# Download sink (sandhi streaming contract): append each chunk to the open fd,
+# failing once the artifact passes RC_DOWNLOAD_MAX_BYTES (sandhi's streaming path
+# has no size bound of its own). ctx: 0 fd, 8 bytes written, 16 over-limit flag.
+fn _rc_dl_sink(ctx, buf, len): i64 {
+    var total = load64(ctx + 8) + len;
+    if (total > RC_DOWNLOAD_MAX_BYTES) {
+        store64(ctx + 16, 1);
+        return 0 - 1;
+    }
+    var off = 0;
+    while (off < len) {
+        var w = file_write(load64(ctx), buf + off, len - off);
+        if (w <= 0) { return 0 - 1; }
+        off = off + w;
+    }
+    store64(ctx + 8, total);
+    return 1;
+}
+
 # Format-agnostic artifact fetch (0.9.5): GET {base}/…/{name}/{version}/download
 # over the sandhi transport and write the body **verbatim to a caller-chosen
 # dest_path** — making no assumption about the artifact type. Returns bytes
-# written (>0), or 0 on a blocked/invalid/transport/write failure. This is the
-# consumer-facing primitive: downstreams that aren't agent bundles (e.g. ark's
-# takumi `.ark` packages) pass their own destination + extension and interpret
-# the bytes themselves, rather than being forced into the `.agnos-agent` layout.
+# written (>0), or 0 on a blocked/invalid/transport/write failure, a timeout, a
+# non-2xx, an empty body, or an artifact over RC_DOWNLOAD_MAX_BYTES; on failure
+# dest_path is removed. This is the consumer-facing primitive: downstreams that
+# aren't agent bundles (e.g. ark's takumi `.ark` packages) pass their own
+# destination + extension and interpret the bytes themselves.
+# v1.1.3 (D7): the body streams to disk. It used to go through the buffered
+# client, whose default 256 KiB response cap failed every larger artifact.
 fn mela_fetch_artifact(c, name: Str, version: Str, dest_path: Str): i64 {
     if (rc_download_allowed(c, name, version) == 0) { return 0; }
-    var bytes = _rc_http_get(build_download_url(client_base_url(c), name, version));
-    if (bytes == 0) { return 0; }                    # transport / non-2xx failure
-    if (file_write_all(str_data(dest_path), str_data(bytes), str_len(bytes)) < 0) { return 0; }
-    return str_len(bytes);
+    var url = str_clone(build_download_url(client_base_url(c), name, version));
+    var dest = str_data(str_clone(dest_path));       # a NUL-terminated copy
+    var fd = file_open(dest, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);
+    if (fd < 0) { return 0; }
+    var ctx = alloc(24);
+    store64(ctx,      fd);
+    store64(ctx + 8,  0);
+    store64(ctx + 16, 0);
+    var r = sandhi_http_download_sink_headers(str_data(url), &_rc_dl_sink, ctx, _rc_headers(),
+      _rc_options(DOWNLOAD_TIMEOUT_SECS));
+    file_close(fd);
+    var n = load64(ctx + 8);
+    var ok = 1;
+    if (r == 0) { ok = 0; }
+    else {
+        if (sandhi_download_err(r) != 0) { ok = 0; }
+        if (sandhi_download_stopped(r) != 0) { ok = 0; }
+        if (sandhi_download_status(r) < 200) { ok = 0; }
+        if (sandhi_download_status(r) >= 300) { ok = 0; }
+    }
+    if (n <= 0) { ok = 0; }                          # an empty body is not an artifact
+    if (ok == 0) {
+        xunlink(dest);                               # never leave a partial artifact
+        return 0;
+    }
+    return n;
 }
 
-# saved path (or 0 on a blocked/invalid/transport/write failure). Mirrors Rust
-# `download_package`: fetch over the real sandhi transport, then write the body
-# to <cache_dir>/downloads/<name>-<version>.agnos-agent (mela's agent-bundle
-# convention). Built on the format-agnostic mela_fetch_artifact above.
+# download — fetch the package to <cache_dir>/downloads/<name>-<version>.agnos-agent
+# (mela's agent-bundle convention), returning the saved path, or 0 on a
+# blocked/invalid/transport/write failure. Mirrors Rust `download_package`. Built
+# on the format-agnostic mela_fetch_artifact above.
 fn rc_download(c, name: Str, version: Str): i64 {
+    if (rc_download_allowed(c, name, version) == 0) { return 0; }   # before touching disk
     var dl_dir = path_join(client_cache_dir(c), str_from("downloads"));
     _rc_mkdir_p(dl_dir);
     var fname = str_cat(str_cat(str_cat(name, str_from("-")), version), str_from(".agnos-agent"));
@@ -523,20 +590,33 @@ fn rc_publish_allowed(c): i64 {
     return 1;
 }
 
-# publish — actually UPLOAD the bundle: POST it to {base}/v1/packages/publish over
-# the real sandhi transport with a Bearer token + SHA-256 / name headers, then
-# parse the registry's PublishResponse. Returns the PublishResponse, or 0 (offline,
-# transport/non-2xx, or unparseable body). Mirrors Rust `publish`.
-fn rc_publish(c, bundle: Str, bundle_name: Str, api_token: Str): i64 {
+# The X-Package-Metadata header Rust's publish sent: bundle_name, bundle_sha256,
+# bundle_size and the signature (null when unsigned). The signature travels as
+# hex: Rust read its binary .sig sidecar as a string, which cannot carry 64 raw
+# bytes reliably (ADR-0012).
+fn _rc_publish_metadata(bundle_name: Str, sha: Str, size, sig, sig_len): Str {
+    var o = json_v_obj_new();
+    json_v_obj_set(o, str_from("bundle_name"), json_v_str_new(bundle_name));
+    json_v_obj_set(o, str_from("bundle_sha256"), json_v_str_new(sha));
+    json_v_obj_set(o, str_from("bundle_size"), json_v_int_new(size));
+    if (sig == 0) { json_v_obj_set(o, str_from("signature"), json_v_null()); }
+    else { json_v_obj_set(o, str_from("signature"), json_v_str_new(trust_hex_encode(sig, sig_len))); }
+    return json_v_build(o);
+}
+
+fn _rc_publish(c, bundle: Str, bundle_name: Str, sig, sig_len, api_token: Str): i64 {
     if (client_is_offline(c) == 1) { return 0; }
     var sha = trust_hash_data(str_data(bundle), str_len(bundle));
-    var h = sandhi_headers_new();
+    var meta = _rc_publish_metadata(bundle_name, sha, str_len(bundle), sig, sig_len);
+    var h = _rc_headers();
     sandhi_headers_add(h, "Authorization", str_data(str_clone(str_cat(str_from("Bearer "), api_token))));
     sandhi_headers_add(h, "Content-Type", "application/octet-stream");
     sandhi_headers_add(h, "X-Package-SHA256", str_data(str_clone(sha)));
     sandhi_headers_add(h, "X-Package-Name", str_data(str_clone(bundle_name)));
+    sandhi_headers_add(h, "X-Package-Metadata", str_data(str_clone(meta)));
     var url = str_clone(build_publish_url(client_base_url(c)));
-    var r = sandhi_http_post_auto(str_data(url), h, str_data(bundle), str_len(bundle), sandhi_http_options_new());
+    var r = sandhi_http_post_auto(str_data(url), h, str_data(bundle), str_len(bundle),
+      _rc_options(DOWNLOAD_TIMEOUT_SECS));
     if (r == 0) { return 0; }
     var status = sandhi_http_status(r);
     if (status < 200) { return 0; }
@@ -544,6 +624,25 @@ fn rc_publish(c, bundle: Str, bundle_name: Str, api_token: Str): i64 {
     var blen = sandhi_http_body_len(r);
     if (blen <= 0) { return 0; }
     return presp_from_json(str_new(sandhi_http_body(r), blen));
+}
+
+# publish — UPLOAD the bundle: POST it to {base}/v1/packages/publish over the real
+# sandhi transport with a Bearer token, SHA-256 / name headers and
+# X-Package-Metadata, then parse the registry's PublishResponse. Returns the
+# PublishResponse, or 0 (offline, transport/non-2xx, timeout, or unparseable
+# body). Mirrors Rust `publish` without a signature sidecar.
+fn rc_publish(c, bundle: Str, bundle_name: Str, api_token: Str): i64 {
+    return _rc_publish(c, bundle, bundle_name, 0, 0, api_token);
+}
+
+# publish_signed — rc_publish carrying the bundle's 64-byte Ed25519 signature
+# (from pipeline_publish) in X-Package-Metadata, as Rust did when a sidecar was
+# present. Before v1.1.3 the signature never reached the registry (D10). Returns
+# 0 for a signature that is not 64 bytes.
+fn rc_publish_signed(c, bundle: Str, bundle_name: Str, sig, sig_len, api_token: Str): i64 {
+    if (sig == 0) { return 0; }
+    if (sig_len != 64) { return 0; }
+    return _rc_publish(c, bundle, bundle_name, sig, sig_len, api_token);
 }
 
 # check_updates — offline returns an empty Vec (Rust `check_updates` early-return).

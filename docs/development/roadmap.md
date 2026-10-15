@@ -37,34 +37,12 @@ v1.1.1 shipped the memory-safety group, D1–D5, plus D12's duplicate-name half 
 CHANGELOG and ADR-0011).
 v1.1.2 shipped the CI gate: `deps --locked`, test, fuzz, bench, `coverage --min 76`, and the
 GNU tar cross-check (`scripts/tar-crosscheck.sh`).
-
-### v1.1.3 — Correctness fixes
-
-Defects that make a feature not work.
-
-- **D6, sandbox presets:** `_rule` takes the `data_dir` Str directly. Test: each preset's first
-  rule is the app's data dir.
-- **D7, transport:**
-  - `mela_fetch_artifact` / `rc_download` stream to the destination through
-    `sandhi_http_download(url, fd, opts)`, which lifts the 256 KiB cap, with a mela-side size
-    ceiling and partial-file cleanup.
-  - Apply `REQUEST_TIMEOUT` / `DOWNLOAD_TIMEOUT`, follow redirects, and send a User-Agent.
-- **D8, size policy (fail closed now):**
-  - The packer fails on any file it cannot read in full, instead of truncating at 8 MiB.
-  - Install fails cleanly on a bundle over the cap.
-  - Full large-bundle support is v1.2.0.
-- **D9, install transaction:**
-  - Extract first, record second, and fail on an extraction or index-save error.
-  - A corrupt or oversized `index.json` fails closed instead of loading as empty.
-  - `registry_save_index` creates parent dirs.
-- **D10, publish:** `rc_publish` sends the signature (`X-Package-Metadata`, as Rust did).
-- **D11, assets:** walk `flutter_assets/` recursively. Correct ADR-0008's rationale.
-- **D12, manifest:** an unknown or missing `category` rejects the manifest. (The
-  duplicate-entry half shipped in v1.1.1.)
+v1.1.3 shipped the correctness group, D6–D12 (ADR-0012), plus a live transport check in CI. All
+twelve audit defects are now fixed.
 
 ### v1.1.4 — Coverage catch-up
 
-- Close the 23 partial and 9 uncovered Rust tests, or mark each N/A in `rust-parity.md` with the
+- Close the 22 partial and 8 uncovered Rust tests, or mark each N/A in `rust-parity.md` with the
   reason. `RatingFilter` / `DisplayBackend` codecs have no consumer, so they are N/A candidates.
 - Add the untested-behavior assertions listed per group in `rust-parity.md` § Coverage to add.
   The ones that matter most for the trust boundary:
@@ -74,7 +52,7 @@ Defects that make a feature not work.
     uninstall.
   - Signature edge cases: `sig_len` 63 / 65, bit flips in R or S, S + L, small-order key.
   - Keyring rotation and inclusive validity edges.
-- Raise the `cyrius coverage --min` gate in `ci.yml` (76 at v1.1.2) to the level reached.
+- Raise the `cyrius coverage --min` gate in `ci.yml` (77 at v1.1.3) to the level reached.
 
 ### v1.1.5 — Decide the unrecorded divergences
 

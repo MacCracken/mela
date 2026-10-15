@@ -28,6 +28,7 @@ cyrius test                              # run tests/*.tcyr (auto-discovered)
 cyrius bench tests/mela.bcyr             # benchmarks
 cyrius fuzz                              # fuzz harness (tests/mela.fcyr)
 bash scripts/tar-crosscheck.sh           # bundle format vs GNU tar, both directions
+bash scripts/transport-check.sh          # live HTTP client vs a local python3 server
 ```
 
 CI runs all of these, plus `cyrius deps --locked` and a `cyrius coverage --min` floor

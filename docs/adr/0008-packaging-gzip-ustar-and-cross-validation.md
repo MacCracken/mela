@@ -57,8 +57,13 @@ Two facts shape the approach:
   octal, checksum). The reader handles the common ustar/GNU regular-file case;
   exotic entries (PAX extended headers, long-name `L`/`K` typeflags, sparse
   files) are not interpreted — adequate for `.agnos-agent`, which mela also
-  writes. The asset walk is one directory level (the Flutter build layout);
-  deeper trees would need recursion.
+  writes. ~~The asset walk is one directory level (the Flutter build layout);
+  deeper trees would need recursion.~~ *Corrected (v1.1.3):* the premise was
+  wrong. A real `flutter_assets/` has `fonts/`, `shaders/` and `packages/**`,
+  and Rust's `add_dir_to_tar` recursed. The walk now recurses (D11), skips
+  symlinks as Rust did, and fails the pack on any file it cannot read in full.
+  Entry names over the 100-byte ustar name field fail the pack too, rather than
+  being truncated. Long names are roadmap v1.2.0.
 - **Neutral** — this unblocks the deferred `local_registry` tarball extraction
   (ADR-0005): `extract_manifest_from_tarball` / `extract_tarball` can now reuse
   this gunzip + ustar reader at v0.9.0. The `LandlockRule`/`NetworkRule` types

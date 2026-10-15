@@ -57,6 +57,10 @@ fn nr_hosts(n)        { return load64(n + 8); }
 # Vec<Str> builders for landlock-rule / host lists.
 fn _rules(): i64 { return vec_new(); }
 fn _rule(rules, path, access): i64 { vec_push(rules, ll_new(str_from(path), str_from(access))); return rules; }
+# The app's data dir arrives as a Str; _rule's str_from would read the Str header
+# as a C string and store a garbage path (D6). Not `_rule_str`: a `_str` suffix
+# is a cyrius overload slot and would reroute every _rule(Str, ..) call.
+fn _rule_dir(rules, dir: Str, access): i64 { vec_push(rules, ll_new(dir, str_from(access))); return rules; }
 fn _hosts0(): i64 { return vec_new(); }
 fn _host(hosts, h): i64 { vec_push(hosts, str_from(h)); return hosts; }
 
@@ -117,7 +121,7 @@ fn build_aequi_profile(): i64 {
 
 fn _build_photo_editor(data_dir): i64 {
     var rules = _rules();
-    _rule(rules, data_dir, "rw");
+    _rule_dir(rules, data_dir, "rw");
     _rule(rules, "/tmp", "rw");
     _rule(rules, "/usr/share/fonts", "ro");
     return profile_new(SP_PHOTO_EDITOR, rules, str_from("desktop"), nr_new(0, _hosts0()), 512, 0);
@@ -125,7 +129,7 @@ fn _build_photo_editor(data_dir): i64 {
 
 fn _build_productivity(data_dir): i64 {
     var rules = _rules();
-    _rule(rules, data_dir, "rw");
+    _rule_dir(rules, data_dir, "rw");
     _rule(rules, "/tmp", "rw");
     _rule(rules, "/usr/share/fonts", "ro");
     _rule(rules, "~/Documents", "rw");
@@ -134,7 +138,7 @@ fn _build_productivity(data_dir): i64 {
 
 fn _build_browser(data_dir): i64 {
     var rules = _rules();
-    _rule(rules, data_dir, "rw");
+    _rule_dir(rules, data_dir, "rw");
     _rule(rules, "/tmp", "rw");
     _rule(rules, "/usr/share/fonts", "ro");
     _rule(rules, "~/Downloads", "rw");
@@ -143,7 +147,7 @@ fn _build_browser(data_dir): i64 {
 
 fn _build_game(data_dir): i64 {
     var rules = _rules();
-    _rule(rules, data_dir, "rw");
+    _rule_dir(rules, data_dir, "rw");
     _rule(rules, "/tmp", "rw");
     _rule(rules, "/usr/share/fonts", "ro");
     return profile_new(SP_GAME, rules, str_from("desktop"), nr_new(1, _hosts0()), 4096, 0);
@@ -151,14 +155,14 @@ fn _build_game(data_dir): i64 {
 
 fn _build_cli_tool(data_dir): i64 {
     var rules = _rules();
-    _rule(rules, data_dir, "rw");
+    _rule_dir(rules, data_dir, "rw");
     _rule(rules, "/tmp", "rw");
     return profile_new(SP_CLI_TOOL, rules, str_from("basic"), nr_new(0, _hosts0()), 256, 1);
 }
 
 fn _build_gpu_compute(data_dir): i64 {
     var rules = _rules();
-    _rule(rules, data_dir, "rw");
+    _rule_dir(rules, data_dir, "rw");
     _rule(rules, "/tmp", "rw");
     _rule(rules, "/dev/dri", "rw");
     _rule(rules, "/dev/nvidia0", "rw");

@@ -4,6 +4,101 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
+## [1.1.3] - 2026-10-15
+
+**Correctness: audit defects D6–D12 fixed.** These are the cases where mela reported success but
+did something else ([`docs/development/rust-parity.md`](docs/development/rust-parity.md)). Each fix
+has a regression test. Run against the 1.1.2 sources, the D6, D9, D11 and D12 tests fail, and the
+D8 tests crash the old test binary. D7 and D10's tests use new functions, so they can't run against
+the old code; the old download path was instead probed directly (below). 626 passed / 0 failed
+(was 553); fuzz, bench, the GNU tar cross-check and the new live
+transport check all pass; `--agnos` and `--aarch64` build. `cyrius build` OK (3,210,272 B). New
+[ADR-0012](docs/adr/0012-fail-closed-install-and-transport.md) records the changes in behavior.
+
+### Fixed — artifact downloads failed over 256 KiB and could hang forever (D7)
+
+`mela_fetch_artifact` (ark's download entry point) and `rc_download` used sandhi's buffered GET
+with its default options. That meant a 256 KiB response cap, no timeout and no redirects. Probed
+against a local server, that path returns status 0 with an empty body for a 1.5 MB file. The new
+path gets all 1,500,000 bytes.
+
+- **Streaming:** artifacts now stream to disk through a sink that enforces Rust's 100 MiB
+  `MAX_PACKAGE_SIZE` (`RC_DOWNLOAD_MAX_BYTES`). Any failure removes the partial file.
+- **On every request** (`_rc_options` / `_rc_headers`), as Rust's reqwest client did:
+  - Rust's timeouts: 30 s connect/read, and a 30 s or 300 s deadline;
+  - redirects followed, with a 10-hop cap;
+  - `User-Agent: agnos-marketplace/<version>`. The version comes from a new `MELA_VERSION`, which
+    a test pins to `VERSION`.
+- **Buffered API responses** may be up to 1 MiB, the cache's read cap.
+
+New **`scripts/transport-check.sh`** runs the real client against a local python3 server, and CI
+runs it. It checks a 1.5 MB stream byte-exact, a 302 redirect, a 404 leaving no file, the size cap
+leaving no partial file, a stalled server abandoned at a 2 s deadline, the User-Agent on every
+request, and the publish metadata. `cyrius test` still opens no sockets.
+
+### Fixed — publish never sent the signature (D10)
+
+`rc_publish` now sends Rust's `X-Package-Metadata` header (`bundle_name`, `bundle_sha256`,
+`bundle_size`, `signature: null`). The new additive **`rc_publish_signed`** sends the 64-byte
+Ed25519 signature as hex. Rust read its binary `.sig` sidecar as a string, which can't carry 64
+raw bytes.
+
+### Fixed — six sandbox presets granted read-write to a garbage path (D6)
+
+The presets passed the app's `data_dir` (already a Str) through `str_from`, which read the Str
+header as a C string. PhotoEditor, Productivity, Browser, Game, CLI and GPU each got a 3-byte
+garbage path as their first rule, instead of the app's data directory. All seven presets are now
+tested; against 1.1.2 only Custom passes.
+
+### Fixed — the packer truncated large files and dropped nested assets (D8, D11)
+
+- **Truncation.** `file_read_all` stops at its limit without an error, so a 9 MiB engine was
+  packed as its first 8 MiB, and the result "succeeded". The packer now fails on:
+  - any file over 8 MiB or not fully readable (Rust errored; an unreadable asset used to be
+    skipped);
+  - any entry name over the 100-byte ustar field (it used to be truncated);
+  - any archive the reader could not inflate.
+
+  Real large bundles wait for streaming extraction (v1.2.0).
+- **Nested assets.** The asset walk was one level deep, so it dropped `flutter_assets/fonts`,
+  `shaders` and `packages/**`. It now recurses and skips symlinks, as Rust's `add_dir_to_tar` did.
+  ADR-0008's "one level is the build layout" was wrong and is corrected. The GNU tar cross-check
+  fixture now carries a nested font (7 entries).
+
+### Fixed — installs were recorded before extraction; a corrupt index was silently emptied (D9)
+
+- **Extract before record.** `pipeline_install` recorded the package, then extracted, and ignored
+  the result of both the extraction and the index save. It now goes gates → `registry_admits`
+  (new: quota and validation, no side effects) → extract → record and save, as Rust did. A
+  failure at extract or save returns 0, and a fresh install's partial directory is removed.
+  `agpkg_extract_to_dir` now fails on any write error.
+- **Fail-closed index.** `mela_registry_new` returns **0** for an `index.json` that exists but
+  won't load: unreadable, over 1 MiB, invalid, a directory, or holding a record that does not
+  decode. It used to open as an empty registry, and the next install wrote over every record.
+- **Saves.** `registry_save_index` creates missing parent directories, and `registry_install`
+  undoes its insert if the save fails.
+- **New tests.** The first **on-disk** end-to-end install (files under `packages/<name>`, reopen,
+  uninstall), an install blocked at extraction, and a new `install-txn` group.
+
+### Fixed — a manifest with an unknown or missing category installed as category -1 (D12)
+
+`manifest_from_json` returns 0 for an unknown, missing or non-string `category`, as Rust's serde
+did. The duplicate-entry half of D12 shipped in 1.1.1. All six categories round-trip by wire name.
+
+### CI
+
+- The live transport check runs in CI.
+- The coverage floor rises to **77%** (253/328, from 249/326).
+- `test_default_constants` and `test_storage_quota` are now covered (Rust tests: 174 covered /
+  22 partial / 8 not, from 172 / 23 / 9).
+
+### Behavior changes for callers (ADR-0012)
+
+- `mela_registry_new` can return 0.
+- `pack_flutter_app` refuses inputs it used to truncate.
+- `manifest_from_json` needs a valid category.
+- `mela_fetch_artifact` removes `dest_path` on failure.
+
 ## [1.1.2] - 2026-10-14
 
 **CI now tests what it ships.** Until this release `ci.yml` resolved dependencies and built, and

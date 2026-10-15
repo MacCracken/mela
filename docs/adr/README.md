@@ -55,3 +55,8 @@ Decisions about mela — what we chose, the context, and the consequences we acc
   *Accepted (v1.1.1)* · the tar reader validates the whole archive (checksum, strict octal, bounds,
   no duplicate names); out-of-range rating scores and incomplete KeyVersions are rejected, not
   defaulted; `keyring_load_dir` replaces the keyring so a deleted key file is revoked.
+- [0012 — Fail-closed install, packaging and transport](0012-fail-closed-install-and-transport.md) —
+  *Accepted (v1.1.3)* · artifacts stream to disk with Rust's timeouts, redirects, User-Agent and a
+  100 MiB cap; publish sends `X-Package-Metadata` (+ `rc_publish_signed`); the packer and install
+  report failure instead of truncating or recording half an install; a corrupt index refuses to
+  open; a manifest needs a valid category.
