@@ -4,6 +4,63 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
+## [1.1.4] - 2026-10-15
+
+**Rust test coverage closed.** Every one of rust-old's 204 tests now has its assertions in the
+Cyrius suite (202), or is recorded as not applicable with the reason (2). At the audit the suite
+covered 171, with 23 partial and 10 missing. 894 passed / 0 failed (was 626); every CI gate passes,
+and `--agnos` and `--aarch64` build. No `src/` change except `MELA_VERSION`.
+
+### Tests — the 22 partial and 8 uncovered Rust tests
+
+- **lib / trust:** `category_all`, the random `generate_keypair` path, and `hex_roundtrip` over
+  every byte, including uppercase, which Rust's `from_str_radix` accepts.
+- **local_registry:** `count_files` (through `_rmtree`'s count), `install_with_missing_signature_file`,
+  and the positive side of `storage_quota` (exactly full installs, one byte over is refused).
+- **sandbox_profiles:** the seven partial preset tests in full, and the uncovered
+  `aequi_profile_seccomp_and_memory`. The GPU profile's six hosts and thirteen rules are checked in
+  Rust's order.
+- **ratings:** the eight partial tests in full (stored package and version, the 2000-character
+  review, every distribution slot, single-rating stats, filters where every result must match,
+  per-package averages), and `stats_all_same_score`.
+- **flutter_packaging / flutter_agpkg:** `validate_bad_dart_version`, the bad-engine message,
+  the Wayland launch socket and scale, `FLUTTER_ENGINE_SWITCH_GL` in both modes, and
+  `manifest_serializes_to_json`.
+- **Not applicable (2):** `filter_serialization` and `display_backend_serde_roundtrip` tested
+  serde derives on types nothing serializes, in Rust or in any mela consumer. The reason is
+  recorded in `docs/development/rust-parity.md`. No unused codec was ported to satisfy them.
+
+### Tests — behavior the Rust suite never checked
+
+- **Transparency chain checks, each on its own.** Every earlier tamper test broke the entry's own
+  hash first, so deleting a chain check left the suite green. The link, sequence and entry-0
+  checks are now tampered with the hash recomputed. Disabling any one of them in
+  `tlog_verify_chain` fails exactly its test (checked by mutation). Reordered and truncated imports
+  are refused, and `[]` imports as an empty log.
+- **Signature edge cases.** Lengths 63 and 65, a bit flip in R and in S, S + L (the malleable
+  second encoding RFC 8032 §5.1.7 forbids), and an identity public key with R = identity, S = 0,
+  which a non-strict verifier accepts. All rejected.
+- **Keys:** rotation under one key_id, the inclusive validity-window edges (Rust compares with
+  `<` / `>`), and uppercase hex keys.
+- **depgraph:** self-loop and 3-cycle paths, full diamond ordering, re-add replaces, unknown and
+  duplicate dependencies, sorted roots.
+- **Manifests:** name length at 128 and 129, each invalid character class, exact error counts,
+  semver edge inputs per Rust's split on the first `-` with three u64 segments, and every field
+  round-tripped.
+- **Ratings:** a non-integer average (4.5) ranks above 4.0, inclusive filter bounds, newest-first
+  order all the way down, a rejected re-rating leaves the store unchanged, and the last call wins a
+  dedup and replaces every field.
+- **Registry and pipeline:** search over description and case, the name-sorted list, an upgrade
+  through the pipeline, a signed bundle with an invalid manifest, and a bundle with no
+  `manifest.json`.
+- **Codecs:** search results, publish responses, update records, transparency entries and packaging
+  configs all round-trip field by field.
+
+### CI
+
+- Reference coverage rises from 77% to **88%** (291/328), and the CI floor moves with it
+  (`cyrius coverage --min 88`).
+
 ## [1.1.3] - 2026-10-15
 
 **Correctness: audit defects D6–D12 fixed.** These are the cases where mela reported success but

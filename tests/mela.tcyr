@@ -58,6 +58,16 @@ fn test_category() {
     memset(edge, 97, 63);
     store8(edge + 63, 0);
     assert_eq(cat_parse(edge), CAT_PARSE_FAIL, "63-byte input -> fail (fits, not a name)");
+
+    # v1.1.4 — Rust test_marketplace_category_all: six categories, each round-trips
+    assert_eq(CAT_COUNT, 6, "category_all: six categories");
+    var ci = 0;
+    var rt = 0;
+    while (ci < CAT_COUNT) {
+        if (cat_parse(cat_name(ci)) == ci) { rt = rt + 1; }
+        ci = ci + 1;
+    }
+    assert_eq(rt, 6, "every category name parses back to itself");
     return 0;
 }
 
@@ -71,6 +81,17 @@ fn test_semver() {
     assert_eq(is_valid_semver(str_from("1.0")),         0, "1.0 invalid");
     assert_eq(is_valid_semver(str_from("abc")),         0, "abc invalid");
     assert_eq(is_valid_semver(str_from("1.0.0.0")),     0, "1.0.0.0 invalid");
+
+    # v1.1.4 — edge inputs, against Rust's split('-', 2) + three u64 segments
+    assert_eq(is_valid_semver(str_from("1.0.0-")),        1, "1.0.0- valid (empty prerelease)");
+    assert_eq(is_valid_semver(str_from("1.0.0-alpha.1")), 1, "1.0.0-alpha.1 valid");
+    assert_eq(is_valid_semver(str_from("01.0.0")),        1, "01.0.0 valid (u64 accepts leading 0)");
+    assert_eq(is_valid_semver(str_from("-1.0.0")),        0, "-1.0.0 invalid");
+    assert_eq(is_valid_semver(str_from("1..0")),          0, "1..0 invalid");
+    assert_eq(is_valid_semver(str_from(".1.0")),          0, ".1.0 invalid");
+    assert_eq(is_valid_semver(str_from("1.0.")),          0, "1.0. invalid");
+    assert_eq(is_valid_semver(str_from("1.0.0+build")),   0, "1.0.0+build invalid (no build metadata)");
+    assert_eq(is_valid_semver(str_from("")),              0, "empty invalid");
     return 0;
 }
 
@@ -171,6 +192,33 @@ fn test_manifest() {
 
     # qualified_name: publisher lowercased + spaced->hyphen, then /agent-name
     assert_eq(str_eq_cstr(manifest_qualified_name(ok), "test-publisher/test-agent"), 1, "qualified name");
+
+    # v1.1.4 — boundaries and exact error lists
+    var m128 = mk_manifest(repeat_char(128, 97), str_from("d"), str_from("1.0.0"), str_from("P"), str_from("k"));
+    assert_eq(vec_len(manifest_validate(m128)), 0, "128-char name accepted");
+    var m129 = mk_manifest(repeat_char(129, 97), str_from("d"), str_from("1.0.0"), str_from("P"), str_from("k"));
+    assert_eq(vec_len(manifest_validate(m129)), 1, "129-char name: one error");
+    assert_eq(errors_contain(manifest_validate(m129), "128 characters"), 1, "129-char name: length error");
+    var bad_names = vec_new();
+    vec_push(bad_names, "ab!"); vec_push(bad_names, "a_b"); vec_push(bad_names, "aB"); vec_push(bad_names, "a b");
+    var bi = 0;
+    var bad_hits = 0;
+    while (bi < vec_len(bad_names)) {
+        var mb = mk_manifest(str_from(vec_get(bad_names, bi)), str_from("d"), str_from("1.0.0"),
+          str_from("P"), str_from("k"));
+        if (errors_contain(manifest_validate(mb), "lowercase") == 1) { bad_hits = bad_hits + 1; }
+        bi = bi + 1;
+    }
+    assert_eq(bad_hits, 4, "!, _, uppercase and space each rejected");
+    var mdig = mk_manifest(str_from("a-1-b2"), str_from("d"), str_from("1.0.0"), str_from("P"), str_from("k"));
+    assert_eq(vec_len(manifest_validate(mdig)), 0, "digits and hyphens accepted");
+    assert_eq(vec_len(manifest_validate(m_name)), 1, "empty name: only 'name is required'");
+    assert_eq(vec_len(manifest_validate(m_ver)), 1, "empty version: only 'version is required'");
+    assert_eq(vec_len(manifest_validate(m_pub)), 2, "empty publisher: exactly two errors");
+    var mall = mk_manifest(str_from(""), str_from(""), str_from(""), str_from(""), str_from(""));
+    assert_eq(vec_len(manifest_validate(mall)), 5, "everything empty: five errors");
+    var mq = mk_manifest(str_from("x"), str_from("d"), str_from("1.0.0"), str_from("AGNOS Team"), str_from("k"));
+    assert_eq(str_eq_cstr(manifest_qualified_name(mq), "agnos-team/x"), 1, "qualified name: multi-word publisher");
     return 0;
 }
 
@@ -208,6 +256,15 @@ fn test_depgraph_base() {
     var gn = depgraph_new();
     depgraph_add(gn, depnode_new(str_from("a"), str_from("1.0.0"), deps0()));
     assert_eq(vec_len(depgraph_check_missing(gn)), 0, "no missing deps");
+
+    # v1.1.4 — re-adding a name replaces the node (Rust HashMap::insert)
+    var gre = depgraph_new();
+    depgraph_add(gre, depnode_new(str_from("a"), str_from("1.0.0"), deps0()));
+    depgraph_add(gre, depnode_new(str_from("a"), str_from("2.0.0"), deps0()));
+    assert_eq(depgraph_len(gre), 1, "re-add: still one node");
+    assert_eq(str_eq_cstr(depnode_version(depgraph_get(gre, str_from("a"))), "2.0.0"), 1, "re-add: newest wins");
+    assert_eq(str_eq_cstr(depnode_name(depgraph_get(gre, str_from("a"))), "a"), 1, "re-add: name kept");
+    assert_eq(vec_len(depnode_deps(depgraph_get(gre, str_from("a")))), 0, "re-add: deps of the new node");
     return 0;
 }
 
@@ -269,6 +326,54 @@ fn test_depgraph_resolve() {
     depgraph_add(gx, depnode_new(str_from("b"), V, deps1(str_from("a"))));
     assert_neq(depgraph_detect_cycle(gx), 0, "cycle detected");
     assert_eq(depgraph_resolve(gx),      0, "cycle resolve is Err");
+
+    # v1.1.4 — full diamond ordering: every edge respected
+    assert_lt(order_pos(od, "a"), order_pos(od, "b"), "diamond a before b");
+    assert_lt(order_pos(od, "a"), order_pos(od, "c"), "diamond a before c");
+    assert_lt(order_pos(od, "b"), order_pos(od, "d"), "diamond b before d");
+    assert_lt(order_pos(od, "c"), order_pos(od, "d"), "diamond c before d");
+
+    # a dependency outside the graph is ignored by resolve (check_missing reports it)
+    var gm = depgraph_new();
+    depgraph_add(gm, depnode_new(str_from("a"), V, deps1(str_from("missing"))));
+    var om = depgraph_resolve(gm);
+    assert_eq(vec_len(om), 1, "unknown dep: order holds only a");
+    assert_eq(str_eq_cstr(vec_get(om, 0), "a"), 1, "unknown dep: a resolves");
+
+    # self-loop: a cycle [a, a]
+    var gs = depgraph_new();
+    depgraph_add(gs, depnode_new(str_from("a"), V, deps1(str_from("a"))));
+    var cs = depgraph_detect_cycle(gs);
+    assert_neq(cs, 0, "self-loop detected");
+    assert_eq(vec_len(cs), 2, "self-loop path is [a, a]");
+    assert_eq(depgraph_resolve(gs), 0, "self-loop resolve is Err");
+
+    # 3-cycle a -> b -> c -> a: the path closes on its first node
+    var g3 = depgraph_new();
+    depgraph_add(g3, depnode_new(str_from("a"), V, deps1(str_from("b"))));
+    depgraph_add(g3, depnode_new(str_from("b"), V, deps1(str_from("c"))));
+    depgraph_add(g3, depnode_new(str_from("c"), V, deps1(str_from("a"))));
+    var c3 = depgraph_detect_cycle(g3);
+    assert_eq(vec_len(c3), 4, "3-cycle path has 4 entries");
+    assert_eq(str_eq(vec_get(c3, 0), vec_get(c3, 3)), 1, "3-cycle path closes on its first node");
+    assert_eq(depgraph_resolve(g3), 0, "3-cycle resolve is Err");
+
+    # a duplicated dependency entry still resolves (Rust counts the edge twice)
+    var gdup = depgraph_new();
+    depgraph_add(gdup, depnode_new(str_from("b"), V, deps2(str_from("a"), str_from("a"))));
+    depgraph_add(gdup, depnode_new(str_from("a"), V, deps0()));
+    var odup = depgraph_resolve(gdup);
+    assert_eq(vec_len(odup), 2, "duplicate dep: both resolve");
+    assert_lt(order_pos(odup, "a"), order_pos(odup, "b"), "duplicate dep: a before b");
+
+    # independent roots resolve in sorted order (Rust sorts the zero-in-degree seeds)
+    var gr = depgraph_new();
+    depgraph_add(gr, depnode_new(str_from("zeta"), V, deps0()));
+    depgraph_add(gr, depnode_new(str_from("alpha"), V, deps0()));
+    depgraph_add(gr, depnode_new(str_from("mid"), V, deps0()));
+    var orr = depgraph_resolve(gr);
+    assert_eq(str_eq_cstr(vec_get(orr, 0), "alpha"), 1, "roots sorted: alpha first");
+    assert_eq(str_eq_cstr(vec_get(orr, 2), "zeta"), 1, "roots sorted: zeta last");
     return 0;
 }
 
@@ -328,6 +433,23 @@ fn test_json() {
         ci = ci + 1;
     }
     assert_eq(cat_rt, CAT_COUNT, "all categories round-trip by wire name");
+
+    # v1.1.4 — every manifest field round-trips (ADR-0001)
+    var m3 = mela_manifest_new(mk_agent(str_from("full"), str_from("d")),
+      publisher_new(str_from("P"), str_from("k1"), str_from("https://p.example")), CAT_SECURITY, str_from("2.1.0"));
+    man_set_changelog(m3, str_from("notes"));
+    man_set_min_agnos_version(m3, str_from("2026.1.1"));
+    vec_push(man_screenshots(m3), str_from("shot.png"));
+    map_set(man_dependencies(m3), str_from("dep-a"), str_from("^1.0"));
+    var m4 = manifest_from_json(mela_manifest_to_json(m3));
+    assert_neq(m4, 0, "full manifest parses");
+    assert_eq(man_category(m4), CAT_SECURITY, "json full: category");
+    assert_eq(str_eq_cstr(man_changelog(m4), "notes"), 1, "json full: changelog");
+    assert_eq(str_eq_cstr(man_min_agnos_version(m4), "2026.1.1"), 1, "json full: min_agnos_version");
+    assert_eq(str_eq_cstr(pub_homepage(man_publisher(m4)), "https://p.example"), 1, "json full: homepage");
+    assert_eq(vec_len(man_screenshots(m4)), 1, "json full: screenshots len");
+    assert_eq(str_eq_cstr(vec_get(man_screenshots(m4), 0), "shot.png"), 1, "json full: screenshot");
+    assert_eq(str_eq_cstr(map_get(man_dependencies(m4), str_from("dep-a")), "^1.0"), 1, "json full: dependency");
     return 0;
 }
 
@@ -390,6 +512,66 @@ fn test_trust() {
     # invalid signature length rejected (rust-old test_verify_invalid_signature_length)
     var shortsig[32];
     assert_eq(trust_verify("hello marketplace", 17, &shortsig, 32, &pk), 0, "invalid sig length rejected");
+
+    # v1.1.4 — Rust test_generate_keypair: the random path
+    var rsk[64];
+    var rpk[32];
+    var rid = trust_generate_keypair(&rsk, &rpk);
+    assert_eq(str_len(rid), 16, "random keypair: 16-char key_id");
+    assert_eq(str_eq(rid, trust_key_id_from_pk(&rpk)), 1, "random keypair: key_id matches pk");
+    assert_eq(str_eq(trust_hex_encode(&rsk + 32, 32), trust_hex_encode(&rpk, 32)), 1, "random keypair: sk embeds pk");
+    var rsig = trust_sign(&rsk, "random", 6);
+    assert_eq(trust_verify("random", 6, rsig, 64, &rpk), 1, "random keypair: sign/verify");
+    var rsk2[64];
+    var rpk2[32];
+    trust_generate_keypair(&rsk2, &rpk2);
+    assert_eq(str_eq(trust_hex_encode(&rpk, 32), trust_hex_encode(&rpk2, 32)), 0, "random keypair: two calls differ");
+
+    # Rust test_hex_roundtrip: every byte, and uppercase decodes (u8::from_str_radix)
+    assert_eq(load8(dec + 1), 1,  "hex dec[1]");
+    assert_eq(load8(dec + 3), 16, "hex dec[3]");
+    var up = trust_hex_decode(str_from("FFaB"));
+    assert_neq(up, 0, "hex decode accepts uppercase");
+    assert_eq(load8(up), 255, "hex FF");
+    assert_eq(load8(up + 1), 171, "hex aB");
+
+    # signature edge cases: wrong lengths, bit flips, a non-canonical S, a small-order key
+    var esig = trust_sign(&sk, "edge", 4);
+    assert_eq(trust_verify("edge", 4, esig, 64, &pk), 1, "edge: baseline verifies");
+    assert_eq(trust_verify("edge", 4, esig, 63, &pk), 0, "edge: 63-byte signature rejected");
+    var long_sig = alloc(65);
+    memcpy(long_sig, esig, 64);
+    store8(long_sig + 64, 0);
+    assert_eq(trust_verify("edge", 4, long_sig, 65, &pk), 0, "edge: 65-byte signature rejected");
+    var flip_r = alloc(64);
+    memcpy(flip_r, esig, 64);
+    store8(flip_r, load8(flip_r) ^ 1);
+    assert_eq(trust_verify("edge", 4, flip_r, 64, &pk), 0, "edge: bit flip in R rejected");
+    var flip_s = alloc(64);
+    memcpy(flip_s, esig, 64);
+    store8(flip_s + 40, load8(flip_s + 40) ^ 1);
+    assert_eq(trust_verify("edge", 4, flip_s, 64, &pk), 0, "edge: bit flip in S rejected");
+    # S + L: the same scalar mod L, a malleable second encoding (RFC 8032 5.1.7 rejects S >= L)
+    var L = hex_decode("edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010", 64);
+    var sl = alloc(64);
+    memcpy(sl, esig, 64);
+    var carry = 0;
+    var bi = 0;
+    while (bi < 32) {
+        var sum = load8(sl + 32 + bi) + load8(L + bi) + carry;
+        store8(sl + 32 + bi, sum & 255);
+        carry = sum >> 8;
+        bi = bi + 1;
+    }
+    assert_eq(trust_verify("edge", 4, sl, 64, &pk), 0, "edge: S + L (malleable) rejected");
+    # identity public key with R = identity, S = 0: passes a non-strict verifier
+    var ident = alloc(32);
+    memset(ident, 0, 32);
+    store8(ident, 1);
+    var isig = alloc(64);
+    memset(isig, 0, 64);
+    store8(isig, 1);
+    assert_eq(trust_verify("edge", 4, isig, 64, ident), 0, "edge: small-order public key rejected");
     return 0;
 }
 
@@ -425,6 +607,20 @@ fn test_keyversion() {
     assert_eq(str_eq(trust_hex_encode(recovered, 32), pkhex), 1, "verifying_key matches pk");
     assert_eq(kv_verifying_key(kv_new(str_from("k"), 900, 0, 0, str_from("not-hex"))), 0, "invalid hex -> 0");
     assert_eq(kv_verifying_key(kv_new(str_from("k"), 900, 0, 0, str_from("aabb"))),    0, "wrong length -> 0");
+
+    # v1.1.4 — the window is inclusive at both ends (Rust: when < from / when > until)
+    assert_eq(mela_kv_is_valid_at(kv, 900),  1, "valid at valid_from");
+    assert_eq(mela_kv_is_valid_at(kv, 1100), 1, "valid at valid_until");
+    assert_eq(mela_kv_is_valid_at(kv, 899),  0, "invalid one before");
+    assert_eq(mela_kv_is_valid_at(kv, 1101), 0, "invalid one after");
+    var nonhex = kv_new(str_from("k"), 0, 0, 0, repeat_char(64, 122));    # 64 x 'z'
+    assert_eq(kv_verifying_key(nonhex), 0, "64 non-hex chars rejected");
+    var upper = kv_new(str_from("k"), 0, 0, 0,
+      str_from("D75A980182B10AB7D54BFED3C964073A0EE172F3DAA62325AF021A68F707511A"));
+    var upk = kv_verifying_key(upper);
+    assert_neq(upk, 0, "uppercase hex key decodes");
+    assert_eq(str_eq_cstr(trust_hex_encode(upk, 32),
+        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"), 1, "uppercase decodes to the same key");
     return 0;
 }
 
@@ -454,6 +650,20 @@ fn test_keyring() {
     # nonexistent
     assert_eq(keyring_get_current_key(kr, str_from("nope"), NOW),    0, "nonexistent no current");
     assert_eq(vec_len(mela_keyring_get_all_versions(kr, str_from("nope"))), 0, "nonexistent no versions");
+
+    # v1.1.4 — rotation: an expired version, then its successor, under one key_id
+    var ZR = str_from("0000000000000000000000000000000000000000000000000000000000000000");
+    var kr2 = mela_keyring_new();
+    mela_keyring_add_key(kr2, kv_new(str_from("r"), 0, 1, 500, ZR));
+    mela_keyring_add_key(kr2, kv_new(str_from("r"), 500, 0, 0, ZR));
+    assert_eq(mela_keyring_len(kr2), 1, "rotation: one key_id");
+    assert_eq(vec_len(mela_keyring_get_all_versions(kr2, str_from("r"))), 2, "rotation: two versions");
+    assert_eq(mela_kv_valid_from(keyring_get_current_key(kr2, str_from("r"), 1000)), 500,
+      "rotation: the current version after expiry");
+    assert_eq(mela_kv_valid_from(keyring_get_current_key(kr2, str_from("r"), 100)), 0,
+      "rotation: the old version before it expires");
+    assert_eq(mela_kv_valid_from(keyring_get_current_key(kr2, str_from("r"), 500)), 0,
+      "rotation: at the overlap the first valid version wins (Rust order)");
     return 0;
 }
 
@@ -641,6 +851,40 @@ fn test_transparency() {
     assert_eq(str_eq_cstr(log_version(tlog_latest(l)), "1.0.0"), 1, "latest is 1.0.0");
     tlog_add(l, "a/b", "2.0.0", "k1", "h2", "s2");
     assert_eq(str_eq_cstr(log_version(tlog_latest(l)), "2.0.0"), 1, "latest is 2.0.0");
+
+    # v1.1.4 — each chain check on its own. Every tamper above breaks the entry's
+    # own hash first; here the hash is recomputed, so only the chain check can fail.
+    var lk = tlog_new();
+    tlog_add(lk, "a/b", "1.0.0", "k1", "h1", "s1");
+    tlog_add(lk, "a/b", "1.1.0", "k1", "h2", "s2");
+    var lk1 = vec_get(lk, 1);
+    store64(lk1 + 56, str_from("not-the-previous-hash"));
+    log_set_entry_hash(lk1, log_entry_compute_hash(lk1));
+    assert_eq(log_entry_verify_self(lk1), 1, "link: tampered entry is self-consistent");
+    assert_eq(tlog_verify_chain(lk), 0, "link: broken previous_hash detected");
+
+    var sq = tlog_new();
+    tlog_add(sq, "a/b", "1.0.0", "k1", "h1", "s1");
+    var sq0 = vec_get(sq, 0);
+    store64(sq0, 5);
+    log_set_entry_hash(sq0, log_entry_compute_hash(sq0));
+    assert_eq(log_entry_verify_self(sq0), 1, "sequence: tampered entry is self-consistent");
+    assert_eq(tlog_verify_chain(sq), 0, "sequence: wrong sequence detected");
+
+    var ez = tlog_new();
+    tlog_add(ez, "a/b", "1.0.0", "k1", "h1", "s1");
+    var ez0 = vec_get(ez, 0);
+    store64(ez0 + 56, str_from("x"));
+    log_set_entry_hash(ez0, log_entry_compute_hash(ez0));
+    assert_eq(log_entry_verify_self(ez0), 1, "entry 0: tampered entry is self-consistent");
+    assert_eq(tlog_verify_chain(ez), 0, "entry 0: non-empty previous_hash detected");
+
+    # the timestamp is part of the hash
+    var ta = log_entry_new(0, 1000, str_from("p"), str_from("1"), str_from("k"), str_from("c"), str_from("s"),
+      str_from(""), str_from(""));
+    var tb = log_entry_new(0, 1001, str_from("p"), str_from("1"), str_from("k"), str_from("c"), str_from("s"),
+      str_from(""), str_from(""));
+    assert_eq(str_eq(log_entry_compute_hash(ta), log_entry_compute_hash(tb)), 0, "timestamp changes the hash");
     return 0;
 }
 
@@ -667,6 +911,34 @@ fn test_transparency_json() {
 
     # invalid JSON rejected
     assert_eq(tlog_from_json(str_from("not json")), 0, "invalid json rejected");
+
+    # v1.1.4 — the import re-verifies the chain: reordered or truncated logs are refused
+    var full = tlog_new();
+    tlog_add(full, "a/b", "1.0.0", "k1", "h1", "s1");
+    tlog_add(full, "a/b", "1.1.0", "k1", "h2", "s2");
+    tlog_add(full, "c/d", "0.1.0", "k2", "h3", "s3");
+    var tail = tlog_new();
+    vec_push(tail, vec_get(full, 1));
+    vec_push(tail, vec_get(full, 2));
+    assert_eq(tlog_from_json(tlog_to_json(tail)), 0, "import: first entry dropped -> refused");
+    var swapped = tlog_new();
+    vec_push(swapped, vec_get(full, 0));
+    vec_push(swapped, vec_get(full, 2));
+    vec_push(swapped, vec_get(full, 1));
+    assert_eq(tlog_from_json(tlog_to_json(swapped)), 0, "import: entries swapped -> refused");
+    var round = tlog_from_json(tlog_to_json(full));
+    assert_neq(round, 0, "import: intact log accepted");
+    assert_eq(log_timestamp(vec_get(round, 0)), 1000, "import: timestamp survives");
+    assert_eq(tlog_from_json(str_from("{}")), 0, "import: an object is not a log");
+    var empty = tlog_from_json(str_from("[]"));
+    assert_neq(empty, 0, "import: [] is an empty log (Rust Ok)");
+    assert_eq(tlog_len(empty), 0, "import: [] has no entries");
+
+    # v1.1.4 — every entry field survives the import
+    var re0 = vec_get(round, 0);
+    assert_eq(str_eq_cstr(log_key_id(re0), "k1"), 1, "import: key_id");
+    assert_eq(str_eq_cstr(log_signature_hash(re0), "s1"), 1, "import: signature_hash");
+    assert_eq(str_eq_cstr(log_package(re0), "a/b"), 1, "import: package");
     return 0;
 }
 
@@ -737,6 +1009,30 @@ fn test_registry() {
     var qreg = registry_in_memory();
     registry_set_storage_quota(qreg, 1);
     assert_eq(registry_install(qreg, mk_pkg("q", "1.0.0"), str_from("h"), 100, 1000), 0, "quota exceeded rejected");
+
+    # v1.1.4 — search matches name, description and tags, case-insensitively (Rust
+    # lowercases both sides); an empty query matches everything; list is name-sorted
+    var sr = registry_in_memory();
+    registry_install(sr, mk_pkg("zeta", "1.0.0"), str_from("h"), 1, 1000);
+    registry_install(sr, mk_pkg("alpha", "1.0.0"), str_from("h"), 1, 1000);
+    registry_install(sr, mk_pkg("mid", "1.0.0"), str_from("h"), 1, 1000);
+    assert_eq(vec_len(mela_registry_search(sr, str_from("PACKAGE"))), 3, "search: description, upper-case query");
+    assert_eq(vec_len(mela_registry_search(sr, str_from("ALPHA"))), 1, "search: name, upper-case query");
+    assert_eq(vec_len(mela_registry_search(sr, str_from("SCAN"))), 3, "search: tag substring");
+    assert_eq(vec_len(mela_registry_search(sr, str_from(""))), 3, "search: empty query matches all");
+    var sl = registry_list_installed(sr);
+    assert_eq(str_eq_cstr(imp_name(vec_get(sl, 0)), "alpha"), 1, "list sorted: alpha");
+    assert_eq(str_eq_cstr(imp_name(vec_get(sl, 1)), "mid"), 1, "list sorted: mid");
+    assert_eq(str_eq_cstr(imp_name(vec_get(sl, 2)), "zeta"), 1, "list sorted: zeta");
+    var srec = registry_get_package(sr, str_from("mid"));
+    assert_eq(imp_auto_update(srec), 0, "record: auto_update defaults to 0 (Rust)");
+    assert_eq(str_eq_cstr(imp_install_dir(srec), "/dev/null/packages/mid"), 1, "record: install dir");
+
+    # Rust test_storage_quota, the positive side: exactly full is allowed
+    var qf = registry_in_memory();
+    registry_set_storage_quota(qf, 100);
+    assert_neq(registry_install(qf, mk_pkg("q1", "1.0.0"), str_from("h"), 100, 1000), 0, "quota: exactly full installs");
+    assert_eq(registry_install(qf, mk_pkg("q2", "1.0.0"), str_from("h"), 1, 1000), 0, "quota: one byte over refused");
     return 0;
 }
 
@@ -814,6 +1110,17 @@ fn test_registry_uninstall_fs() {
     assert_eq(file_exists(str_data(keep)), 1, "linked install dir: target's files survive");
     xunlink(str_data(keep));
     xrmdir(VICTIM);
+
+    # v1.1.4 — Rust test_count_files: _rmtree reports the files it removed
+    var CF = "/tmp/mela-test-count-files";
+    var cf = str_from(CF);
+    if (is_dir(cf) == 1) { _rmtree(cf); }
+    _rc_mkdir_p(path_join(cf, str_from("sub")));
+    file_write_all(str_data(path_join(cf, str_from("a.txt"))), "a", 1);
+    file_write_all(str_data(path_join(cf, str_from("b.txt"))), "b", 1);
+    file_write_all(str_data(path_join(cf, str_from("sub/c.txt"))), "c", 1);
+    assert_eq(_rmtree(cf), 3, "count_files: three files, one nested");
+    assert_eq(is_dir(cf), 0, "count_files: the tree is gone");
     return 0;
 }
 
@@ -928,6 +1235,20 @@ fn test_remote_codec() {
     assert_neq(up, 0, "update parse");
     assert_eq(str_eq_cstr(update_name(up), "test-pkg"), 1, "update name");
     assert_eq(str_eq_cstr(update_available_version(up), "2.0.0"), 1, "update available version");
+
+    # v1.1.4 — every response field round-trips
+    var r0 = vec_get(sresults_packages(rec), 0);
+    assert_eq(str_eq_cstr(sresult_latest_version(r0), "1.0.0"), 1, "result latest_version");
+    assert_eq(str_eq_cstr(sresult_description(r0), "A scanner"), 1, "result description");
+    assert_eq(str_eq_cstr(sresult_category(r0), "security"), 1, "result category");
+    assert_eq(sresults_page(rec), 1, "results page");
+    assert_eq(str_eq_cstr(presp_version(pr), "1.0.0"), 1, "publish resp version");
+    assert_eq(str_eq_cstr(presp_download_url(pr), "https://r/v1/packages/test-app/1.0.0/download"), 1,
+      "publish resp download_url");
+    assert_eq(str_eq_cstr(update_installed_version(up), "1.0.0"), 1, "update installed version");
+    assert_eq(str_eq_cstr(update_changelog(up), "New features"), 1, "update changelog");
+    assert_eq(sresults_from_json(str_from("[]")), 0, "search results: an array is not a response");
+    assert_eq(presp_from_json(str_from("not json")), 0, "publish response: garbage -> 0");
     return 0;
 }
 
@@ -1096,6 +1417,111 @@ fn test_ratings() {
     # counts
     assert_eq(rstore_total_count(rstore_new()),   0, "empty total 0");
     assert_eq(rstore_package_count(rstore_new()), 0, "empty package 0");
+
+    # v1.1.4 — Rust add_rating_basic / review_exactly_max_length, in full
+    assert_eq(str_eq_cstr(rating_package_name(r), "my-package"), 1, "rating package_name");
+    assert_eq(str_eq_cstr(rating_version(r), "1.0.0"), 1, "rating version_reviewed");
+    assert_eq(rating_has_review(r), 1, "rating has review");
+    var rmax = rstore_add_rating(rstore_new(), str_from("a"), str_from("p"), 5, 1, repeat_char(2000, 121),
+      str_from("1.0.0"), 1);
+    assert_eq(str_len(rating_review(rmax)), 2000, "max-length review stored whole");
+
+    # Rust stats_single_rating / stats_distribution, in full
+    var sb = rstore_get_stats(st, str_from("pkg-b"));
+    assert_eq(stats_total_ratings(sb), 1, "single rating: total 1");
+    assert_eq(f64_to(stats_average_score(sb)), 4, "single rating: avg 4");
+    assert_eq(stats_dist(sds, 2), 1, "dist[2]");
+    assert_eq(stats_dist(sds, 3), 1, "dist[3]");
+    assert_eq(stats_dist(sds, 4), 1, "dist[4]");
+    assert_eq(stats_latest_review(sa), 101, "latest_review is the newest created_at");
+
+    # Rust stats_all_same_score: ten agents, all 4
+    var same = rstore_new();
+    var ai = 0;
+    while (ai < 10) {
+        rstore_add_rating(same, str_cat(str_from("agent-"), str_from_int(ai)), str_from("pkg"), 4, 0, str_from(""),
+          str_from("1.0.0"), ai);
+        ai = ai + 1;
+    }
+    var sss = rstore_get_stats(same, str_from("pkg"));
+    assert_eq(stats_total_ratings(sss), 10, "all same: total 10");
+    assert_eq(stats_average_score(sss), f64_from(4), "all same: avg exactly 4.0");
+    assert_eq(stats_dist(sss, 4), 10, "all same: dist[4] = 10");
+
+    # Rust filter_by_package / by_agent / by_min_score: every result matches
+    var fp_ok = 1;
+    var rfp = rstore_get_ratings(st, fp);
+    var ki = 0;
+    while (ki < vec_len(rfp)) {
+        if (str_eq_cstr(rating_package_name(vec_get(rfp, ki)), "pkg-a") == 0) { fp_ok = 0; }
+        ki = ki + 1;
+    }
+    assert_eq(fp_ok, 1, "filter package: every result is pkg-a");
+    var fa_ok = 1;
+    var rfa = rstore_get_ratings(st, fa);
+    ki = 0;
+    while (ki < vec_len(rfa)) {
+        if (str_eq_cstr(rating_agent_id(vec_get(rfa, ki)), "agent-1") == 0) { fa_ok = 0; }
+        ki = ki + 1;
+    }
+    assert_eq(fa_ok, 1, "filter agent: every result is agent-1");
+    var fm_ok = 1;
+    var rfm = rstore_get_ratings(st, fm);
+    ki = 0;
+    while (ki < vec_len(rfm)) {
+        if (rating_score(vec_get(rfm, ki)) < 4) { fm_ok = 0; }
+        ki = ki + 1;
+    }
+    assert_eq(fm_ok, 1, "filter min_score: every result scores >= 4");
+
+    # Rust multiple_packages_independence: each package keeps its own average
+    var sx = rstore_get_stats(so, str_from("low"));
+    var sy = rstore_get_stats(so, str_from("high"));
+    assert_eq(stats_average_score(sx), f64_from(1), "independence: low avg 1.0");
+    assert_eq(stats_average_score(sy), f64_from(5), "independence: high avg 5.0");
+
+    # a non-integer average is exact and ranks above a lower whole one
+    var half = rstore_new();
+    rstore_add_rating(half, str_from("a1"), str_from("p45"), 5, 0, str_from(""), str_from("1.0.0"), 1);
+    rstore_add_rating(half, str_from("a2"), str_from("p45"), 4, 0, str_from(""), str_from("1.0.0"), 2);
+    rstore_add_rating(half, str_from("a1"), str_from("p40"), 4, 0, str_from(""), str_from("1.0.0"), 3);
+    assert_eq(stats_average_score(rstore_get_stats(half, str_from("p45"))), f64_div(f64_from(9), f64_from(2)),
+      "average 4.5 exact");
+    assert_eq(str_eq_cstr(stats_package_name(vec_get(rstore_top_rated(half, 0, 0), 0)), "p45"), 1,
+      "4.5 ranks above 4.0");
+
+    # filter bounds are inclusive (Rust: >= from, <= until, >= min_score)
+    var fb = filter_new(); filter_set_from(fb, 101); filter_set_until(fb, 101);
+    assert_eq(vec_len(rstore_get_ratings(st, fb)), 1, "filter from = until = created_at includes it");
+    var f5 = filter_new(); filter_set_min_score(f5, 5);
+    assert_eq(vec_len(rstore_get_ratings(st, f5)), 1, "filter min_score = score includes it");
+
+    # newest first, all the way down
+    assert_eq(rating_created_at(vec_get(rr, 0)), 102, "newest first: 102");
+    assert_eq(rating_created_at(vec_get(rr, 1)), 101, "newest first: 101");
+    assert_eq(rating_created_at(vec_get(rr, 2)), 100, "newest first: 100");
+
+    # a rejected re-rating leaves the existing rating in place
+    var rj = rstore_new();
+    rstore_add_rating(rj, str_from("agent-1"), str_from("pkg"), 4, 0, str_from(""), str_from("1.0.0"), 1);
+    assert_eq(rstore_add_rating(rj, str_from("agent-1"), str_from("pkg"), 0, 0, str_from(""), str_from("1.0.0"), 2), 0,
+      "re-rating with score 0 rejected");
+    assert_eq(rstore_total_count(rj), 1, "rejected re-rating: still one rating");
+    assert_eq(f64_to(stats_average_score(rstore_get_stats(rj, str_from("pkg")))), 4, "rejected re-rating: avg 4");
+
+    # dedup: the last call wins even with an older created_at, and replaces every field
+    var dl = rstore_new();
+    rstore_add_rating(dl, str_from("agent-1"), str_from("pkg"), 2, 1, str_from("old"), str_from("1.0.0"), 200);
+    rstore_add_rating(dl, str_from("agent-1"), str_from("pkg"), 5, 1, str_from("new"), str_from("1.1.0"), 100);
+    var dlr = vec_get(rstore_get_ratings(dl, filter_new()), 0);
+    assert_eq(rating_score(dlr), 5, "dedup last call: score");
+    assert_eq(str_eq_cstr(rating_review(dlr), "new"), 1, "dedup last call: review");
+    assert_eq(str_eq_cstr(rating_version(dlr), "1.1.0"), 1, "dedup last call: version");
+    assert_eq(rating_created_at(dlr), 100, "dedup last call: created_at");
+
+    # top_rated thresholds: min 1 keeps both; has_min = 1 with min 0 behaves like none
+    assert_eq(vec_len(rstore_top_rated(st, 1, 1)), 2, "top_rated min 1 -> 2");
+    assert_eq(vec_len(rstore_top_rated(st, 1, 0)), vec_len(rstore_top_rated(st, 0, 0)), "top_rated min 0 = none");
     return 0;
 }
 
@@ -1211,6 +1637,49 @@ fn test_agpkg() {
     assert_eq(pfconfig_category(cfg),        CAT_DESKTOP_APP, "config default category");
     assert_eq(pfconfig_network_access(cfg),  0,                "config default no network");
     assert_eq(pfconfig_has_data_dir(cfg),    0,                "config default no data_dir");
+
+    # v1.1.4 — Rust manifest_serializes_to_json
+    var gm_json = mela_manifest_to_json(generate_manifest(mk_pfconfig()));
+    assert_eq(str_contains(gm_json, str_from("my-flutter-app")), 1, "generated manifest json: name");
+    assert_eq(str_contains(gm_json, str_from("flutter")), 1, "generated manifest json: flutter");
+    var gm_back = manifest_from_json(gm_json);
+    assert_neq(gm_back, 0, "generated manifest json: parses");
+    assert_eq(str_eq_cstr(man_runtime(gm_back), "flutter"), 1, "generated manifest json: runtime flutter");
+    assert_eq(vec_len(man_tags(gm_back)), 2, "generated manifest json: two tags");
+    assert_eq(str_eq_cstr(vec_get(man_tags(gm_back), 1), "desktop"), 1, "generated manifest json: desktop tag");
+    var gm_raw = generate_manifest(mk_pfconfig());
+    assert_eq(str_len(pub_key_id(man_publisher(gm_raw))), 0, "generated manifest: empty key_id (Rust)");
+    assert_eq(str_len(pub_homepage(man_publisher(gm_raw))), 0, "generated manifest: empty homepage (Rust)");
+
+    # AOT and engine precedence (Rust find_aot_binary / validate order)
+    setup_build("/tmp/mela-fb-prec", "lib/libflutter_engine.so", 0, 1);
+    file_write_all("/tmp/mela-fb-prec/lib/libflutter_linux_gtk.so", "x", 1);
+    file_write_all("/tmp/mela-fb-prec/app.so", "x", 1);
+    file_write_all("/tmp/mela-fb-prec/lib/libapp.so", "x", 1);
+    var vprec = fbuild_validate(str_from("/tmp/mela-fb-prec"));
+    assert_eq(str_eq_cstr(fbuild_engine_lib(fbres_build(vprec)), "lib/libflutter_engine.so"), 1,
+      "engine: libflutter_engine before libflutter_linux_gtk");
+    assert_eq(str_eq_cstr(fbuild_aot_binary(fbres_build(vprec)), "app.so"), 1, "aot: root app.so first");
+    setup_build("/tmp/mela-fb-libaot", "lib/libflutter_engine.so", 0, 1);
+    file_write_all("/tmp/mela-fb-libaot/lib/libapp.so", "x", 1);
+    var vlib = fbuild_validate(str_from("/tmp/mela-fb-libaot"));
+    assert_eq(str_eq_cstr(fbuild_aot_binary(fbres_build(vlib)), "lib/libapp.so"), 1, "aot: lib/libapp.so found");
+
+    # v1.1.4 — a full packaging config decodes every field
+    var pcj = "{\"app_name\":\"a\",\"version\":\"1.2.3\",\"publisher\":\"P\",\"description\":\"D\",\"category\":\"Security\",\"wayland_requirements\":[\"Core\",\"XWayland\"],\"network_access\":true,\"data_dir\":\"/d\"}";
+    var pc = pfconfig_from_json(str_from(pcj));
+    assert_neq(pc, 0, "config json: parses");
+    assert_eq(str_eq_cstr(pfconfig_app_name(pc), "a"), 1, "config json: app_name");
+    assert_eq(str_eq_cstr(pfconfig_version(pc), "1.2.3"), 1, "config json: version");
+    assert_eq(str_eq_cstr(pfconfig_publisher(pc), "P"), 1, "config json: publisher");
+    assert_eq(str_eq_cstr(pfconfig_description(pc), "D"), 1, "config json: description");
+    assert_eq(pfconfig_category(pc), CAT_SECURITY, "config json: category");
+    assert_eq(vec_len(pfconfig_wayland(pc)), 2, "config json: two wayland requirements");
+    assert_eq(vec_get(pfconfig_wayland(pc), 1), WL_XWAYLAND, "config json: XWayland");
+    assert_eq(pfconfig_network_access(pc), 1, "config json: network_access");
+    assert_eq(pfconfig_has_data_dir(pc), 1, "config json: has data_dir");
+    assert_eq(str_eq_cstr(pfconfig_data_dir(pc), "/d"), 1, "config json: data_dir");
+    assert_eq(pfconfig_from_json(str_from("{")), 0, "config json: truncated -> 0");
     return 0;
 }
 
@@ -1621,6 +2090,41 @@ fn test_pipeline() {
     assert_eq(registry_len(mela_registry_new(str_from(BDIR))), 0, "blocked extraction: nothing persisted");
     assert_eq(file_exists(str_data(bpk)), 1, "blocked extraction: the blocking file is untouched");
     xunlink(str_data(bpk));
+
+    # v1.1.4 — Rust test_install_with_missing_signature_file: no signature, no install
+    var nsreg = registry_in_memory();
+    assert_eq(pipeline_install(nsreg, keyring, bundle, 0, 0, content_hash, NOW), 0, "missing signature refused");
+    assert_eq(registry_is_empty(nsreg), 1, "missing signature: nothing installed");
+
+    # an upgrade through the pipeline reports the previous version
+    var upreg = registry_in_memory();
+    assert_neq(pipeline_install(upreg, keyring, bundle, &sig, 64, content_hash, NOW), 0, "upgrade: v1 installs");
+    var m_v2 = mela_manifest_new(mk_agent(str_from("test-pkg"), str_from("A test pkg")), publisher, CAT_UTILITY,
+      str_from("2.0.0"));
+    var b_v2 = pipeline_package(m_v2, sandbox);
+    var sig_v2[64];
+    pipeline_publish(tlog_new(), b_v2, &sk, &sig_v2, NOW);
+    var up2 = pipeline_install(upreg, keyring, b_v2, &sig_v2, 64, str_from(""), NOW);
+    assert_neq(up2, 0, "upgrade: v2 installs");
+    assert_eq(instres_has_upgrade(up2), 1, "upgrade: flagged");
+    assert_eq(str_eq_cstr(instres_upgraded_from(up2), "1.0.0"), 1, "upgrade: from 1.0.0");
+
+    # a correctly signed bundle whose manifest fails validation installs nothing
+    var m_bad = mela_manifest_new(mk_agent(str_from("Bad Name!"), str_from("x")), publisher, CAT_UTILITY,
+      str_from("1.0.0"));
+    var b_bad = pipeline_package(m_bad, sandbox);
+    var sig_bad[64];
+    pipeline_publish(tlog_new(), b_bad, &sk, &sig_bad, NOW);
+    var badreg = registry_in_memory();
+    assert_eq(pipeline_install(badreg, keyring, b_bad, &sig_bad, 64, str_from(""), NOW), 0,
+      "signed but invalid manifest refused");
+    assert_eq(registry_is_empty(badreg), 1, "signed but invalid manifest: nothing installed");
+    # a bundle without manifest.json
+    var only = vec_new();
+    var sbj = sbprofile_to_json(sandbox);
+    vec_push(only, tentry_new(str_from("sandbox.json"), str_data(sbj), str_len(sbj)));
+    assert_eq(pipeline_extract_manifest(_gzip_str(_tar_build(only))), 0, "no manifest.json -> 0");
+    assert_eq(pipeline_extract_manifest(str_from("garbage")), 0, "not gzip -> 0");
     return 0;
 }
 
@@ -1862,6 +2366,27 @@ fn test_fpackaging() {
     assert_eq(str_eq_cstr(layout_assets_path(lay),     "assets/flutter_assets/"),  1, "layout assets");
     assert_eq(str_eq_cstr(layout_manifest_path(lay),   "manifest.json"),           1, "layout manifest");
     assert_eq(str_eq_cstr(layout_sandbox_path(lay),    "sandbox.json"),            1, "layout sandbox");
+
+    # v1.1.4 — Rust validate_bad_dart_version / validate_bad_engine_version, in full
+    var mdv = mk_fmanifest(); store64(mdv + 16, str_from("abc"));
+    assert_eq(errors_contain(validate_flutter_manifest(mdv), "dart_version"), 1, "bad dart version");
+    assert_eq(errors_contain(validate_flutter_manifest(mdv), "dart_version is required"), 0,
+      "bad dart version is not 'required'");
+    assert_eq(errors_contain(validate_flutter_manifest(mb), "not a valid"), 1, "bad engine: 'not a valid'");
+    assert_eq(errors_contain(validate_flutter_manifest(mb), "engine_version is required"), 0,
+      "bad engine is not 'required'");
+
+    # Rust build_launch_config_wayland, in full
+    assert_eq(str_eq_cstr(launch_compositor_socket(cfg), "wayland-0"), 1, "launch compositor socket");
+    assert_eq(launch_scale_factor(cfg), f64_div(f64_from(3), f64_from(2)), "launch scale 1.5");
+
+    # Rust env_vars_wayland / env_vars_xwayland, in full
+    assert_eq(str_eq_cstr(map_get(ew, str_from("FLUTTER_ENGINE_SWITCH_GL")), "wayland"), 1, "env wayland GL switch");
+    assert_eq(map_has(ew, str_from("DISPLAY")), 0, "env wayland: no DISPLAY");
+    assert_eq(str_eq_cstr(map_get(ex, str_from("FLUTTER_ENGINE_SWITCH_GL")), "x11"), 1, "env xwayland GL switch");
+    assert_eq(map_has(ex, str_from("WAYLAND_DISPLAY")), 0, "env xwayland: no WAYLAND_DISPLAY");
+    assert_eq(str_eq_cstr(map_get(ex, str_from("FLUTTER_FORCE_SCALE_FACTOR")), "1"), 1, "env xwayland scale 1");
+    assert_eq(str_eq_cstr(map_get(ex, str_from("AGNOS_APP_NAME")), "x-app"), 1, "env xwayland app name");
     return 0;
 }
 
@@ -1935,6 +2460,16 @@ fn test_ratings_persist() {
     assert_neq(stj, 0, "stats parse");
     assert_eq(str_eq_cstr(stats_package_name(stj), "p"), 1, "stats ser package");
     assert_eq(stats_total_ratings(stj),             1,     "stats ser total");
+
+    # v1.1.4 — every rating field survives the round trip
+    var flt = filter_new(); filter_set_package(flt, str_from("pkg-a")); filter_set_agent(flt, str_from("agent-1"));
+    var lr1 = vec_get(rstore_get_ratings(loaded, flt), 0);
+    assert_eq(str_eq_cstr(rating_review(lr1), "Great!"), 1, "persist: review");
+    assert_eq(str_eq_cstr(rating_version(lr1), "1.0.0"), 1, "persist: version");
+    assert_eq(rating_created_at(lr1), 100, "persist: created_at");
+    assert_eq(rating_score(lr1), 5, "persist: score");
+    var flt2 = filter_new(); filter_set_agent(flt2, str_from("agent-2"));
+    assert_eq(rating_has_review(vec_get(rstore_get_ratings(loaded, flt2), 0)), 0, "persist: no review stays no review");
     return 0;
 }
 
@@ -2050,6 +2585,100 @@ fn test_sandbox() {
         pi = pi + 1;
     }
     assert_eq(dd_ok, 7, "all 7 presets: rule 0 is the data dir, rw");
+
+    # v1.1.4 — the Rust preset tests, in full (several were partial)
+    assert_eq(profile_has_rule(pn, str_from("/tmp"), str_from("rw")), 1, "photis /tmp rw");
+    assert_eq(vec_len(profile_landlock_rules(aq)), 5, "aequi 5 rules");
+    assert_eq(profile_has_rule(aq, str_from("~/.local/share/aequi/"), str_from("rw")), 1, "aequi data rw");
+    assert_eq(profile_has_rule(aq, str_from("/tmp"), str_from("rw")), 1, "aequi /tmp rw");
+    assert_eq(profile_has_rule(aq, str_from("/usr/share/fonts"), str_from("ro")), 1, "aequi fonts ro");
+    assert_eq(profile_has_rule(aq, str_from("/usr/share/tesseract-ocr"), str_from("ro")), 1, "aequi tesseract ro");
+    assert_eq(profile_has_rule(aq, str_from("/usr/share/aequi/rules"), str_from("ro")), 1, "aequi rules ro");
+    # Rust test_aequi_profile_seccomp_and_memory
+    assert_eq(str_eq_cstr(profile_seccomp_mode(aq), "desktop"), 1, "aequi seccomp desktop");
+    assert_eq(profile_max_memory_mb(aq), 512, "aequi 512 MB");
+    assert_eq(profile_allow_process_spawn(aq), 0, "aequi no spawn");
+    # productivity / browser / game / CLI: preset, the asserted fields, validates
+    assert_eq(profile_preset(pr), SP_PRODUCTIVITY, "productivity preset");
+    assert_eq(vec_len(profile_landlock_rules(pr)), 4, "productivity 4 rules");
+    assert_eq(profile_max_memory_mb(pr), 1024, "productivity 1024 MB");
+    assert_eq(str_len(validate_profile(pr)), 0, "productivity validates");
+    assert_eq(profile_preset(br), SP_BROWSER, "browser preset");
+    assert_eq(nr_enabled(profile_network(br)), 1, "browser network on");
+    assert_eq(vec_len(nr_hosts(profile_network(br))), 1, "browser one host");
+    assert_eq(profile_allows_host(br, str_from("*")), 1, "browser host *");
+    assert_eq(profile_has_rule(br, str_from("~/Downloads"), str_from("rw")), 1, "browser downloads rw");
+    assert_eq(str_len(validate_profile(br)), 0, "browser validates");
+    assert_eq(profile_preset(gm), SP_GAME, "game preset");
+    assert_eq(profile_allow_process_spawn(gm), 0, "game no spawn");
+    assert_eq(nr_enabled(profile_network(gm)), 1, "game network on");
+    assert_eq(vec_len(nr_hosts(profile_network(gm))), 0, "game no host list");
+    assert_eq(vec_len(profile_landlock_rules(gm)), 3, "game 3 rules");
+    assert_eq(str_len(validate_profile(gm)), 0, "game validates");
+    assert_eq(profile_preset(cli), SP_CLI_TOOL, "cli preset");
+    assert_eq(str_eq_cstr(profile_seccomp_mode(cli), "basic"), 1, "cli seccomp basic");
+    assert_eq(nr_enabled(profile_network(cli)), 0, "cli network off");
+    assert_eq(profile_allow_process_spawn(cli), 1, "cli spawn");
+    assert_eq(profile_max_memory_mb(cli), 256, "cli 256 MB");
+    assert_eq(vec_len(profile_landlock_rules(cli)), 2, "cli 2 rules");
+    assert_eq(str_len(validate_profile(cli)), 0, "cli validates");
+    assert_eq(str_eq_cstr(profile_seccomp_mode(cu), "basic"), 1, "custom seccomp basic");
+    assert_eq(profile_max_memory_mb(cu), 256, "custom 256 MB");
+    assert_eq(nr_enabled(profile_network(cu)), 0, "custom network off");
+    assert_eq(profile_allow_process_spawn(cu), 0, "custom no spawn");
+    # GPU: network on (Rust allows_huggingface), the exact host list and rule list
+    assert_eq(nr_enabled(profile_network(gpu)), 1, "gpu network on");
+    var gh = nr_hosts(profile_network(gpu));
+    assert_eq(vec_len(gh), 6, "gpu 6 hosts");
+    assert_eq(str_eq_cstr(vec_get(gh, 0), "localhost"), 1, "gpu host 0 localhost");
+    assert_eq(str_eq_cstr(vec_get(gh, 1), "127.0.0.1"), 1, "gpu host 1 127.0.0.1");
+    assert_eq(str_eq_cstr(vec_get(gh, 2), "huggingface.co"), 1, "gpu host 2 huggingface.co");
+    assert_eq(str_eq_cstr(vec_get(gh, 3), "*.huggingface.co"), 1, "gpu host 3 *.huggingface.co");
+    assert_eq(str_eq_cstr(vec_get(gh, 4), "hf.co"), 1, "gpu host 4 hf.co");
+    assert_eq(str_eq_cstr(vec_get(gh, 5), "*.hf.co"), 1, "gpu host 5 *.hf.co");
+    assert_eq(vec_len(profile_landlock_rules(gpu)), 13, "gpu 13 rules");
+    assert_eq(profile_has_rule(gpu, str_from("/dev/kfd"), str_from("rw")), 1, "gpu /dev/kfd rw");
+    assert_eq(profile_has_rule(gpu, str_from("/opt/rocm"), str_from("ro")), 1, "gpu /opt/rocm ro");
+    assert_eq(profile_has_rule(gpu, str_from("/usr/lib/x86_64-linux-gnu"), str_from("ro")), 1, "gpu x86_64 libs ro");
+    assert_eq(str_eq_cstr(profile_seccomp_mode(gpu), "desktop"), 1, "gpu seccomp desktop");
+    assert_eq(str_len(validate_profile(gpu)), 0, "gpu validates");
+
+    # every preset has its Rust Display name, and its JSON name round-trips
+    assert_eq(str_eq_cstr(sandbox_preset_name(SP_PHOTO_EDITOR), "photo-editor"), 1, "name photo-editor");
+    assert_eq(str_eq_cstr(sandbox_preset_name(SP_PRODUCTIVITY), "productivity-app"), 1, "name productivity-app");
+    assert_eq(str_eq_cstr(sandbox_preset_name(SP_BROWSER), "browser"), 1, "name browser");
+    assert_eq(str_eq_cstr(sandbox_preset_name(SP_GAME), "game-app"), 1, "name game-app");
+    assert_eq(str_eq_cstr(sandbox_preset_name(SP_CLI_TOOL), "cli-tool"), 1, "name cli-tool");
+    assert_eq(str_eq_cstr(sandbox_preset_name(SP_GPU_COMPUTE), "gpu-compute"), 1, "name gpu-compute");
+    assert_eq(str_eq_cstr(sandbox_preset_name(SP_CUSTOM), "custom"), 1, "name custom");
+    var jp = 0;
+    var jrt = 0;
+    while (jp < 7) {
+        if (sandbox_preset_json_parse(sandbox_preset_json_name(jp)) == jp) { jrt = jrt + 1; }
+        jp = jp + 1;
+    }
+    assert_eq(jrt, 7, "every preset's JSON name round-trips");
+    var grt = profile_from_json(profile_to_json(gpu));
+    assert_eq(vec_len(nr_hosts(profile_network(grt))), 6, "gpu json: hosts survive");
+    assert_eq(str_eq_cstr(ll_path(vec_get(profile_landlock_rules(grt), 12)), "/usr/lib/x86_64-linux-gnu"), 1,
+      "gpu json: rule order survives");
+    assert_eq(profile_allow_process_spawn(grt), 1, "gpu json: spawn survives");
+
+    # validation rule order and edges (Rust validate_profile)
+    var vstrict = build_photis_nadi_profile();
+    store64(vstrict + 16, str_from("strict"));
+    assert_eq(str_len(validate_profile(vstrict)), 0, "seccomp strict accepted");
+    var vupper = build_photis_nadi_profile();
+    store64(vec_get(profile_landlock_rules(vupper), 0) + 8, str_from("RW"));
+    assert_neq(str_len(validate_profile(vupper)), 0, "access is case-sensitive: RW rejected");
+    var vidx = build_photis_nadi_profile();
+    store64(vec_get(profile_landlock_rules(vidx), 2) + 8, str_from("x"));
+    assert_neq(str_len(validate_profile(vidx)), 0, "bad access on the last rule rejected");
+    var vord = build_photis_nadi_profile();
+    store64(vec_get(profile_landlock_rules(vord), 0), str_from(""));
+    store64(vec_get(profile_landlock_rules(vord), 1) + 8, str_from("x"));
+    assert_eq(str_contains(validate_profile(vord), str_from("access")), 1,
+      "access is checked across all rules before paths (Rust order)");
     return 0;
 }
 

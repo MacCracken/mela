@@ -1,33 +1,35 @@
 # rust-old parity record
 
-> Audited 2026-10-14 against v1.1.0 (cyrius 6.7.9). D1–D5 fixed in v1.1.1, D6–D12 in v1.1.3. This file is the record that outlives
+> Audited 2026-10-14 against v1.1.0 (cyrius 6.7.9). D1–D5 fixed in v1.1.1, D6–D12 in v1.1.3; Rust test
+> coverage closed in v1.1.4. This file is the record that outlives
 > `rust-old/`: once the oracle is deleted, every Rust behavior mela chose to keep, drop or change
 > must be written here or in an ADR. Work items live in [`roadmap.md`](roadmap.md) § v1.1.x.
 
 ## Summary
 
-The port reproduces the Rust surface, and in several places is stricter than Rust. But
-`rust-old/` cannot be deleted yet. The suite misses 30 of Rust's 204 tests (22 partial, 8
-uncovered). v1.1.1 covered `keyring_load_malformed_file`; v1.1.3 covered `default_constants` and
-`storage_quota`. The review also found defects in mela's own code and behavior changes that no ADR
-records.
+The port reproduces the Rust surface, and in several places is stricter than Rust. Every one of
+Rust's 204 tests is now covered by the Cyrius suite (202) or recorded as not applicable (2, below);
+all twelve defects the review found are fixed. What still stands between mela and deleting
+`rust-old/` is the list of behavior changes with no ADR (v1.1.5).
 
-| Rust module → Cyrius | Rust tests | Covered | Partial | Not covered | Verdict |
-|---|---:|---:|---:|---:|---|
-| `lib.rs` → `category` / `manifest` / `depgraph` | 23 | 22 | 0 | 1 | ready after tests + ADRs |
-| `trust.rs` → `trust` | 23 | 21 | 2 | 0 | ready after tests |
-| `transparency.rs` → `transparency` | 15 | 15 | 0 | 0 | ready after chain-check tests |
-| `local_registry.rs` → `local_registry` + `pipeline` | 19 | 17 | 1 | 1 | ready after tests |
-| `remote_client.rs` → `remote_client` | 20 | 20 | 0 | 0 | ready |
-| `sandbox_profiles.rs` → `sandbox_profiles` | 25 | 17 | 7 | 1 | ready after `data_dir` fix |
-| `ratings.rs` → `ratings` | 43 | 33 | 8 | 2 | ready after bounds fix + ADR |
-| `flutter_packaging.rs` → `flutter_packaging` | 21 | 15 | 4 | 2 | ready after tests + ADR |
-| `flutter_agpkg.rs` → `flutter_agpkg` | 15 | 14 | 0 | 1 | ready after reader fix + size policy |
-| **Total** | **204** | **174** | **22** | **8** | |
+| Rust module → Cyrius | Rust tests | Covered | N/A | Closed in |
+|---|---:|---:|---:|---|
+| `lib.rs` → `category` / `manifest` / `depgraph` | 23 | 23 | 0 | v1.1.4 |
+| `trust.rs` → `trust` | 23 | 23 | 0 | v1.1.1, v1.1.4 |
+| `transparency.rs` → `transparency` | 15 | 15 | 0 | (audit) |
+| `local_registry.rs` → `local_registry` + `pipeline` | 19 | 19 | 0 | v1.1.3, v1.1.4 |
+| `remote_client.rs` → `remote_client` | 20 | 20 | 0 | v1.1.3 |
+| `sandbox_profiles.rs` → `sandbox_profiles` | 25 | 25 | 0 | v1.1.4 |
+| `ratings.rs` → `ratings` | 43 | 42 | 1 | v1.1.4 |
+| `flutter_packaging.rs` → `flutter_packaging` | 21 | 20 | 1 | v1.1.4 |
+| `flutter_agpkg.rs` → `flutter_agpkg` | 15 | 15 | 0 | v1.1.4 |
+| **Total** | **204** | **202** | **2** | |
 
-Reference coverage (`cyrius coverage`) was 247 of 326 `src/` fns (75%) at the audit, and is
-253 of 328 (77%) at v1.1.3. That counts functions
-named in a test, not lines executed.
+At the audit (v1.1.0) the suite covered 171 of these, 23 partially and 10 not at all.
+
+Reference coverage (`cyrius coverage`): 247 of 326 `src/` fns (75%) at the audit, 253 of 328
+(77%) at v1.1.3, 291 of 328 (88%) at v1.1.4. That counts functions named in a test, not lines
+executed. The remaining unreferenced functions are internal helpers reached through their callers.
 
 ## Defects found
 
@@ -74,7 +76,7 @@ stays possible once `rust-old/` is gone.
 - **Ratings wire format.** Cyrius writes `{pkg:{agent:Rating}}` with an integer `created_at`.
   Rust wrote `{"ratings":{…}}` with RFC 3339 strings. A Rust-written file loads silently as
   garbage, with no error. `RatingFilter` and `DisplayBackend` have no codec; no consumer reads
-  either.
+  either (their Rust tests are recorded N/A under Coverage).
 - **Keyring loading.** Validation is per element (Rust skipped a whole file if any element was
   malformed), a read is capped at 1 MiB, and a file named exactly `.json` is loaded.
 - **Transparency hash preimage.** A decimal epoch followed by the package name is ambiguous
@@ -94,82 +96,33 @@ stays possible once `rust-old/` is gone.
 - `pipeline_install` has no keyring-less bypass and adds a SHA-256 digest gate.
 - The packer builds in memory and writes once, so no partial tarball is left on a read error.
 
-## Coverage to add
+## Coverage (closed in v1.1.4)
 
-Grouped by `tests/mela.tcyr` group. The Rust tests named here are the 33 partial or uncovered.
+Every Rust test listed as partial or uncovered at the audit now has its assertions in
+`tests/mela.tcyr`, in the matching group, along with the untested behaviors the review called out:
 
-- **category / semver / manifest / json:**
-  - Rust `category_all`: assert `CAT_COUNT == 6`, and the name/parse round trip for all six
-    categories.
-  - Semver edge inputs: `1.0.0-`, `-1.0.0`, `1..0`, `+1.0.0`, overflow.
-  - Name length 128 vs 129.
-  - Round-trip `dependencies`, `screenshots`, `changelog`, `min_agnos_version` and `homepage`.
-- **depgraph:**
-  - Unknown dep ignored by `resolve`; self-loop; 3-cycle path.
-  - Re-adding a node overwrites it.
-  - Full diamond ordering.
-- **trust / keyversion / keyring:**
-  - Rust `generate_keypair`: the random path.
-  - Rust `hex_roundtrip`: all bytes.
-  - Rust `keyring_load_malformed_file`.
-  - `sig_len` 63 and 65; bit flips in R and S; S + L; small-order pk.
-  - Inclusive validity-window edges.
-  - Rotation under a single key id.
-- **transparency:** exercise the link, sequence and entry-0 checks on their own. Today every
-  tamper test breaks the entry hash first, so deleting any of the three checks leaves the suite
-  green. Also: a reordered or truncated import, `{}` / `[]`, and a timestamp that changes the
-  hash.
-- **registry / persist / uninstall-fs / pipeline:**
-  - Rust `storage_quota`: positive control and boundary.
-  - Rust `count_files`.
-  - Rust `install_with_missing_signature_file`.
-  - Search by description and case.
-  - List order.
-  - A corrupt index.
-  - Symlink-safe uninstall (D2).
-  - **An on-disk end-to-end install.** Every `pipeline` test uses `registry_in_memory`, so files
-    are never shown to land under `packages/<name>`.
-  - Upgrade through the pipeline.
-  - A signed bundle carrying an invalid manifest.
-- **remote / remote-client:**
-  - Rust `default_constants`.
-  - `validate_path_segment` of `a..b` and `...`.
-  - `url_encode` of `/`, `+`, `~`.
-  - The offline cache **hit** paths.
-  - Trimming multiple trailing slashes.
-- **sandbox:**
-  - The `data_dir` rule for every preset (D6).
-  - Full rule lists, host lists and memory for productivity, browser, game, CLI and GPU.
-  - Rust `aequi_profile_seccomp_and_memory`.
-  - All 7 preset names and JSON round trips.
-  - `strict` seccomp, upper-case access, a bad rule at index > 0, negative memory.
-- **ratings / ratings-persist:**
-  - Rust `stats_all_same_score`, `stats_single_rating`, `stats_distribution`,
-    `filter_by_*`, `review_exactly_max_length`, `multiple_packages_independence`.
-  - Non-integer averages and their ranking.
-  - Filter boundaries.
-  - A rejected re-rating leaves the store unchanged.
-  - Out-of-range scores on load (D3).
-  - Rust `filter_serialization`: N/A or port the codec.
-- **fpackaging / agpkg / agpkg-archive / hardening / extraction:**
-  - Rust `validate_bad_dart_version`.
-  - The rest of `build_launch_config_wayland`.
-  - `FLUTTER_ENGINE_SWITCH_GL`.
-  - Rust `manifest_serializes_to_json`.
-  - Rust `display_backend_serde_roundtrip`: N/A or port.
-  - AOT and engine precedence.
-  - Exact entry count.
-  - Packed `manifest.json` / `sandbox.json` re-parse.
-  - Nested assets (D11).
-  - A >8 MiB file fails closed (D8).
-  - Typeflag `1`/`2`/`5` entries rejected.
-  - Crafted size fields (D1).
-  - Duplicate names (D12).
-- **fuzz:** *(done v1.1.1)* the seeds never passed the gzip CRC, so the tar parser had never
-  been fuzzed, which is why D1 survived. The harness now runs `_tar_scan` on raw input and
-  mutates a real archive's header.
-- **Independent format oracle:** *(done v1.1.2)* the GNU `tar` cross-check from ADR-0008 is now
-  `scripts/tar-crosscheck.sh` and runs in CI.
+- **Chain checks on their own.** The transparency link, sequence and entry-0 checks are each
+  tampered with the entry hash recomputed, so only that check can catch it. Disabling any one of
+  the three in `tlog_verify_chain` fails exactly its test (mutation-checked, v1.1.4).
+- **Signature edge cases.** Lengths 63 and 65, bit flips in R and in S, S + L (the malleable
+  second encoding), and an identity public key with R = identity, S = 0, which a non-strict
+  verifier accepts. All rejected.
+- **Keyring.** Rotation under one key_id, the inclusive validity-window edges, uppercase hex.
+- **depgraph.** Self-loop, 3-cycle, full diamond ordering, re-add, unknown and duplicate deps,
+  sorted roots.
+- **Codec fields.** Search results, publish responses, update records, transparency entries,
+  manifests (every field) and packaging configs all round-trip field by field.
+- **Fuzzing and format.** The tar parser is fuzzed directly (v1.1.1), and GNU tar cross-checks
+  the bundle format in CI (v1.1.2).
+
+### Not applicable (2)
+
+- **`ratings.rs` `test_filter_serialization`** and **`flutter_packaging.rs`
+  `test_display_backend_serde_roundtrip`.** Both tested serde derives on types that nothing ever
+  serializes: a `RatingFilter` is built and applied in-process, and a `DisplayBackend` is chosen
+  at launch. No Rust code read or wrote either as JSON, and no mela consumer does. Porting a codec
+  only to test it would add unused API surface. If a consumer ever needs either on the wire, the
+  codec and its test come with that need.
 
 ## Retirement checklist
 
@@ -177,9 +130,10 @@ Grouped by `tests/mela.tcyr` group. The Rust tests named here are the 33 partial
 
 - [x] D1–D12 fixed, each with a regression test. *(D1–D5: v1.1.1; D6–D12: v1.1.3.)*
 - [ ] Each "behavior change with no ADR" above is either matched to Rust or recorded in an ADR.
-- [ ] The 33 partial or uncovered Rust tests are covered, or marked N/A here with the reason.
+- [x] The 33 partial or uncovered Rust tests are covered, or marked N/A here with the reason. *(v1.1.4:
+  202 covered, 2 N/A.)*
 - [x] CI runs `cyrius test`, `cyrius fuzz` and the GNU-tar cross-check. *(v1.1.2)*
-- [ ] `cyrius coverage --min` is gated in CI at the level reached. *(76% in v1.1.2, 77% in v1.1.3;
-  raise it as v1.1.4 lands)*
+- [x] `cyrius coverage --min` is gated in CI at the level reached. *(76% in v1.1.2, 77% in v1.1.3,
+  88% in v1.1.4.)*
 - [ ] The CLAUDE.md "cross-check against `rust-old/`" principle is replaced by "the parity suite
   and this record are the oracle".

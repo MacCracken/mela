@@ -54,7 +54,7 @@ jobs:
       - name: Coverage floor
         # Reference coverage of src/ fns named by the suite. Raise --min as the
         # v1.1.x coverage catch-up lands; never lower it.
-        run: cyrius coverage --min 77
+        run: cyrius coverage --min 88
 
       - name: GNU tar cross-check (ADR-0008)
         # The independent format oracle: mela <-> GNU tar, both directions.

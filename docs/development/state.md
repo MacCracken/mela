@@ -5,6 +5,10 @@
 
 ## Version
 
+**1.1.4** — Rust test coverage closed (2026-10-15): 202 of rust-old's 204 tests covered, 2 N/A with
+the reason recorded; chain checks, signature edge cases, rotation and codec fields asserted.
+894/894; coverage floor 88%.
+
 **1.1.3** — audit defects D6–D12 fixed (2026-10-15): artifacts stream with Rust's timeouts,
 redirects, User-Agent and a 100 MiB cap; publish sends its signature; sandbox presets get their
 data dir; the packer fails instead of truncating and walks assets recursively; install extracts
@@ -98,7 +102,7 @@ remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once 
 
 ## Tests
 
-**626/626** tests green (`tests/mela.tcyr` — groups across the 9 modules, plus `pipeline`
+**894/894** tests green (`tests/mela.tcyr` — groups across the 9 modules, plus `pipeline`
 (end-to-end), `hardening` (zip-slip), `tar-reader` (v1.1.1: checksum, strict octal, bounds,
 duplicate names, the D1 crash input), `install-txn` (v1.1.3: fail-closed index, save rollback), `transport` (HTTP logic), `extraction` (on-disk unpack),
 `keyring-load` (disk `load()` + `KeyVersion` JSON round-trip), and `registry-uninstall-fs` (files
@@ -143,12 +147,12 @@ Direct (declared in `cyrius.cyml`):
 
 See [`roadmap.md`](roadmap.md). **v1.1.x** works the 2026-10-14 `rust-old/` parity audit
 ([`rust-parity.md`](rust-parity.md)):
-- Rust tests: 174 of 204 covered, 22 partial, 8 not covered.
-- `cyrius coverage`: 77% of `src/` fns referenced (253/328; the CI floor).
-- All twelve defects are fixed: D1–D5 in v1.1.1, D6–D12 in v1.1.3. What remains before
-  `rust-old/` can be deleted is coverage (v1.1.4), the divergence ADRs (v1.1.5) and the
-  retirement (v1.1.6).
-- CI runs test, fuzz, bench, a 77% coverage floor, the GNU tar cross-check and a live transport
+- Rust tests: 202 of 204 covered, 2 N/A (no consumer of either codec).
+- `cyrius coverage`: 88% of `src/` fns referenced (291/328; the CI floor).
+- All twelve defects are fixed (v1.1.1, v1.1.3) and Rust test coverage is closed (v1.1.4). What
+  remains before `rust-old/` can be deleted is the divergence ADRs (v1.1.5), then the retirement
+  (v1.1.6).
+- CI runs test, fuzz, bench, an 88% coverage floor, the GNU tar cross-check and a live transport
   check.
 
 The **v1.x** backlog maps large-bundle support, hardening residuals, API and build hygiene,

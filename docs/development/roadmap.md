@@ -39,20 +39,7 @@ v1.1.2 shipped the CI gate: `deps --locked`, test, fuzz, bench, `coverage --min 
 GNU tar cross-check (`scripts/tar-crosscheck.sh`).
 v1.1.3 shipped the correctness group, D6–D12 (ADR-0012), plus a live transport check in CI. All
 twelve audit defects are now fixed.
-
-### v1.1.4 — Coverage catch-up
-
-- Close the 22 partial and 8 uncovered Rust tests, or mark each N/A in `rust-parity.md` with the
-  reason. `RatingFilter` / `DisplayBackend` codecs have no consumer, so they are N/A candidates.
-- Add the untested-behavior assertions listed per group in `rust-parity.md` § Coverage to add.
-  The ones that matter most for the trust boundary:
-  - The transparency link, sequence and entry-0 checks, each exercised on its own. Today every
-    tamper test breaks the entry hash first.
-  - An **on-disk** end-to-end `pipeline_install`, with files under `packages/<name>`, reopen, and
-    uninstall.
-  - Signature edge cases: `sig_len` 63 / 65, bit flips in R or S, S + L, small-order key.
-  - Keyring rotation and inclusive validity edges.
-- Raise the `cyrius coverage --min` gate in `ci.yml` (77 at v1.1.3) to the level reached.
+v1.1.4 closed Rust test coverage: 202 of 204 covered, 2 N/A; coverage floor 88%.
 
 ### v1.1.5 — Decide the unrecorded divergences
 
