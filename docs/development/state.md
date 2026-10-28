@@ -5,6 +5,10 @@
 
 ## Version
 
+**1.2.0** — cyrius 6.7.18 (2026-10-28). agnostik 2.0.0 (its accessor rename: two calls in
+`src/manifest.cyr`); sigil 3.13.15 / sankoch 2.8.9 / sandhi 1.13.7 from the stdlib. `dist/mela.cyr`
+now needs agnostik ≥ 2.0.0 in the consumer. 979/979; builds for agnos and aarch64.
+
 **1.1.6** — `rust-old/` retired (2026-10-15): the Rust oracle is deleted; the parity suite,
 `rust-parity.md` and ADR-0011/0012/0013 are the oracle. The Rust-vs-Cyrius benchmark comparison is
 filled in from the Rust original before its deletion. v1.1.x is complete.
@@ -65,7 +69,7 @@ remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once 
 
 ## Toolchain
 
-- **Cyrius pin**: `6.7.9` (in `cyrius.cyml [package].cyrius`). `lib/` is the full 6.7.9 stdlib
+- **Cyrius pin**: `6.7.18` (in `cyrius.cyml [package].cyrius`). `lib/` is the full 6.7.18 stdlib
   snapshot (`cyrius lib sync --full`) plus the agnostik bundle; `cyrius deps --locked` passes.
 
 ## Source
@@ -132,14 +136,15 @@ Direct (declared in `cyrius.cyml`):
   fnptr, trait, bayan (JSON codec), chrono, fs, freelist, slice, process, sakshi, ct, keccak,
   thread, thread_local, random, bench, net, async, atomic, mmap, dynlib, fdlopen, regression,
   http, tls, ws, plus the folded stdlib bundles:
-  - **sigil** (3.13.11) — Ed25519 + SHA-256 + hex (trust gate).
-  - **sankoch** (2.8.3) — gzip/deflate/lz4 (the `.agnos-agent` packer; tar is hand-rolled
+  - **sigil** (3.13.15) — Ed25519 + SHA-256 + hex (trust gate).
+  - **sankoch** (2.8.9) — gzip/deflate/lz4 (the `.agnos-agent` packer; tar is hand-rolled
     ustar, ADR-0008).
-  - **sandhi** (1.10.9) — HTTP/HTTPS client (DNS resolver + TLS) backing the `remote_client`
+  - **sandhi** (1.13.7) — HTTP/HTTPS client (DNS resolver + TLS) backing the `remote_client`
     transport (ADR-0006).
-- **agnostik** (`dist/agnostik.cyr`, tag 1.12.0) — shared-types crate; supplies the `AgentManifest`.
+- **agnostik** (`dist/agnostik.cyr`, tag 2.0.0) — shared-types crate; supplies the `AgentManifest`
+  (2.x accessor names, `AgentManifest_<field>`). A consumer of `dist/mela.cyr` needs agnostik ≥ 2.0.0.
 - `dist/mela.deps` (consumer-facing sidecar) lists the stdlib leaves the bundle needs:
-  thread_local, sigil, fs, sandhi, sankoch.
+  thread_local, sigil, fs, sandhi, sankoch (unicode comes in through sigil → bayan).
 
 ## Consumers
 

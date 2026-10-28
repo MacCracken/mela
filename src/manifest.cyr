@@ -5,7 +5,7 @@
 # hand-written JSON codec (wire format pinned in docs/adr/0001).
 #
 # Strings are the stdlib `Str` fat-pointer ({data; len}) to interop with
-# agnostik's AgentManifest (amanifest_name / _version / _description), which the
+# agnostik's AgentManifest (AgentManifest_name / _version / _description), which the
 # manifest flattens. Structs are 8-byte fields via load64/store64 at offsets.
 
 # ---------------------------------------------------------------------------
@@ -163,8 +163,8 @@ fn man_set_changelog(m, v: Str)         { store64(m + 48, v); return 0; }
 fn man_set_min_agnos_version(m, v: Str) { store64(m + 56, v); return 0; }
 
 # Convenience: the flattened agent identity (off agnostik's AgentManifest).
-fn man_name(m): Str        { return amanifest_name(man_agent(m)); }
-fn man_description(m): Str { return amanifest_description(man_agent(m)); }
+fn man_name(m): Str        { return AgentManifest_name(man_agent(m)); }
+fn man_description(m): Str { return AgentManifest_description(man_agent(m)); }
 
 # True (1) if `name` contains any char outside [a-z], [0-9], '-'. Mirrors the
 # Rust `chars().all(|c| is_ascii_lowercase || is_ascii_digit || c == '-')`.

@@ -1,9 +1,9 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-10-15 (v1.1.6) · Live status: [`state.md`](state.md) · History:
+> **Last Updated**: 2026-10-28 (v1.2.0) · Live status: [`state.md`](state.md) · History:
 > [`../../CHANGELOG.md`](../../CHANGELOG.md) · Parity record: [`rust-parity.md`](rust-parity.md)
 >
-> Open work only. Shipped milestones (v0.1.0 port scaffold → v1.0.0 release → v1.1.6) are
+> Open work only. Shipped milestones (v0.1.0 port scaffold → v1.0.0 release → v1.2.0) are
 > recorded in the CHANGELOG, not here. **v1.1.x** — the 2026-10-14 parity audit's fixes, the
 > coverage catch-up, the divergence ADRs and the retirement of `rust-old/` — is complete
 > (CHANGELOG 1.1.1–1.1.6). **v1.x** maps the backlog. Each item is self-contained, so an agent
@@ -32,7 +32,13 @@
 Ordered by value to the trust boundary. Version numbers are a plan, not a promise. Re-sequence
 here first when something lands early.
 
-### v1.2.0 — Large bundles
+**Re-sequenced at v1.2.0 (2026-10-28):** v1.2.0 shipped as the cyrius 6.7.18 / agnostik 2.0.0
+bump, so each milestone below moved up one minor. ADR-0008, ADR-0012, ADR-0013, the ADR index,
+[`rust-parity.md`](rust-parity.md) and two comments in `src/flutter_agpkg.cyr` still use the old
+numbers. Read their "v1.2.0" as Large bundles (now v1.3.0) and their "v1.3.0" as Hardening
+residuals (now v1.4.0).
+
+### v1.3.0 — Large bundles
 
 Real Flutter engines are tens of MB.
 
@@ -45,7 +51,7 @@ Real Flutter engines are tens of MB.
   explicitly. No silent truncation.
 - Count extracted size toward the quota (Rust parity), once v1.1.5's ADR decides.
 
-### v1.3.0 — Hardening residuals
+### v1.4.0 — Hardening residuals
 
 - **Extraction confinement:** create every output with `O_NOFOLLOW`, or check the resolved path
   stays under the destination. Pre-existing symlinks in an install dir must not redirect writes.
@@ -57,7 +63,7 @@ Real Flutter engines are tens of MB.
 - **Transparency hash v2:** an unambiguous preimage with length prefixes or separators. It must
   be versioned, so v1 logs still verify on import.
 
-### v1.4.0 — API and build hygiene
+### v1.5.0 — API and build hygiene
 
 - Commit a `cyrius api-surface --scope=project` snapshot and gate CI on it. This turns the
   [`../api/`](../api/) freeze into a check.
@@ -66,7 +72,7 @@ Real Flutter engines are tens of MB.
 - Move `assert` / `bench` to `[test] stdlib` (cyrius 6.7.6), so they leave the build's stdlib
   list.
 
-### v1.5.0 — Targets beyond x86_64 Linux
+### v1.6.0 — Targets beyond x86_64 Linux
 
 - **aarch64:** builds today. Run the suite under qemu-user in CI (agnostik's precedent).
 - **agnos:** builds today (v1.0.5 routed filesystem calls through `xunlink` / `xrmdir` /

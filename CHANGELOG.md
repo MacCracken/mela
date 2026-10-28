@@ -4,6 +4,85 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
+## [1.2.0] - 2026-10-28
+
+**cyrius 6.7.9 → 6.7.18, agnostik 1.12.0 → 2.0.0.** `cyrius build` OK (3,616,744 B, was 3,380,536).
+979 passed / 0 failed; fuzz 1 / 0; bench 1 / 0; coverage 88% (292/330). The GNU tar cross-check and
+the live transport check pass, and `--agnos` / `--aarch64` build. The only `src/` change is
+agnostik 2.0.0's accessor rename (two calls) and `MELA_VERSION`.
+
+### Breaking — `dist/mela.cyr` needs agnostik 2.0.0
+
+The bundle now calls agnostik's 2.x accessor names, so a consumer that includes it must have
+agnostik **2.0.0 or later** in scope. On agnostik 1.x it fails to compile (`AgentManifest_name` is
+undefined). mela's own public API is unchanged.
+
+**Migration:** move the consumer's `[deps.agnostik]` to `tag = "2.0.0"` and run agnostik's
+`scripts/migrate-2.0.0.sh` over its sources (agnostik's `docs/migration/` has the full rename
+map). ADR-0002's `amanifest_name` / `amanifest_version` are the 1.x spellings of
+`AgentManifest_name` / `AgentManifest_version`.
+
+### Changed — deps on the 6.7.18 line
+
+| dep | was | now |
+|---|---|---|
+| agnostik | 1.12.0 | **2.0.0** (git; accessors renamed `<Struct>_<field>`, nothing removed) |
+| sigil | 3.13.11 | **3.13.15** (stdlib) |
+| sankoch | 2.8.3 | **2.8.9** (stdlib) |
+| sandhi | 1.10.9 | **1.13.7** (stdlib) |
+
+- **lib/:** `lib/agnostik.cyr` is byte-identical to agnostik 2.0.0's `dist/` (tag commit `e6d33aa`).
+  Every stdlib file in `lib/` is byte-identical to `~/.cyrius/versions/6.7.18/lib`, the same file
+  set with nothing left over (`cyrius lib sync --full --relock`).
+- **cyrius.lock:** it now pins only agnostik 2.0.0's commit; the stale 1.7.1 and 1.12.0 pins are
+  gone. `cyrius deps --locked` passes.
+
+### Changed — agnostik 2.0.0 accessor rename
+
+agnostik's `scripts/migrate-2.0.0.sh` rewrote `src/manifest.cyr`:
+- `man_name` / `man_description` now call `AgentManifest_name` / `AgentManifest_description`
+  (were `amanifest_*`);
+- the header comment uses the new names.
+
+No mela identifier collided with an old accessor name. AgentManifest's layout is unchanged in 2.0.0
+(description still at +8, which `mela_manifest_new` and the test helper write directly).
+
+### Changed — `dist/mela.deps` drops `unicode`
+
+In 6.7.18 sigil includes bayan, which includes the unicode modules. `cyrius distlib` therefore
+derives `unicode` as covered by `sigil` and drops it from the sidecar and the bundle's `Requires`
+includes. Its compile check passes. The remaining leaves are thread_local, sigil, fs, sandhi and
+sankoch.
+
+### Build — one warning fewer
+
+- **Gone:** sigil's "array local over the per-fn frame budget" warning.
+- **Static data:** 475,168 → 172,960 B.
+- **Still there:** the three `src/` "assigning non-pointer to typed pointer" warnings, as before
+  (roadmap v1.5.0). No new warning, deprecated-call warning included.
+
+### Verified — hot paths, no regression
+
+`cyrius bench`, medians of three runs on the 6.7.18 build:
+
+| Hot path | 1.1.6 recorded | 1.2.0 |
+|---|---|---|
+| `registry_get` | 70 ns | 66 ns |
+| `manifest_validate` | 168 ns | 161 ns |
+| `sha256_hash` | 816 ns | 759 ns |
+| `agpkg_inspect` | 110.1 µs | 111.7 µs |
+| `ed25519_verify` | 5.50 ms | 5.12 ms |
+
+The runs were not alternated with the old toolchain, so they show only that nothing regressed.
+
+### Docs
+
+- **Roadmap re-sequenced:** this release takes v1.2.0, so each planned milestone moves up one minor.
+  Large bundles is now v1.3.0, hardening residuals v1.4.0, API and build hygiene v1.5.0, and
+  targets beyond x86_64 Linux v1.6.0. The ADRs, the parity record and two source comments keep the
+  old numbers; a roadmap note maps them.
+- **README:** the consumer snippet names agnostik 2.0.0.
+
 ## [1.1.6] - 2026-10-15
 
 **`rust-old/` retired: the end of the Rust oracle.** The 6,208-line Rust original was mela's parity
