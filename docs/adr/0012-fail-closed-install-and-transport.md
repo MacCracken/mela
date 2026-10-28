@@ -60,6 +60,8 @@ from decoding to install, packaging and transport.
 
   The asset walk recurses (D11; ADR-0008 corrected) and skips symlinks, as Rust did. The 8 MiB
   ceiling stays until streaming extraction (roadmap v1.2.0).
+  *Update (v1.3.0, ADR-0014):* the ceiling is 16 MiB, sankoch's gzip limit, until sankoch can
+  stream gzip. Names up to 256 bytes pack through the ustar prefix.
 - **Install** (`pipeline_install`):
   - Order: gates, then validation, then `registry_admits` (quota and validation, no side
     effects), then **extract**, then **record and save**, as in Rust.

@@ -120,9 +120,71 @@ fn fuzz_tar() {
     return 0;
 }
 
+# v1.3.0 (ADR-0014): the same sweep over an archive that uses every long-name
+# form: a PAX `x` record, a GNU `L` entry and a ustar prefix. Every byte of the
+# first 4,608 (five headers, the PAX records and the long name) takes the eight
+# values; a mutated header is scanned again with its checksum recomputed.
+fn fuzz_tar_ext() {
+    var pay = str_from("payload");
+    var rec = str_from("21 path=pax/name.txt\n");
+    var ln = str_from("gnu/long/name.txt");
+    var pre = str_cat(str_cat(_fz_rep(120, 112), str_from("/")), _fz_rep(30, 113));   # 151 bytes: uses the prefix
+    var es = vec_new();
+    vec_push(es, tentry_new(str_from("PaxHeaders/x"), str_data(rec), str_len(rec)));
+    vec_push(es, tentry_new(str_from("a"), str_data(pay), str_len(pay)));
+    vec_push(es, tentry_new(str_from("././@LongLink"), str_data(ln), str_len(ln)));
+    vec_push(es, tentry_new(str_from("b"), str_data(pay), str_len(pay)));
+    vec_push(es, tentry_new(pre, str_data(pay), str_len(pay)));
+    var base = _tar_build(es);
+    var blen = str_len(base);
+    var bb = str_data(base);
+    store8(bb + 156, 120);                 # 'x'
+    _tar_octal(bb, 148, 7, _tar_sum(bb, 0));
+    store8(bb + 155, 32);
+    store8(bb + 2048 + 156, 76);           # 'L'
+    _tar_octal(bb, 2048 + 148, 7, _tar_sum(bb, 2048));
+    store8(bb + 2048 + 155, 32);
+    var chk = _tar_scan(bb, blen);          # the base must read as the three long names
+    if (chk == 0) { println("fuzz_tar_ext: base archive does not parse"); return 1; }
+    if (vec_len(chk) != 3) { println("fuzz_tar_ext: base archive has the wrong entries"); return 1; }
+    if (str_eq_cstr(tentry_name(vec_get(chk, 0)), "pax/name.txt") == 0) { println("fuzz_tar_ext: PAX path"); return 1; }
+    if (str_eq_cstr(tentry_name(vec_get(chk, 1)), "gnu/long/name.txt") == 0) { println("fuzz_tar_ext: GNU L"); return 1; }
+    if (str_eq(tentry_name(vec_get(chk, 2)), pre) == 0) { println("fuzz_tar_ext: prefix"); return 1; }
+    var buf = alloc(blen);
+    var pos = 0;
+    while (pos < 4608) {
+        var hoff = (pos / 1024) * 1024;    # every header sits on a 1,024-byte boundary here
+        var is_hdr = 0;
+        if (pos - hoff < 512) { is_hdr = 1; }
+        var k = 0;
+        while (k < 8) {
+            memcpy(buf, bb, blen);
+            store8(buf + pos, _fz_val(k));
+            _tar_scan(buf, blen);
+            if (is_hdr == 1) {
+                _tar_octal(buf, hoff + 148, 7, _tar_sum(buf, hoff));
+                store8(buf + hoff + 155, 32);
+                store8(buf + pos, _fz_val(k));    # keep the mutation if it hit the chksum field
+                _tar_scan(buf, blen);
+            }
+            k = k + 1;
+        }
+        pos = pos + 1;
+    }
+    return 0;
+}
+
+fn _fz_rep(n, ch): Str {
+    var b = alloc(n + 1);
+    memset(b, ch, n);
+    store8(b + n, 0);
+    return str_new(b, n);
+}
+
 fn main() {
     alloc_init();
     fuzz_tar();
+    if (fuzz_tar_ext() != 0) { return 1; }
     # Smoke inputs (the fuzzer replaces these with mutations): valid, partial,
     # garbage, plus crypto-shaped blobs — all have to be survived.
     fuzz_main("{\"name\":\"x\",\"version\":\"1.0.0\",\"category\":\"Utility\"}",

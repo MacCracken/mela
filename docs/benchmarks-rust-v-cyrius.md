@@ -83,6 +83,7 @@ How the Rust side was built and measured:
   with the `flate2` and `tar` crates the Rust original packed with. Rust had no inspect function of
   its own. mela's inspector also decompresses into an 8 MiB working buffer on every call, where the
   Rust crates stream; the wide spread on the Cyrius row (min 73.5 µs, max 149.7 µs) comes from that.
+  (The buffer is 16 MiB since v1.3.0, sankoch's gzip ceiling; these figures predate that.)
 - **`ed25519_verify`** is `ed25519-dalek` against sigil. The gap is the one *Reading the numbers*
   above describes: a portable, constant-time, pure-Cyrius implementation with no assembly field
   arithmetic, against a tuned native library.

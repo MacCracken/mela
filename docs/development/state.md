@@ -5,6 +5,13 @@
 
 ## Version
 
+**1.3.0** — Large bundles, part one (2026-10-28, ADR-0014). Long names: the reader takes the
+ustar prefix, GNU `L` and PAX `path`, and the writer uses the prefix to 256 bytes. Files extract
+0755 or 0644 by the owner-execute bit, and the packer keeps a source's execute bit. A 100 MiB
+bundle cap is checked first; the quota is checked on both sizes before any write; the ceiling is
+16 MiB (sankoch's gzip limit; was 8); install inflates once. Streaming waits on sankoch (filed).
+1075/1075; coverage 89% (296/332).
+
 **1.2.0** — cyrius 6.7.18 (2026-10-28). agnostik 2.0.0 (its accessor rename: two calls in
 `src/manifest.cyr`); sigil 3.13.15 / sankoch 2.8.9 / sandhi 1.13.7 from the stdlib. `dist/mela.cyr`
 now needs agnostik ≥ 2.0.0 in the consumer. 979/979; builds for agnos and aarch64.
@@ -103,11 +110,14 @@ remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once 
     + `determine_backend` (pure).
   - `src/flutter_agpkg.cyr` — `PackFlutterConfig`, build-dir validation, `generate_manifest`/
     `generate_sandbox_profile`, and the `.agnos-agent` packer/inspector (`sankoch` gzip +
-    hand-rolled ustar, ADR-0008).
+    hand-rolled ustar, ADR-0008). The reader is a cursor (`_tar_cur_next`) that reads the ustar
+    prefix, GNU `L` and PAX records; extraction validates the whole archive, then writes each file
+    0755 or 0644 (ADR-0014).
   - `src/pipeline.cyr` — **end-to-end flow**: `pipeline_package` / `pipeline_publish` (sign +
     transparency log) / `pipeline_install` enforcing **both trust gates** (signature + digest),
     then **extracting the bundle to disk** under the install dir (ADR-0009, ADR-0005).
-    `agpkg_extract_to_dir` / `agpkg_read_entry` do the on-disk unpack.
+    `agpkg_extract_to_dir` / `agpkg_read_entry` do the on-disk unpack. Since v1.3.0 it refuses a
+    bundle over 100 MiB first, checks the quota on both sizes before any write, and inflates once.
   - `src/main.cyr` wires all twelve source modules.
 - **Packaged as a library**: `dist/mela.cyr` (`[lib]` + `cyrius distlib`, ADR-0010) — what ark
   consumes via `[deps.mela]`.
@@ -115,16 +125,19 @@ remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once 
 
 ## Tests
 
-**979/979** tests green (`tests/mela.tcyr` — groups across the 9 modules, plus `pipeline`
+**1075/1075** tests green (`tests/mela.tcyr` — groups across the 9 modules, plus `pipeline`
 (end-to-end), `hardening` (zip-slip), `tar-reader` (v1.1.1: checksum, strict octal, bounds,
 duplicate names, the D1 crash input), `install-txn` (v1.1.3: fail-closed index, save rollback), `strict-decode` (v1.1.5: serde rules,
-Unicode), `transport` (HTTP logic), `extraction` (on-disk unpack),
+Unicode), `long-names` / `file-modes` / `install-limits` (v1.3.0, ADR-0014), `transport` (HTTP
+logic), `extraction` (on-disk unpack),
 `keyring-load` (disk `load()` + `KeyVersion` JSON round-trip), and `registry-uninstall-fs` (files
 gone after uninstall)). `trust` has SHA-256 + RFC 8032 Ed25519 KAT vectors; `registry-persist`
 / `ratings-persist` do real on-disk round-trips; `agpkg-archive` packs + inspects a gzipped-ustar
 `.agnos-agent` (cross-validated against the system `tar` both directions); `pipeline` runs
 package→sign→log→verify→install and rejects tampered / digest-mismatch / untrusted / wrong-key.
-Fuzz harness at `tests/mela.fcyr` covers every external-data parser (survive arbitrary bytes).
+Fuzz harness at `tests/mela.fcyr` covers every external-data parser (survive arbitrary bytes),
+including a byte sweep over an archive with a PAX record, a GNU `L` entry and a ustar prefix
+(v1.3.0).
 Benchmarks at [`tests/mela.bcyr`](../../tests/mela.bcyr) (`cyrius bench`) /
 [`docs/benchmarks-rust-v-cyrius.md`](../benchmarks-rust-v-cyrius.md). `cyrius test` is the gate.
 
@@ -138,13 +151,15 @@ Direct (declared in `cyrius.cyml`):
   http, tls, ws, plus the folded stdlib bundles:
   - **sigil** (3.13.15) — Ed25519 + SHA-256 + hex (trust gate).
   - **sankoch** (2.8.9) — gzip/deflate/lz4 (the `.agnos-agent` packer; tar is hand-rolled
-    ustar, ADR-0008).
+    ustar, ADR-0008). Its gzip output ceiling (16 MiB) is mela's decompressed ceiling until it can
+    stream gzip (ADR-0014; filed in sankoch's `docs/development/issues/`).
   - **sandhi** (1.13.7) — HTTP/HTTPS client (DNS resolver + TLS) backing the `remote_client`
     transport (ADR-0006).
 - **agnostik** (`dist/agnostik.cyr`, tag 2.0.0) — shared-types crate; supplies the `AgentManifest`
   (2.x accessor names, `AgentManifest_<field>`). A consumer of `dist/mela.cyr` needs agnostik ≥ 2.0.0.
 - `dist/mela.deps` (consumer-facing sidecar) lists the stdlib leaves the bundle needs:
-  thread_local, sigil, fs, sandhi, sankoch (unicode comes in through sigil → bayan).
+  thread_local, sigil, fs, sandhi, sankoch, syscalls (v1.3.0: `sys_fchmod`, `STAT_MODE`).
+  unicode comes in through sigil → bayan.
 
 ## Consumers
 
@@ -163,7 +178,8 @@ Direct (declared in `cyrius.cyml`):
 See [`roadmap.md`](roadmap.md). **v1.1.x is complete**: the 2026-10-14 parity audit's twelve
 defects are fixed, 202 of the Rust original's 204 tests are covered (2 N/A), every divergence is
 decided (ADR-0013) and `rust-old/` is retired. CI runs test, fuzz, bench, an 88% coverage floor
-(292/330), the GNU tar cross-check and a live transport check.
+(296/332 at v1.3.0), the GNU tar cross-check and a live transport check.
 
-The **v1.x** backlog maps large-bundle support, hardening residuals, API and build hygiene,
-aarch64 and agnos runtime, and the unscheduled features (discovery, paid distribution).
+**v1.3.0** shipped Large bundles, part one. Part two (streaming, and bundles over 16 MiB) is
+blocked on sankoch. The **v1.x** backlog after it maps hardening residuals (v1.4.0), API and build
+hygiene, aarch64 and agnos runtime, and the unscheduled features (discovery, paid distribution).

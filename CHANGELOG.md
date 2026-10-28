@@ -4,6 +4,131 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
+## [1.3.0] - 2026-10-28
+
+**Large bundles, part one**
+([ADR-0014](docs/adr/0014-large-bundles-names-modes-limits.md)): long names, file modes, a 100 MiB
+bundle cap, the quota before any write, and a 16 MiB ceiling. Streaming extraction is blocked on
+sankoch and is filed there.
+
+**Gates:** 1075 passed / 0 failed (was 979); fuzz 1 / 0; bench 1 / 0; coverage 89% (296/332; the
+floor stays 88). The GNU tar cross-check (now with long names and modes both ways) and the live
+transport check pass, and `--agnos` / `--aarch64` build. `cyrius build` OK (3,624,984 B, +8,240).
+
+The maintainer chose three things on 2026-10-28:
+- **Scope:** ship what does not need sankoch now.
+- **Modes:** 0755 or 0644, not Rust's `mode & 0o777`.
+- **Long names:** support them, not reject them.
+
+### Breaking — what install accepts and writes
+
+- **Files with the owner-execute bit extract as 0755.** All others are 0644, as before. Header
+  bits are never copied: no setuid, setgid or sticky bit, and nothing group- or world-writable.
+  The mode is set with `fchmod` after the write, so an upgraded file takes it too.
+- **More archives are rejected outright.** `agpkg_*` return 0 (`-1` from `agpkg_extract_to_dir`)
+  and `pipeline_install` returns 0 when:
+  - a mode field is not strict octal;
+  - a PAX record is malformed, or a PAX `size` disagrees with its header;
+  - a global PAX record carries `path` or `size`;
+  - a long name is over 1,024 bytes, or has no entry after it;
+  - a GNU `L` / `K` or PAX `x` / `g` entry is over 64 KiB.
+- **Entries are named by their full name.** Names come from the ustar prefix, GNU `L` and PAX
+  `path`, so `agpkg_inspect` lists, and `agpkg_read_entry` matches, the full name. These entries
+  used to be read under their truncated 100-byte header name. A name ending in `/` is now skipped
+  as a directory.
+
+**Migration:** nothing for bundles mela packed. For a bundle built with another tool, its long
+entries now install under their real names. A file that must not be executable must not have the
+owner-execute bit in its header.
+
+### Added — long names (ADR-0014 §4)
+
+- **Reading:** the effective name is a PAX `path`, else a GNU `L` name, else ustar prefix + `/` +
+  name. The prefix counts only under the POSIX magic; GNU's own magic keeps other data there.
+  - Each record applies to the next header only.
+  - The absolute, `..` and duplicate checks apply to the effective name.
+  - `K` and the other PAX keys are read and ignored.
+- **Writing:** names of 101–256 bytes are split across the prefix and name fields at the last `/`
+  that fits, GNU tar's rule. A longer name, or a last component over 100 bytes, still fails the
+  pack. mela writes no `L` or `x` entries.
+- **Before this:** mela ignored the prefix field and the `L` / `x` records. A long-named entry from
+  GNU tar was read under its truncated header name.
+
+### Added — file modes (ADR-0014 §3)
+
+- **Packer:** a source file with any execute bit is packed 0755, otherwise 0644. `manifest.json`
+  and `sandbox.json` stay 0644, and uid, gid and mtime stay 0. A bundle is still byte-identical for
+  identical inputs, which a test checks.
+- **Entries:** `tentry_mode` / `tentry_set_mode` carry the mode; `tentry_new` defaults to 0644.
+
+### Added — size limits and the quota (ADR-0014 §1–2)
+
+- **`AGPKG_MAX_PACKAGE_SIZE` (100 MiB, Rust's `MAX_PACKAGE_SIZE`)** is checked first in
+  `pipeline_install`, before it gunzips, hashes or verifies anything. A test pins it equal to
+  `RC_DOWNLOAD_MAX_BYTES`. Under the 16 MiB ceiling no valid bundle reaches it, so no test can tell
+  it from a missing check yet. It is the guard that stays once the ceiling lifts.
+- **The quota is checked on the bundle size and the extracted size, both before extracting.**
+  Which installs succeed is unchanged: the extracted-size check already ran in `registry_install`,
+  only after the files were written. An upgrade refused there used to leave the new version's
+  files over the old ones, with the old version still recorded. Now it writes nothing, which a
+  test checks.
+- **`AGPKG_BUF_MAXLEN` is 16 MiB (was 8 MiB):** sankoch's gzip output ceiling. Measured: 16,777,216
+  bytes decode; one byte more returns `-ERR_OUTPUT_LIMIT`, whatever the buffer. A 9 MiB engine now
+  packs and installs (tested end to end, with its 0755 mode). Inputs and tars over 16 MiB still
+  fail the pack.
+- **New constants:** `AGPKG_NAME_MAX` (1,024) and `AGPKG_EXT_MAX` (64 KiB).
+
+### Changed — one inflate per install, and a tar cursor
+
+- **One inflate:** `pipeline_install` used to inflate the bundle three times (the manifest, the
+  payload size, the extraction). It now inflates once. On a 9 MiB tar (5.5 MB gzipped), best of 5:
+  the three inflates took **1,005 ms**, the one takes **334 ms**. The public `agpkg_*` functions
+  keep their signatures and still inflate once per call.
+- **Tar cursor:** the walker (`_tar_cur_next`) yields one entry at a time. Extraction validates the
+  whole archive in a first pass, then writes in a second. Once sankoch can stream gzip, each pass
+  becomes a streaming inflate feeding the same cursor.
+
+### Verified
+
+- **Tests:** `long-names` (prefix, `L`, PAX, precedence, the malformed cases, extraction under a
+  300-byte name), `file-modes` (header bits to disk, upgrade, packer modes, reproducibility) and
+  `install-limits` (cap, 9 MiB install, over-ceiling refusal, quota with no write).
+- **The 8 MiB assertions:** the three in `agpkg-archive` now assert the 16 MiB ceiling, under
+  ADR-0014.
+- **Mutations:** nine applied to the new code. Eight turn tests red; the ninth, removing the
+  100 MiB check, cannot until the ceiling lifts.
+- **Fuzz:** a byte sweep over an archive using all three long-name forms. Every byte of its first
+  4,608 takes eight boundary values, and a mutated header is rescanned with its checksum
+  recomputed.
+- **GNU tar cross-check:**
+  - mela → GNU tar: mela packs a 162-byte asset name and an executable engine; GNU tar lists and
+    extracts them byte-exact and sees 0755 / 0644.
+  - GNU tar → mela: gnu, ustar and pax archives with names of 150 bytes (all three formats) and
+    300 bytes (gnu, pax). mela reads them byte-exact and extracts 0750 as 0755 and 0600 as 0644.
+- **Bench:** `cyrius bench` medians of three: `agpkg_inspect` 113.5 µs (1.2.0: 111.7 µs);
+  `manifest_validate` 153 ns; `sha256_hash` 758 ns; `registry_get` 65 ns; `ed25519_verify`
+  5.10 ms. No regression.
+
+### Dist
+
+`dist/mela.deps` gains `syscalls` (`sys_fchmod`, `STAT_MODE`); `cyrius distlib --check` passes.
+
+### Filed — sankoch
+
+`docs/development/issues/2026-10-28-gzip-has-no-output-override-and-no-bounded-memory-inflate.md`
+in sankoch:
+- a gzip output override like zlib's `*_output_capped`;
+- a bounded-memory inflate, to be counted with bote's need at sankoch's planned 2.9.5.
+
+The roadmap parks streaming, bundles over 16 MiB and a streaming packer under *Blocked upstream*.
+
+### Docs
+
+- **ADR-0014** is new.
+- **ADR-0008, ADR-0012 and ADR-0013** carry amendment notes.
+- **Also updated:** the ADR index, the parity table (modes decided; package cap matched; quota
+  kept stricter), the API reference, the roadmap, state.md and the README's leaf list.
+
 ## [1.2.0] - 2026-10-28
 
 **cyrius 6.7.9 → 6.7.18, agnostik 1.12.0 → 2.0.0.** `cyrius build` OK (3,616,744 B, was 3,380,536).

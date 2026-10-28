@@ -60,15 +60,22 @@ fn pipeline_publish(tlog, bundle, sk, sig_out, now): i64 {
 }
 
 # install — verify a downloaded bundle and record it, enforcing BOTH gates.
-# Returns the install result, or 0 on any of: malformed bundle, unknown/invalid
-# publisher key, bad signature (gate 1), digest mismatch (gate 2), invalid
-# manifest. `expected_hash` of "" skips the digest comparison (compute + record
-# only); a non-empty value must match the bundle's SHA-256.
+# Returns the install result, or 0 on any of: a bundle over
+# AGPKG_MAX_PACKAGE_SIZE, malformed bundle, unknown/invalid publisher key, bad
+# signature (gate 1), digest mismatch (gate 2), invalid manifest, quota.
+# `expected_hash` of "" skips the digest comparison (compute + record only); a
+# non-empty value must match the bundle's SHA-256. The bundle is inflated once
+# for the whole install (ADR-0014).
 fn pipeline_install(reg, keyring, bundle, sig, sig_len, expected_hash: Str, now): i64 {
     var data = str_data(bundle);
     var len = str_len(bundle);
+    if (len > AGPKG_MAX_PACKAGE_SIZE) { return 0; }   # Rust MAX_PACKAGE_SIZE, before anything else
 
-    var manifest = pipeline_extract_manifest(bundle);
+    var arc = _agpkg_open(data, len);
+    if (arc == 0) { return 0; }
+    var mjson = _agpkg_entry(arc, str_from("manifest.json"));
+    if (mjson == 0) { return 0; }
+    var manifest = manifest_from_json(mjson);
     if (manifest == 0) { return 0; }
 
     # gate 1 — Ed25519 signature over the bundle, keyed by publisher key_id
@@ -82,8 +89,10 @@ fn pipeline_install(reg, keyring, bundle, sig, sig_len, expected_hash: Str, now)
     }
 
     if (registry_admits(reg, manifest, len) == 0) { return 0; }   # quota on the bundle size, as Rust
-    var extracted = agpkg_payload_size(data, len);                  # recorded size: what lands on disk
-    if (extracted < 0) { return 0; }
+    var extracted = _agpkg_payload(arc);                            # recorded size: what lands on disk
+    # ...and on the extracted size, which registry_install checks too: here it
+    # refuses before any file is written, upgrades included (ADR-0014)
+    if (registry_admits(reg, manifest, extracted) == 0) { return 0; }
 
     # Extract first, record second (Rust order): a bundle that fails to land on
     # disk is not recorded as installed (D9). An in-memory registry has no disk.
@@ -91,7 +100,7 @@ fn pipeline_install(reg, keyring, bundle, sig, sig_len, expected_hash: Str, now)
     if (registry_get_package(reg, man_name(manifest)) == 0) { fresh = 1; }
     var dir = path_join(registry_packages_dir(reg), man_name(manifest));
     if (_registry_on_disk(reg) == 1) {
-        if (agpkg_extract_to_dir(data, len, dir) < 0) {
+        if (_agpkg_extract(arc, dir) < 0) {
             if (fresh == 1) { if (is_dir(dir) == 1) { _rmtree(dir); } }
             return 0;
         }

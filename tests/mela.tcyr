@@ -2182,6 +2182,503 @@ fn test_extraction() {
     return 0;
 }
 
+# --- v1.3.0 (ADR-0014) helpers ---
+
+# Set typeflag `tf` on the header at `off` of the raw tar `t`, fixing its sum.
+fn _t_tar_flag(t, off, tf) {
+    store8(str_data(t) + off + 156, tf);
+    _t_tar_fix_sum(str_data(t), off);
+    return 0;
+}
+
+# A one-entry Vec: `name` holding the bytes of Str `body`.
+fn _t_es1(name, body) {
+    var es = vec_new();
+    vec_push(es, tentry_new(name, str_data(body), str_len(body)));
+    return es;
+}
+fn _t_push(es, name, body) {
+    vec_push(es, tentry_new(name, str_data(body), str_len(body)));
+    return es;
+}
+
+# One PAX record "<len> <key>=<val>\n", <len> counting the whole record.
+fn _t_pax_rec(key, val: Str) {
+    var body = str_cat(str_cat(str_cat(str_cat(str_from(" "), str_from(key)), str_from("=")), val),
+      str_from("\n"));
+    var b = str_len(body);
+    var total = b + 1;
+    var d = str_len(str_from_int(total));
+    while (str_len(str_from_int(b + d)) != d) { d = d + 1; }
+    return str_cat(str_from_int(b + d), body);
+}
+
+# The safe entry names of a raw tar (gzipped and inspected), or 0.
+fn _t_names(t) {
+    var gz = _gzip_str(t);
+    return agpkg_inspect_bytes(str_data(gz), str_len(gz));
+}
+
+# The first entry's name in a _tar_scan Vec, or "" if there is none (so a
+# broken reader fails the assertion instead of faulting the suite).
+fn _t_name0(v) {
+    if (v == 0) { return str_from(""); }
+    if (vec_len(v) == 0) { return str_from(""); }
+    return tentry_name(vec_get(v, 0));
+}
+
+# Permission bits (0o7777) of the file at cstring `path`, or -1.
+fn _t_mode(path) {
+    var st[256];
+    if (xstat(path, &st) != 0) { return 0 - 1; }
+    return load32(&st + STAT_MODE) & 0xFFF;
+}
+
+# v1.3.0 (ADR-0014): names over 100 bytes — the ustar prefix (read and
+# written), GNU `L` and PAX `x` records (read), with the safety checks applied
+# to the effective name.
+fn test_long_names() {
+    test_group("long-names");
+    var pay = str_from("payload!");
+
+    # _tar_split: GNU tar's rule
+    assert_eq(_tar_split(repeat_char(100, 97)), 0, "split: 100 bytes fits the name field");
+    var n150 = str_cat(str_cat(str_cat(str_cat(repeat_char(60, 97), str_from("/")), repeat_char(60, 98)),
+      str_from("/")), repeat_char(28, 99));
+    assert_eq(str_len(n150), 150, "split: fixture is 150 bytes");
+    assert_eq(_tar_split(n150), 121, "split: at the last '/' within 156 bytes");
+    var n256 = str_cat(str_cat(repeat_char(155, 112), str_from("/")), repeat_char(100, 113));
+    assert_eq(_tar_split(n256), 155, "split: 256 bytes, prefix 155 + name 100");
+    var n257 = str_cat(str_cat(repeat_char(156, 112), str_from("/")), repeat_char(100, 113));
+    assert_eq(_tar_split(n257), 0 - 1, "split: 257 bytes refused");
+    assert_eq(_tar_split(repeat_char(101, 97)), 0 - 1, "split: 101 bytes with no '/' refused");
+    var lastlong = str_cat(str_from("a/"), repeat_char(101, 98));
+    assert_eq(_tar_split(lastlong), 0 - 1, "split: a last component over 100 refused");
+    var nprefix = str_cat(str_cat(repeat_char(160, 112), str_from("/")), repeat_char(20, 113));
+    assert_eq(_tar_split(nprefix), 0 - 1, "split: a prefix over 155 refused");
+
+    # the writer uses the prefix field; the reader joins it back
+    var t150 = _tar_build(_t_es1(n150, pay));
+    assert_neq(t150, 0, "prefix: 150-byte name packs");
+    assert_eq(_tar_field_len(str_data(t150), 345, 155), 121, "prefix: prefix field holds 121 bytes");
+    assert_eq(_tar_field_len(str_data(t150), 0, 100), 28, "prefix: name field holds the last 28");
+    var s150 = _tar_scan(str_data(t150), str_len(t150));
+    assert_eq(vec_len(s150), 1, "prefix: one entry read");
+    assert_eq(str_eq(_t_name0(s150), n150), 1, "prefix: full name read back");
+    var g150 = _gzip_str(t150);
+    var r150 = agpkg_read_entry(str_data(g150), str_len(g150), n150);
+    assert_neq(r150, 0, "prefix: entry found by full name");
+    if (r150 != 0) { assert_eq(str_eq(r150, pay), 1, "prefix: content by full name"); }
+    var t256 = _tar_build(_t_es1(n256, pay));
+    var s256 = _tar_scan(str_data(t256), str_len(t256));
+    assert_eq(str_eq(_t_name0(s256), n256), 1, "prefix: 256-byte name round-trips");
+    assert_eq(_tar_build(_t_es1(n257, pay)), 0, "prefix: 257-byte name fails the build");
+
+    # GNU magic: the prefix area is not a prefix
+    var tg = _tar_build(_t_es1(str_from("short.txt"), pay));
+    var gb = str_data(tg);
+    store8(gb + 262, 32); store8(gb + 263, 32); store8(gb + 264, 0);   # "ustar  \0"
+    memset(gb + 345, 120, 20);                                          # GNU keeps atime etc. here
+    _t_tar_fix_sum(gb, 0);
+    var sg = _tar_scan(gb, str_len(tg));
+    assert_eq(str_eq_cstr(_t_name0(sg), "short.txt"), 1, "GNU magic: prefix area ignored");
+
+    # GNU 'L': the long name is the next entry's
+    var n300 = str_cat(str_cat(repeat_char(150, 97), str_from("/")), repeat_char(149, 98));
+    var lb = alloc(301);                           # the name and its NUL, as GNU tar writes it
+    memcpy(lb, str_data(n300), 300);
+    store8(lb + 300, 0);
+    var ldata = str_new(lb, 301);
+    var les = _t_es1(str_from("././@LongLink"), ldata);
+    _t_push(les, str_from("truncated"), pay);
+    var tl = _tar_build(les);
+    _t_tar_flag(tl, 0, 76);                        # 'L'
+    var sl = _tar_scan(str_data(tl), str_len(tl));
+    assert_neq(sl, 0, "GNU L: archive accepted");
+    assert_eq(vec_len(sl), 1, "GNU L: one entry");
+    assert_eq(str_eq(_t_name0(sl), n300), 1, "GNU L: the 300-byte name applies");
+    if (_t_name0(sl) != 0) { if (str_len(_t_name0(sl)) > 0) {
+        assert_eq(memeq(tentry_data(vec_get(sl, 0)), str_data(pay), str_len(pay)), 1, "GNU L: data is the next entry's");
+    } }
+
+    # PAX 'x' path
+    var px = _t_pax_rec("path", n300);
+    assert_eq(str_eq(str_sub(px, 0, 4), str_from("310 ")), 1, "PAX: record length counts itself");
+    var pes = _t_es1(str_from("PaxHeaders/x"), px);
+    _t_push(pes, str_from("short"), pay);
+    var tp = _tar_build(pes);
+    _t_tar_flag(tp, 0, 120);                       # 'x'
+    var sp = _tar_scan(str_data(tp), str_len(tp));
+    assert_neq(sp, 0, "PAX: archive accepted");
+    assert_eq(str_eq(_t_name0(sp), n300), 1, "PAX: path applies");
+
+    # PAX wins over GNU L; other keys are ignored; a matching size is fine
+    var both = _t_es1(str_from("././@LongLink"), ldata);
+    var prec = str_cat(str_cat(_t_pax_rec("mtime", str_from("1700000000.5")), _t_pax_rec("path", str_from("pax/wins.txt"))),
+      _t_pax_rec("size", str_from_int(str_len(pay))));
+    _t_push(both, str_from("PaxHeaders/y"), prec);
+    _t_push(both, str_from("hdr"), pay);
+    var tb = _tar_build(both);
+    _t_tar_flag(tb, 0, 76);
+    _t_tar_flag(tb, 1024, 120);
+    var sb = _tar_scan(str_data(tb), str_len(tb));
+    assert_neq(sb, 0, "PAX + L: accepted");
+    assert_eq(str_eq_cstr(_t_name0(sb), "pax/wins.txt"), 1, "PAX + L: PAX path wins");
+
+    # each record applies to the next header only
+    var once = _t_es1(str_from("PaxHeaders/z"), _t_pax_rec("path", str_from("first.txt")));
+    _t_push(once, str_from("a.txt"), pay);
+    _t_push(once, str_from("b.txt"), pay);
+    var to = _tar_build(once);
+    _t_tar_flag(to, 0, 120);
+    var so = _tar_scan(str_data(to), str_len(to));
+    assert_eq(names_contain(_t_names(to), "first.txt"), 1, "next only: first entry renamed");
+    assert_eq(names_contain(_t_names(to), "b.txt"), 1, "next only: second keeps its name");
+    assert_eq(vec_len(so), 2, "next only: two entries");
+
+    # a long name before a link is spent on the link (skipped)
+    var lk = _t_es1(str_from("././@LongLink"), ldata);
+    _t_push(lk, str_from("lnk"), str_from(""));
+    _t_push(lk, str_from("real.txt"), pay);
+    var tk = _tar_build(lk);
+    _t_tar_flag(tk, 0, 76);
+    _t_tar_flag(tk, 1024, 50);                     # '2' symlink
+    var nk = _t_names(tk);
+    assert_eq(vec_len(nk), 1, "L before link: only the regular file");
+    assert_eq(names_contain(nk, "real.txt"), 1, "L before link: regular file keeps its name");
+
+    # 'K' (long link name) is consumed and ignored; 'g' with other keys too
+    var kg = _t_es1(str_from("././@LongLink"), str_from("target\0"));
+    _t_push(kg, str_from("GlobalHead"), _t_pax_rec("comment", str_from("hello")));
+    _t_push(kg, str_from("k.txt"), pay);
+    var tkg = _tar_build(kg);
+    _t_tar_flag(tkg, 0, 75);                       # 'K'
+    _t_tar_flag(tkg, 1024, 103);                   # 'g'
+    assert_eq(names_contain(_t_names(tkg), "k.txt"), 1, "K and g: ignored, entry read");
+
+    # unsafe effective names are skipped
+    var bad = _t_es1(str_from("PaxHeaders/u"), _t_pax_rec("path", str_from("../escape.txt")));
+    _t_push(bad, str_from("fine1"), pay);
+    _t_push(bad, str_from("PaxHeaders/v"), _t_pax_rec("path", str_from("/etc/abs.txt")));
+    _t_push(bad, str_from("fine2"), pay);
+    _t_push(bad, str_from("PaxHeaders/w"), _t_pax_rec("path", str_from("adir/")));
+    _t_push(bad, str_from("fine3"), pay);
+    _t_push(bad, str_from("ok.txt"), pay);
+    var tu = _tar_build(bad);
+    var uo = 0;
+    var ui = 0;
+    while (ui < 3) {
+        _t_tar_flag(tu, uo, 120);
+        uo = uo + 1024 + 1024;                    # each PAX record and payload fit one block
+        ui = ui + 1;
+    }
+    var nu = _t_names(tu);
+    assert_neq(nu, 0, "unsafe PAX names: archive accepted");
+    assert_eq(vec_len(nu), 1, "unsafe PAX names: '..', absolute and trailing '/' skipped");
+    assert_eq(names_contain(nu, "ok.txt"), 1, "unsafe PAX names: the safe entry kept");
+    var lt = _t_es1(str_from("././@LongLink"), str_from("../up.txt\0"));
+    _t_push(lt, str_from("x"), pay);
+    var tlt = _tar_build(lt);
+    _t_tar_flag(tlt, 0, 76);
+    assert_eq(vec_len(_t_names(tlt)), 0, "GNU L '..': skipped");
+
+    # malformed: the whole archive is rejected
+    var dang = _t_es1(str_from("ok.txt"), pay);
+    _t_push(dang, str_from("././@LongLink"), ldata);
+    var td = _tar_build(dang);
+    _t_tar_flag(td, 1024, 76);
+    assert_eq(_t_tar_all_reject(td), 1, "dangling GNU L at the end: rejected");
+    var dangx = _t_es1(str_from("ok.txt"), pay);
+    _t_push(dangx, str_from("PaxHeaders/d"), _t_pax_rec("path", str_from("late.txt")));
+    var tdx = _tar_build(dangx);
+    _t_tar_flag(tdx, 1024, 120);
+    assert_eq(_t_tar_all_reject(tdx), 1, "dangling PAX x at the end: rejected");
+
+    var lbig = alloc(1101);
+    memset(lbig, 97, 1100);
+    store8(lbig + 1100, 0);
+    var over = _t_es1(str_from("././@LongLink"), str_new(lbig, 1101));
+    _t_push(over, str_from("x"), pay);
+    var tov = _tar_build(over);
+    _t_tar_flag(tov, 0, 76);
+    assert_eq(_t_tar_all_reject(tov), 1, "GNU L over AGPKG_NAME_MAX: rejected");
+
+    var ebig = alloc(AGPKG_EXT_MAX + 1);
+    memset(ebig, 97, AGPKG_EXT_MAX + 1);
+    var ext = _t_es1(str_from("././@LongLink"), str_new(ebig, AGPKG_EXT_MAX + 1));
+    _t_push(ext, str_from("x"), pay);
+    var tex = _tar_build(ext);
+    _t_tar_flag(tex, 0, 76);
+    assert_eq(_t_tar_all_reject(tex), 1, "extension entry over AGPKG_EXT_MAX: rejected");
+
+    var nulb = alloc(12);
+    memcpy(nulb, "12 path=a\0b\n", 12);
+    var pnul = _t_es1(str_from("PaxHeaders/n"), str_new(nulb, 12));
+    _t_push(pnul, str_from("x"), pay);
+    var tpn = _tar_build(pnul);
+    _t_tar_flag(tpn, 0, 120);
+    assert_eq(_t_tar_all_reject(tpn), 1, "PAX path with a NUL: rejected");
+
+    var recs = vec_new();
+    vec_push(recs, str_from("99 path=a.txt\n"));      # length past the data
+    vec_push(recs, str_from("14 path=a.txt\n\n"));    # trailing byte: records do not tile
+    vec_push(recs, str_from("13 patha.txt\n"));       # no '='
+    vec_push(recs, str_from("14 path=a.txtX"));       # no newline
+    vec_push(recs, str_from("8 =a.tx\n"));            # empty key
+    vec_push(recs, str_from("x4 a=b\n"));             # no length
+    vec_push(recs, str_from("11 size=1x\n"));         # size not decimal
+    var ri = 0;
+    while (ri < vec_len(recs)) {
+        var re = _t_es1(str_from("PaxHeaders/r"), vec_get(recs, ri));
+        _t_push(re, str_from("x"), pay);
+        var tr = _tar_build(re);
+        _t_tar_flag(tr, 0, 120);
+        assert_eq(_t_tar_all_reject(tr), 1, "bad PAX record rejected");
+        ri = ri + 1;
+    }
+
+    var psz = _t_es1(str_from("PaxHeaders/s"), _t_pax_rec("size", str_from("5")));
+    _t_push(psz, str_from("manifest.json"), pay);
+    var tps = _tar_build(psz);
+    _t_tar_flag(tps, 0, 120);
+    assert_eq(_t_tar_all_reject(tps), 1, "PAX size disagreeing with the header: rejected");
+
+    var gp = _t_es1(str_from("GlobalHead"), _t_pax_rec("path", str_from("all.txt")));
+    _t_push(gp, str_from("x"), pay);
+    var tgp = _tar_build(gp);
+    _t_tar_flag(tgp, 0, 103);
+    assert_eq(_t_tar_all_reject(tgp), 1, "global PAX path: rejected");
+
+    # duplicates are judged on the effective name
+    var dup = _t_es1(str_from("dup/name.txt"), pay);
+    _t_push(dup, str_from("././@LongLink"), str_from("dup/name.txt\0"));
+    _t_push(dup, str_from("other"), pay);
+    var tdu = _tar_build(dup);
+    _t_tar_flag(tdu, 1024, 76);
+    assert_eq(_t_tar_all_reject(tdu), 1, "same effective name twice: rejected");
+
+    # extraction writes the full name
+    var LX = "/tmp/mela-longname-x";
+    if (is_dir(str_from(LX)) == 1) { _rmtree(str_from(LX)); }
+    var gl = _gzip_str(tl);
+    assert_eq(agpkg_extract_to_dir(str_data(gl), str_len(gl), str_from(LX)), 1, "extract: one file");
+    var lx = alloc(512);
+    var lxp = path_join(str_from(LX), n300);
+    assert_eq(file_read_all(str_data(lxp), lx, 512), str_len(pay), "extract: written under the 300-byte name");
+    return 0;
+}
+
+# v1.3.0 (ADR-0014): extraction writes 0755 if the header's owner-execute bit is
+# set, else 0644; the packer writes 0755 for a source file with an execute bit.
+fn test_file_modes() {
+    test_group("file-modes");
+    var pay = str_from("#!/bin/true\n");
+
+    # the header mode round-trips through the reader
+    var es = _t_es1(str_from("exe"), pay);
+    tentry_set_mode(vec_get(es, 0), 0x1ED);
+    var t = _tar_build(es);
+    assert_eq(_tar_read_octal(str_data(t), 100, 8), 0x1ED, "writer: mode field 0755");
+    assert_eq(tentry_mode(vec_get(_tar_scan(str_data(t), str_len(t)), 0)), 0x1ED, "reader: mode 0755");
+    assert_eq(tentry_mode(tentry_new(str_from("n"), 0, 0)), 0x1A4, "tentry_new defaults to 0644");
+
+    # header bits -> on-disk mode
+    var MD = "/tmp/mela-modes";
+    if (is_dir(str_from(MD)) == 1) { _rmtree(str_from(MD)); }
+    var ms = vec_new();
+    var want = vec_new();
+    var hdr = vec_new();
+    vec_push(hdr, 0x1ED); vec_push(want, 0x1ED);   # 0755 -> 0755
+    vec_push(hdr, 0x1A4); vec_push(want, 0x1A4);   # 0644 -> 0644
+    vec_push(hdr, 0x9FF); vec_push(want, 0x1ED);   # 04777 -> 0755: no setuid, no world-write
+    vec_push(hdr, 0x1B6); vec_push(want, 0x1A4);   # 0666 -> 0644
+    vec_push(hdr, 0x1C0); vec_push(want, 0x1ED);   # 0700 -> 0755
+    vec_push(hdr, 0x49);  vec_push(want, 0x1ED);   # 0111: the owner-execute bit -> 0755
+    var k = 0;
+    while (k < vec_len(hdr)) {
+        var e = tentry_new(str_cat(str_from("f"), str_from_int(k)), str_data(pay), str_len(pay));
+        tentry_set_mode(e, vec_get(hdr, k));
+        vec_push(ms, e);
+        k = k + 1;
+    }
+    var mt = _gzip_str(_tar_build(ms));
+    assert_eq(agpkg_extract_to_dir(str_data(mt), str_len(mt), str_from(MD)), 6, "modes: six files written");
+    k = 0;
+    while (k < vec_len(hdr)) {
+        var p = path_join(str_from(MD), str_cat(str_from("f"), str_from_int(k)));
+        assert_eq(_t_mode(str_data(p)), vec_get(want, k), "modes: header bits map to 0755 / 0644");
+        k = k + 1;
+    }
+
+    # an existing file (an upgrade) takes the new mode
+    var u1 = _t_es1(str_from("f0"), pay);
+    var ug = _gzip_str(_tar_build(u1));                # 0644 over the 0755 f0
+    assert_eq(agpkg_extract_to_dir(str_data(ug), str_len(ug), str_from(MD)), 1, "upgrade: rewritten");
+    assert_eq(_t_mode(str_data(path_join(str_from(MD), str_from("f0")))), 0x1A4, "upgrade: 0755 -> 0644");
+
+    # a mode field that is not strict octal rejects the archive
+    var bm = _tar_build(_t_es1(str_from("manifest.json"), pay));
+    memcpy(str_data(bm) + 100, "07x5\0\0\0\0", 8);
+    _t_tar_fix_sum(str_data(bm), 0);
+    assert_eq(_t_tar_all_reject(bm), 1, "non-octal mode: rejected");
+
+    # the packer: an execute bit on the source -> 0755, else 0644
+    var PD = "/tmp/mela-pack-modes";
+    setup_build(PD, "lib/libflutter_engine.so", 1, 1);
+    var eng = path_join(str_from(PD), str_from("lib/libflutter_engine.so"));
+    sys_chmod(str_data(eng), 0x1ED);
+    sys_chmod(str_data(path_join(str_from(PD), str_from("lib/app.so"))), 0x1A4);
+    var tool = path_join(str_from(PD), str_from("flutter_assets/tool.sh"));
+    file_write_all(str_data(tool), "x", 1);
+    sys_chmod(str_data(tool), 0x1C0);              # 0700: owner-only exec
+    var note = path_join(str_from(PD), str_from("flutter_assets/note.txt"));
+    file_write_all(str_data(note), "x", 1);
+    sys_chmod(str_data(note), 0x180);              # 0600
+    var pout = pack_flutter_app(str_from(PD), mk_pfconfig(), str_from("/tmp/mela-pack-modes-out"));
+    assert_neq(pout, 0, "packer: packs");
+    var pb = _read_file(pout);
+    var pa = _agpkg_open(str_data(pb), str_len(pb));
+    var pes = _agpkg_entries(pa);
+    var pi = 0;
+    var seen = 0;
+    while (pi < vec_len(pes)) {
+        var pe = vec_get(pes, pi);
+        var nm = tentry_name(pe);
+        if (str_eq_cstr(nm, "bin/flutter_engine.so") == 1) {
+            assert_eq(tentry_mode(pe), 0x1ED, "packer: executable engine -> 0755"); seen = seen + 1;
+        }
+        if (str_eq_cstr(nm, "bin/my-flutter-app") == 1) {
+            assert_eq(tentry_mode(pe), 0x1A4, "packer: non-executable AOT -> 0644"); seen = seen + 1;
+        }
+        if (str_eq_cstr(nm, "assets/flutter_assets/tool.sh") == 1) {
+            assert_eq(tentry_mode(pe), 0x1ED, "packer: 0700 -> 0755"); seen = seen + 1;
+        }
+        if (str_eq_cstr(nm, "assets/flutter_assets/note.txt") == 1) {
+            assert_eq(tentry_mode(pe), 0x1A4, "packer: 0600 -> 0644"); seen = seen + 1;
+        }
+        if (str_eq_cstr(nm, "manifest.json") == 1) {
+            assert_eq(tentry_mode(pe), 0x1A4, "packer: manifest.json 0644"); seen = seen + 1;
+        }
+        pi = pi + 1;
+    }
+    assert_eq(seen, 5, "packer: every checked entry present");
+    # the same inputs give the same bytes (ADR-0013 §6)
+    var pb2 = _read_file(pack_flutter_app(str_from(PD), mk_pfconfig(), str_from("/tmp/mela-pack-modes-out2")));
+    assert_eq(str_eq(pb, pb2), 1, "packer: reproducible with modes");
+    return 0;
+}
+
+# A gzipped bundle from `es`, signed with `sk` into `sig`.
+fn _t_signed(es, sk, sig) {
+    var b = _gzip_str(_tar_build(es));
+    ed25519_sign(sk, str_data(b), str_len(b), sig);
+    return b;
+}
+
+# v1.3.0 (ADR-0014): the 100 MiB bundle cap, the quota checked on both sizes
+# before any write, and a bundle over the old 8 MiB ceiling installing.
+fn test_install_limits() {
+    test_group("install-limits");
+    var NOW = 1000;
+    assert_eq(AGPKG_MAX_PACKAGE_SIZE, RC_DOWNLOAD_MAX_BYTES, "package cap == download cap");
+    assert_eq(AGPKG_MAX_PACKAGE_SIZE, 104857600, "package cap is Rust's 100 MiB");
+
+    var sk[64];
+    var pk[32];
+    var key_id = trust_keypair_from_seed(hex_decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", 64), &sk, &pk);
+    var keyring = mela_keyring_new();
+    mela_keyring_add_key(keyring, kv_new(key_id, NOW - 100, 0, 0, trust_hex_encode(&pk, 32)));
+    var publisher = publisher_new(str_from("P"), key_id, str_from(""));
+    var sbj = sbprofile_to_json(generate_sandbox_profile(mk_pfconfig()));
+
+    # over the cap: refused before anything is read
+    var huge = str_new(alloc(AGPKG_MAX_PACKAGE_SIZE + 1), AGPKG_MAX_PACKAGE_SIZE + 1);
+    var sig0[64];
+    memset(&sig0, 0, 64);
+    assert_eq(pipeline_install(registry_in_memory(), keyring, huge, &sig0, 64, str_from(""), NOW), 0,
+      "bundle over 100 MiB: refused");
+
+    # a 9 MiB executable installs to disk (over the old 8 MiB ceiling)
+    var NINE = 9437184;
+    var nb = alloc(NINE);
+    memset(nb, 66, NINE);
+    var m9 = mela_manifest_to_json(mela_manifest_new(mk_agent(str_from("big-pkg"), str_from("d")), publisher,
+      CAT_UTILITY, str_from("1.0.0")));
+    var e9 = _t_es1(str_from("manifest.json"), m9);
+    _t_push(e9, str_from("sandbox.json"), sbj);
+    var be = tentry_new(str_from("bin/big.so"), nb, NINE);
+    tentry_set_mode(be, 0x1ED);
+    vec_push(e9, be);
+    var sig9[64];
+    var b9 = _t_signed(e9, &sk, &sig9);
+    var D9 = "/tmp/mela-limits-9";
+    rclean(D9);
+    var pk9 = path_join(str_from(D9), str_from("packages/big-pkg"));
+    if (is_dir(pk9) == 1) { _rmtree(pk9); }
+    var r9 = mela_registry_new(str_from(D9));
+    assert_neq(pipeline_install(r9, keyring, b9, &sig9, 64, str_from(""), NOW), 0, "9 MiB: installs");
+    var bigp = path_join(pk9, str_from("bin/big.so"));
+    assert_eq(_t_mode(str_data(bigp)), 0x1ED, "9 MiB: installed 0755");
+    var back = _read_file(bigp);
+    assert_eq(str_len(back), NINE, "9 MiB: whole file on disk");
+    assert_eq(imp_installed_size(registry_get_package(r9, str_from("big-pkg"))),
+      str_len(m9) + str_len(sbj) + NINE, "9 MiB: installed_size is the extracted size");
+
+    # over the 16 MiB ceiling: refused, nothing written
+    var OVER = AGPKG_BUF_MAXLEN + 1;
+    var ob = alloc(OVER);
+    memset(ob, 67, OVER);
+    var mo = mela_manifest_to_json(mela_manifest_new(mk_agent(str_from("over-pkg"), str_from("d")), publisher,
+      CAT_UTILITY, str_from("1.0.0")));
+    var eo = _t_es1(str_from("manifest.json"), mo);
+    vec_push(eo, tentry_new(str_from("bin/over.so"), ob, OVER));
+    var sigo[64];
+    var bo = _t_signed(eo, &sk, &sigo);
+    assert_eq(pipeline_install(r9, keyring, bo, &sigo, 64, str_from(""), NOW), 0, "over 16 MiB: refused");
+    assert_eq(is_dir(path_join(str_from(D9), str_from("packages/over-pkg"))), 0, "over 16 MiB: nothing written");
+
+    # quota: fits the bundle size, not the extracted size -> refused before any write
+    var QD = "/tmp/mela-limits-quota";
+    rclean(QD);
+    var qpk = path_join(str_from(QD), str_from("packages/q-pkg"));
+    if (is_dir(qpk) == 1) { _rmtree(qpk); }
+    var mq1 = mela_manifest_to_json(mela_manifest_new(mk_agent(str_from("q-pkg"), str_from("d")), publisher,
+      CAT_UTILITY, str_from("1.0.0")));
+    var eq1 = _t_es1(str_from("manifest.json"), mq1);
+    _t_push(eq1, str_from("marker.txt"), str_from("version one"));
+    var sq1[64];
+    var bq1 = _t_signed(eq1, &sk, &sq1);
+    var rq = mela_registry_new(str_from(QD));
+    assert_neq(pipeline_install(rq, keyring, bq1, &sq1, 64, str_from(""), NOW), 0, "quota: v1 installs");
+    var used = registry_total_installed_size(rq);
+
+    var FILL = 200000;                              # compresses to a few hundred bytes
+    var fill = alloc(FILL);
+    memset(fill, 65, FILL);
+    var mq2 = mela_manifest_to_json(mela_manifest_new(mk_agent(str_from("q-pkg"), str_from("d")), publisher,
+      CAT_UTILITY, str_from("2.0.0")));
+    var eq2 = _t_es1(str_from("manifest.json"), mq2);
+    _t_push(eq2, str_from("marker.txt"), str_from("version two"));
+    vec_push(eq2, tentry_new(str_from("fill.bin"), fill, FILL));
+    var sq2[64];
+    var bq2 = _t_signed(eq2, &sk, &sq2);
+    var small = 0;
+    if (str_len(bq2) < 10000) { small = 1; }
+    assert_eq(small, 1, "quota: v2 bundle is small");
+    registry_set_storage_quota(rq, used + str_len(bq2) + 1000);   # bundle fits, extracted does not
+    assert_eq(pipeline_install(rq, keyring, bq2, &sq2, 64, str_from(""), NOW), 0, "quota: v2 refused");
+    var mk = alloc(64);
+    var mkn = file_read_all(str_data(path_join(qpk, str_from("marker.txt"))), mk, 64);
+    assert_eq(memeq(mk, "version one", mkn), 1, "quota: v1's files untouched");
+    assert_eq(mkn, 11, "quota: marker length unchanged");
+    assert_eq(file_exists(str_data(path_join(qpk, str_from("fill.bin")))), 0, "quota: v2 wrote nothing");
+    assert_eq(str_eq_cstr(imp_version(registry_get_package(rq, str_from("q-pkg"))), "1.0.0"), 1,
+      "quota: v1 still recorded");
+    registry_set_storage_quota(rq, 0);
+    assert_neq(pipeline_install(rq, keyring, bq2, &sq2, 64, str_from(""), NOW), 0, "quota lifted: v2 installs");
+    return 0;
+}
+
 # End-to-end pipeline: package -> sign+log -> verify (both gates) -> install.
 fn test_pipeline() {
     test_group("pipeline");
@@ -2436,17 +2933,27 @@ fn test_agpkg_archive() {
     var font = agpkg_read_entry(str_data(nb), str_len(nb), str_from("assets/flutter_assets/fonts/M.otf"));
     assert_eq(str_eq_cstr(font, "font"), 1, "nested: content byte-exact");
 
-    # v1.1.3 (D8): the packer fails closed instead of truncating
-    var NINE = 9437184;    # 9 MiB, over AGPKG_BUF_MAXLEN
-    var big = alloc(NINE);
-    memset(big, 65, NINE);
+    # v1.1.3 (D8): the packer fails closed instead of truncating. The ceiling is
+    # 16 MiB since v1.3.0, sankoch's gzip output limit (ADR-0014); it was 8 MiB.
+    var OVER = AGPKG_BUF_MAXLEN + 1;
+    assert_eq(AGPKG_BUF_MAXLEN, 16777216, "the ceiling is 16 MiB (ADR-0014)");
+    var big = alloc(OVER);
+    memset(big, 65, OVER);
     var BD = "/tmp/mela-pack-big";
     setup_build(BD, "lib/libflutter_engine.so", 0, 1);
-    file_write_all(str_data(path_join(str_from(BD), str_from("lib/libflutter_engine.so"))), big, NINE);
+    file_write_all(str_data(path_join(str_from(BD), str_from("lib/libflutter_engine.so"))), big, OVER);
     assert_eq(_read_file(path_join(str_from(BD), str_from("lib/libflutter_engine.so"))), 0,
-      "9 MiB file: _read_file refuses, no truncation");
+      "file over 16 MiB: _read_file refuses, no truncation");
     assert_eq(pack_flutter_app(str_from(BD), mk_pfconfig(), str_from("/tmp/mela-pack-big-out")), 0,
-      "9 MiB engine: pack fails");
+      "engine over 16 MiB: pack fails");
+    var NINE = 9437184;    # 9 MiB: over the old ceiling, under the new one
+    file_write_all(str_data(path_join(str_from(BD), str_from("lib/libflutter_engine.so"))), big, NINE);
+    var nineout = pack_flutter_app(str_from(BD), mk_pfconfig(), str_from("/tmp/mela-pack-big-out"));
+    assert_neq(nineout, 0, "9 MiB engine: packs since v1.3.0");
+    var ninebytes = _read_file(nineout);
+    var nineeng = agpkg_read_entry(str_data(ninebytes), str_len(ninebytes), str_from("bin/flutter_engine.so"));
+    assert_eq(str_len(nineeng), NINE, "9 MiB engine: reads back whole");
+    assert_eq(memeq(str_data(nineeng), big, NINE), 1, "9 MiB engine: byte-exact");
     var LD = "/tmp/mela-pack-longname";
     setup_build(LD, "lib/libflutter_engine.so", 0, 1);
     var lname = alloc(121);
@@ -2455,7 +2962,7 @@ fn test_agpkg_archive() {
     var lpath = path_join(path_join(str_from(LD), str_from("flutter_assets")), str_from(lname));
     file_write_all(str_data(lpath), "x", 1);
     assert_eq(pack_flutter_app(str_from(LD), mk_pfconfig(), str_from("/tmp/mela-pack-longname-out")), 0,
-      "entry name over 100 bytes: pack fails, no truncation");
+      "a 120-byte file name (no ustar split fits): pack fails, no truncation");
     xunlink(str_data(lpath));
     if (sys_geteuid() != 0) {   # root reads a mode-000 file, so only check as a user
         var UD = "/tmp/mela-pack-unreadable";
@@ -2468,11 +2975,11 @@ fn test_agpkg_archive() {
         sys_chmod(str_data(upath), 420);
         xunlink(str_data(upath));
     }
-    # install side: a bundle whose tar does not fit the 8 MiB inflate buffer
+    # install side: a bundle whose tar does not fit the 16 MiB inflate ceiling
     var bes = vec_new();
     var bm = str_from("{\"name\":\"x\",\"category\":\"Utility\"}");
     vec_push(bes, tentry_new(str_from("manifest.json"), str_data(bm), str_len(bm)));
-    vec_push(bes, tentry_new(str_from("bin/big.so"), big, NINE));
+    vec_push(bes, tentry_new(str_from("bin/big.so"), big, OVER));
     var bgz = _gzip_str(_tar_build(bes));
     assert_neq(bgz, 0, "oversized fixture builds");
     assert_eq(agpkg_inspect_bytes(str_data(bgz), str_len(bgz)), 0, "over-cap bundle: inspect fails");
@@ -2922,6 +3429,9 @@ fn main() {
     test_tar_reader();
     test_transport();
     test_extraction();
+    test_long_names();
+    test_file_modes();
+    test_install_limits();
     test_pipeline();
     test_install_txn();
     test_strict_decode();

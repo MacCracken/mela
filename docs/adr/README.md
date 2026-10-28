@@ -65,3 +65,8 @@ Decisions about mela — what we chose, the context, and the consequences we acc
   files refused; Unicode lowercasing and filename sanitizing as Rust; semver overflow, scale-factor
   text, validation messages and `installed_size` matched; normalized archive metadata, compact JSON
   and stricter path containment kept; file modes (v1.2.0) and the hash preimage (v1.3.0) deferred.
+- [0014 — Large bundles, part one: long names, file modes and size limits](0014-large-bundles-names-modes-limits.md) —
+  *Accepted (v1.3.0)* · the reader takes the ustar prefix, GNU `L` and PAX `path` (the writer uses
+  the prefix, to 256 bytes); files extract 0755 or 0644 by the owner-execute bit; a 100 MiB bundle
+  cap and the quota on both sizes, before any write; a 16 MiB ceiling (sankoch's) and one inflate
+  per install. Streaming waits on sankoch.

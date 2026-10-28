@@ -232,8 +232,9 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   `sbprofile_to_json` / `from_json`).
 - Archive (gzip + ustar): `pack_flutter_app(build_dir, config, output_dir: Str): path|0` — walks
   `flutter_assets/` recursively (symlinks skipped); 0 if any file cannot be read in full or is over
-  8 MiB, an entry name is over 100 bytes, or the archive would not fit the reader (v1.1.3,
-  ADR-0012);
+  `AGPKG_BUF_MAXLEN`, an entry name cannot be stored (over 256 bytes, or not splittable into the
+  ustar prefix and name fields), or the archive would not fit the reader (v1.1.3, ADR-0012). A
+  source file with an execute bit is packed 0755, the rest 0644 (v1.3.0, ADR-0014);
   `agpkg_inspect(path: Str): Vec<name>|0`; `agpkg_inspect_bytes(data, len): Vec|0`;
   `agpkg_payload_size(data, len): bytes|-1` *(added v1.1.5)* — what the bundle extracts to;
   `agpkg_read_entry(data, len, name: Str): content|0`. The reader skips symlink/hardlink and
@@ -241,6 +242,16 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   `agpkg_extract_to_dir`) on a bad header checksum, a non-octal numeric field, data past the end
   of the archive, or two entries with the same name (v1.1.1, ADR-0011).
   `agpkg_extract_to_dir` also returns `-1` if any file fails to write (v1.1.3).
+  *v1.3.0 (ADR-0014):* names come from the ustar prefix, GNU `L` and PAX `path` records too, and the
+  safety checks apply to that full name (a name ending in `/` is skipped as well). The whole archive
+  is also rejected for a non-octal mode field, a malformed PAX record, a PAX `size` that disagrees
+  with its header, a global `path` / `size`, a long name over `AGPKG_NAME_MAX` or with no entry
+  after it, or an extension entry over `AGPKG_EXT_MAX`. Extracted files are 0755 if the header's
+  owner-execute bit is set, else 0644, set with `fchmod`.
+- Constants *(v1.3.0)*: `AGPKG_BUF_MAXLEN` (16 MiB, sankoch's gzip ceiling; 8 MiB before),
+  `AGPKG_MAX_PACKAGE_SIZE` (100 MiB, `== RC_DOWNLOAD_MAX_BYTES`), `AGPKG_NAME_MAX` (1,024),
+  `AGPKG_EXT_MAX` (64 KiB). `tentry_mode` / `tentry_set_mode` *(added v1.3.0)* beside
+  `tentry_new` / `tentry_name` / `tentry_data` / `tentry_len`.
 
 ## pipeline — `src/pipeline.cyr`
 
@@ -255,6 +266,9 @@ The end-to-end flow (ADR-0009); both trust gates are enforced at install.
   `installed_size` is the extracted size (`agpkg_payload_size`, v1.1.5), as Rust recorded it.
   Returns `0` on any gate failure / malformed bundle / invalid manifest / quota / failed
   extraction / failed index save; a fresh install's partial directory is removed.
+  *v1.3.0 (ADR-0014):* a bundle over `AGPKG_MAX_PACKAGE_SIZE` returns `0` before anything is read;
+  the quota is checked against the bundle size and the extracted size, both before any file is
+  written; the bundle is inflated once.
 
 ---
 

@@ -3,6 +3,7 @@
 #   pack <build_dir> <out_dir>    pack_flutter_app; prints the bundle path
 #   list <bundle>                 prints the safe entry names, one per line
 #   get  <bundle> <name> <out>    writes entry <name> to the file <out>
+#   extract <bundle> <dir>        agpkg_extract_to_dir; prints the file count
 # Exit 0 on success, 1 on a pack/read failure, 2 on bad usage.
 
 include "src/category.cyr"
@@ -56,18 +57,28 @@ fn _xc_get(bundle, name, out) {
     return 0;
 }
 
+fn _xc_extract(bundle, dir) {
+    var fb = _read_file(str_from(bundle));
+    if (fb == 0) { return 1; }
+    var n = agpkg_extract_to_dir(str_data(fb), str_len(fb), str_from(dir));
+    if (n < 0) { return 1; }
+    _xc_put(str_from_int(n));
+    return 0;
+}
+
 fn main() {
     alloc_init();
     args_init();
     var n = argc();
     if (n < 3) {
-        println("usage: tar-crosscheck pack <build_dir> <out_dir> | list <bundle> | get <bundle> <name> <out>");
+        println("usage: tar-crosscheck pack <build_dir> <out_dir> | list <bundle> | get <bundle> <name> <out> | extract <bundle> <dir>");
         return 2;
     }
     var cmd = argv(1);
     if (streq(cmd, "pack") == 1) { if (n == 4) { return _xc_pack(argv(2), argv(3)); } }
     if (streq(cmd, "list") == 1) { if (n == 3) { return _xc_list(argv(2)); } }
     if (streq(cmd, "get") == 1)  { if (n == 5) { return _xc_get(argv(2), argv(3), argv(4)); } }
+    if (streq(cmd, "extract") == 1) { if (n == 4) { return _xc_extract(argv(2), argv(3)); } }
     println("tar-crosscheck: bad command or argument count");
     return 2;
 }

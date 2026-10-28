@@ -70,7 +70,7 @@ git = "https://github.com/MacCracken/mela.git"
 modules = ["dist/mela.cyr"]
 # plus mela's own deps:
 [deps.agnostik]   # dist/agnostik.cyr, tag 2.0.0 or later (mela ≥ 1.2.0 uses its 2.x accessor names)
-# and the stdlib leaves in dist/mela.deps (sigil, sankoch, sandhi, fs, thread_local)
+# and the stdlib leaves in dist/mela.deps (sigil, sankoch, sandhi, fs, thread_local, syscalls)
 ```
 
 ```cyrius

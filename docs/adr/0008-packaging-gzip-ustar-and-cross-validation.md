@@ -64,6 +64,9 @@ Two facts shape the approach:
   symlinks as Rust did, and fails the pack on any file it cannot read in full.
   Entry names over the 100-byte ustar name field fail the pack too, rather than
   being truncated. Long names are roadmap v1.2.0.
+  *Update (v1.3.0, ADR-0014):* the reader now interprets the ustar `prefix`, GNU
+  `L` / `K` and PAX `x` / `g` entries. The writer uses the prefix for names up to
+  256 bytes. Sparse files are still not interpreted (their typeflag is skipped).
 - **Neutral** — this unblocks the deferred `local_registry` tarball extraction
   (ADR-0005): `extract_manifest_from_tarball` / `extract_tarball` can now reuse
   this gunzip + ustar reader at v0.9.0. The `LandlockRule`/`NetworkRule` types

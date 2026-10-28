@@ -1,6 +1,7 @@
 # 0013 — Every remaining divergence from rust-old, decided
 
-**Status**: Accepted
+**Status**: Accepted · §5 (file modes) and §6 (header modes, long names) amended by
+[ADR-0014](0014-large-bundles-names-modes-limits.md) (v1.3.0)
 **Date**: 2026-10-15 (v1.1.5)
 
 ## Context
@@ -100,7 +101,8 @@ such files turn up, a converter is a separate tool, not a load-time path.
   uses the bundle size, as Rust's did.
 - **File modes:** **deferred to v1.2.0.** Rust kept `mode & 0o777` from each tar header. mela
   writes every file as 0644. The extractor is rewritten for streaming at v1.2.0, and keeping the
-  executable bit is decided and done there.
+  executable bit is decided and done there. *Decided at v1.3.0 (ADR-0014): 0755 if the header's
+  owner-execute bit is set, otherwise 0644.*
 - **Path containment:** **kept, and stronger.** Rust resolved each output path and checked it stayed
   under the destination. mela never writes a symlink, hardlink or directory entry, an absolute
   name, or any name containing `..` ([ADR-0011](0011-fail-closed-decoding-at-the-trust-boundary.md)),
@@ -117,7 +119,8 @@ such files turn up, a converter is a separate tool, not a load-time path.
   where Rust pretty-printed them. JSON whitespace has no meaning, and nothing compares mela
   bundles to Rust bundles byte for byte.
 - **Long names and unreadable files:** both fail the pack ([ADR-0012](0012-fail-closed-install-and-transport.md)).
-  Long-name support is v1.2.0.
+  Long-name support is v1.2.0. *v1.3.0 (ADR-0014): a source file with an execute bit is written
+  0755; names up to 256 bytes pack through the ustar prefix.*
 
 ### 7. Keyring loading
 
