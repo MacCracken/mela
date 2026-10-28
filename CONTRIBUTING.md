@@ -30,6 +30,7 @@ cyrius bench tests/mela.bcyr             # benchmarks
 cyrius fuzz                              # fuzz harness (tests/mela.fcyr)
 bash scripts/tar-crosscheck.sh           # bundle format vs GNU tar, both directions
 bash scripts/transport-check.sh          # live HTTP client vs a local python3 server
+cyrius api-surface --scope=project       # public fns vs docs/api-surface.snapshot
 ```
 
 CI runs all of these, plus `cyrius deps --locked` and a `cyrius coverage --min` floor
@@ -43,6 +44,10 @@ Every change passes the same gates as existing code:
   signatures, URLs) earns a harness in `tests/mela.fcyr`.
 - **Benchmark before claiming perf** — numbers in `tests/mela.bcyr`, against the Rust
   predecessor in `docs/benchmarks-rust-v-cyrius.md`, or it didn't happen.
+- **Record the API surface** — the public API is frozen ([`docs/api/`](docs/api/)). Removing a
+  public fn or changing its arity fails `cyrius api-surface`, and needs an ADR. Adding one is
+  fine, but run `cyrius api-surface --update --scope=project` and commit
+  `docs/api-surface.snapshot`: CI fails on any difference from it.
 
 ## Cyrius conventions (the ones that bite)
 

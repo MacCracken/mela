@@ -1,9 +1,9 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-10-28 (v1.4.0) · Live status: [`state.md`](state.md) · History:
+> **Last Updated**: 2026-10-28 (v1.5.0) · Live status: [`state.md`](state.md) · History:
 > [`../../CHANGELOG.md`](../../CHANGELOG.md) · Parity record: [`rust-parity.md`](rust-parity.md)
 >
-> Open work only. Shipped milestones (v0.1.0 port scaffold → v1.0.0 release → v1.4.0) are
+> Open work only. Shipped milestones (v0.1.0 port scaffold → v1.0.0 release → v1.5.0) are
 > recorded in the CHANGELOG, not here. **v1.1.x** — the 2026-10-14 parity audit's fixes, the
 > coverage catch-up, the divergence ADRs and the retirement of `rust-old/` — is complete
 > (CHANGELOG 1.1.1–1.1.6). **v1.x** maps the backlog. Each item is self-contained, so an agent
@@ -17,7 +17,8 @@
 - **Every fix lands with its regression test.**
 - **Public API is frozen** ([`../api/`](../api/)). Additive changes are fine. Changing what a
   listed function accepts or returns needs an ADR, including a bug fix that starts rejecting
-  input that used to be accepted.
+  input that used to be accepted. CI checks names and arities against
+  [`../api-surface.snapshot`](../api-surface.snapshot) (v1.5.0); semantics are still the ADR's job.
 - **The parity record is the oracle** since `rust-old/` was retired (v1.1.6): `tests/mela.tcyr`,
   the GNU tar and transport checks, [`rust-parity.md`](rust-parity.md) and ADR-0011–0015. A
   behavior change needs an ADR; a parity assertion is never weakened without one.
@@ -69,15 +70,6 @@ provenance guide). Writing them down surfaced these, now in the threat model's *
 - **Log equivocation.** Signed tree heads and a consistency proof between two views of the log,
   so a registry cannot show clients different logs, and dropping entries from the end is
   detectable. A design item, not a patch.
-
-### v1.5.0 — API and build hygiene
-
-- Commit a `cyrius api-surface --scope=project` snapshot and gate CI on it. This turns the
-  [`../api/`](../api/) freeze into a check.
-- Clear the three `assigning non-pointer to typed pointer` warnings
-  (`src/ratings.cyr`, `src/flutter_agpkg.cyr`). Check that none hides a real bug first.
-- Move `assert` / `bench` to `[test] stdlib` (cyrius 6.7.6), so they leave the build's stdlib
-  list.
 
 ### v1.6.0 — Targets beyond x86_64 Linux
 

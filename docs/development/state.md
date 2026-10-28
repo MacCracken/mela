@@ -5,6 +5,13 @@
 
 ## Version
 
+**1.5.0** — API and build hygiene (2026-10-28).
+- `docs/api-surface.snapshot` (335 public fns) is committed, and CI fails on any difference from
+  it.
+- Zero build warnings from `src/` on x86_64, aarch64 and agnos.
+- `assert` / `bench` moved to `[test] stdlib`, so the production binary is 17,272 B smaller.
+- No behavior change; 1146/1146.
+
 **1.4.0** — Hardening residuals (2026-10-28, ADR-0015).
 - Extraction is confined: on Linux it walks the install dir with `openat` + `O_NOFOLLOW`, fails
   on any symlink, and never writes into an existing inode (agnos: path checks).
@@ -159,9 +166,11 @@ Benchmarks at [`tests/mela.bcyr`](../../tests/mela.bcyr) (`cyrius bench`) /
 
 Direct (declared in `cyrius.cyml`):
 
-- stdlib — string, fmt, alloc, vec, str, syscalls, io, args, assert, hashmap, tagged, result,
+- `[test] stdlib` (test / bench / fuzz compiles only, v1.5.0) — assert, bench.
+
+- stdlib — string, fmt, alloc, vec, str, syscalls, io, args, hashmap, tagged, result,
   fnptr, trait, bayan (JSON codec), chrono, fs, freelist, slice, process, sakshi, ct, keccak,
-  thread, thread_local, random, bench, net, async, atomic, mmap, dynlib, fdlopen, regression,
+  thread, thread_local, random, net, async, atomic, mmap, dynlib, fdlopen, regression,
   http, tls, ws, plus the folded stdlib bundles:
   - **sigil** (3.13.15) — Ed25519 + SHA-256 + hex (trust gate).
   - **sankoch** (2.8.9) — gzip/deflate/lz4 (the `.agnos-agent` packer; tar is hand-rolled
@@ -192,7 +201,8 @@ Direct (declared in `cyrius.cyml`):
 See [`roadmap.md`](roadmap.md). **v1.1.x is complete**: the 2026-10-14 parity audit's twelve
 defects are fixed, 202 of the Rust original's 204 tests are covered (2 N/A), every divergence is
 decided (ADR-0013) and `rust-old/` is retired. CI runs test, fuzz, bench, an 88% coverage floor
-(299/334 at v1.4.0), the GNU tar cross-check and a live transport check.
+(299/334 at v1.4.0), the API-surface snapshot (v1.5.0), the GNU tar cross-check and a live
+transport check.
 
 **v1.3.0** shipped Large bundles, part one; part two (streaming, and bundles over 16 MiB) is
 blocked on sankoch. **v1.4.0** shipped the hardening residuals. Three trust follow-ups are
@@ -201,5 +211,5 @@ proposed, each needing a maintainer decision:
 - checking a key file's `key_id` on load;
 - log equivocation.
 
-After them the **v1.x** backlog maps API and build hygiene (v1.5.0), aarch64 and agnos runtime
-(v1.6.0), and the unscheduled features (discovery, paid distribution).
+**v1.5.0** shipped API and build hygiene. The **v1.x** backlog after it maps aarch64 and agnos
+runtime (v1.6.0), and the unscheduled features (discovery, paid distribution).

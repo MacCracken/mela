@@ -4,6 +4,61 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
+## [1.5.0] - 2026-10-28
+
+**API and build hygiene.** No behavior change.
+- The API freeze is checked in CI.
+- The build has no warnings from `src/`.
+- The test-only stdlib leaves no longer reach the production binary.
+
+**Gates:** 1146 passed / 0 failed; fuzz 1 / 0; bench 1 / 0; coverage 89% (299/334). The GNU tar
+cross-check and the live transport check pass, and `--agnos` / `--aarch64` build.
+`cyrius build` OK (3,611,880 B, was 3,629,152).
+
+### Added — the API surface is checked
+
+- **`docs/api-surface.snapshot`** lists all 335 public fns as `module::name/arity`. It is written
+  by `cyrius api-surface --update --scope=project`, which is deterministic and sorted.
+- **A new CI step** (after the build):
+  - `cyrius api-surface --scope=project` fails on a removed fn or a changed arity;
+  - `--update` followed by `git diff --exit-code` also fails on an addition missing from the
+    snapshot. So the snapshot is always the complete list, and a later removal of an added fn is
+    caught too.
+  - Checked locally: a removed fn exits 1; an added fn exits 0 from the tool and is then caught
+    by the diff.
+- **Docs:** `docs/api/README.md` points to the snapshot as the complete list. A one-off check
+  found every function the page names public in `src/` (the one exception is the stdlib's
+  `str_from`). CONTRIBUTING gains the command and the rule; the roadmap's working rules mention
+  the check.
+
+### Fixed — the three `assigning non-pointer to typed pointer` warnings
+
+None hid a bug. Each assigned a `Str` that the compiler saw as `i64` to a local inferred as
+`Str`:
+
+| Site | Value | Change |
+|---|---|---|
+| `src/ratings.cyr` `_rating_from_jv`, `review` | `json_v_str(rv)`, which returns the stored `Str` | read through `_r_jstr(o, "review")` (typed `: Str`), the same lookup |
+| `src/flutter_agpkg.cyr` `pfconfig_from_json`, `data_dir` | `json_v_str(ddv)` | read through `_ag_jstr(root, "data_dir")`, the same lookup |
+| `src/flutter_agpkg.cyr` `fbuild_validate`, `aot_s` | `_find_aot(root)`, a `Str` or 0, checked before use | `_find_aot` is now typed `: Str` |
+
+Existing tests cover each path (a rating with a review, a config with `data_dir`, the AOT lookup
+order). The only build warning left is the stdlib's note about large static data (the Unicode
+tables).
+
+### Changed — `assert` / `bench` in `[test] stdlib`
+
+- **What moved:** `cyrius.cyml` moves `assert` and `bench` from `[deps] stdlib` to a new `[test]`
+  section (cyrius 6.7.6). They reach `cyrius test`, `bench` and `fuzz` compiles only. No file in
+  `src/` or `scripts/` uses them.
+- **Unchanged:** `lib/` and `cyrius.lock` (the resolve still vendors and locks test leaves), and
+  `dist/mela.deps`. `cyrius deps --locked` passes.
+- **The production binary is 17,272 B smaller.**
+
+### Docs
+
+The roadmap's v1.5.0 section is removed, and state.md is updated.
+
 ## [1.4.0] - 2026-10-28
 
 **Hardening residuals** ([ADR-0015](docs/adr/0015-confined-extraction-and-transparency-hash-v2.md)):

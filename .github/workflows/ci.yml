@@ -41,6 +41,17 @@ jobs:
           mkdir -p build
           cyrius build src/main.cyr build/${{ github.event.repository.name }}
 
+      - name: API surface (docs/api/ is frozen)
+        # A removed or changed public fn fails the check (exit 1); an added one
+        # must be recorded in the snapshot too, so it always lists the surface.
+        run: |
+          cyrius api-surface --scope=project
+          cyrius api-surface --update --scope=project > /dev/null
+          git diff --exit-code -- docs/api-surface.snapshot || {
+            echo "::error::public fns changed since docs/api-surface.snapshot: run 'cyrius api-surface --update --scope=project' and commit it"
+            exit 1
+          }
+
       - name: Test
         run: cyrius test
 

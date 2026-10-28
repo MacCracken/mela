@@ -343,7 +343,7 @@ fn _rating_from_jv(o): i64 {
     var rv = bayan_json_v_obj_get_by_cstr(o, "review");
     var has_review = 0;
     var review = str_from("");
-    if (json_v_is_str(rv) == 1) { has_review = 1; review = json_v_str(rv); }
+    if (json_v_is_str(rv) == 1) { has_review = 1; review = _r_jstr(o, "review"); }
     return rating_new(_r_jstr(o, "agent_id"), _r_jstr(o, "package_name"), score,
       has_review, review, _r_jint(o, "created_at"), _r_jstr(o, "version_reviewed"));
 }

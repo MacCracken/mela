@@ -5,6 +5,12 @@
 > Additive changes are allowed before v1.0; **signature/semantic changes to a
 > listed function require an ADR**. Functions prefixed `_` are internal and may
 > change without notice — do not call them.
+>
+> **Checked since v1.5.0:** [`../api-surface.snapshot`](../api-surface.snapshot) lists every
+> public fn as `module::name/arity` (`cyrius api-surface --scope=project`). CI fails when a fn
+> is removed or its arity changes, and when the snapshot does not match the source exactly, so
+> additions are recorded too. The snapshot is the complete list; this page explains it and does
+> not list every accessor.
 
 ## Conventions
 

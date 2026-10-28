@@ -93,7 +93,7 @@ fn pfconfig_from_json(json: Str): i64 {
     var has_dd = 0;
     var dd = str_from("");
     var ddv = bayan_json_v_obj_get_by_cstr(root, "data_dir");
-    if (json_v_is_str(ddv) == 1) { has_dd = 1; dd = json_v_str(ddv); }
+    if (json_v_is_str(ddv) == 1) { has_dd = 1; dd = _ag_jstr(root, "data_dir"); }
 
     return pfconfig_new(_ag_jstr(root, "app_name"), _ag_jstr(root, "version"),
       _ag_jstr(root, "publisher"), _ag_jstr(root, "description"),
@@ -157,7 +157,7 @@ fn _is_file(path: Str): i64 {
 }
 
 # find_aot_binary — relative path Str of app.so / libapp.so in root or lib/, or 0.
-fn _find_aot(root: Str): i64 {
+fn _find_aot(root: Str): Str {
     if (_is_file(path_join(root, str_from("app.so"))) == 1)        { return str_from("app.so"); }
     if (_is_file(path_join(root, str_from("libapp.so"))) == 1)     { return str_from("libapp.so"); }
     if (_is_file(path_join(root, str_from("lib/app.so"))) == 1)    { return str_from("lib/app.so"); }

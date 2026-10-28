@@ -28,16 +28,21 @@ modules = [
 
 [deps]
 stdlib = [
-    "string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args", "assert",
+    "string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args",
     "hashmap", "tagged", "result", "fnptr", "trait", "bayan", "chrono",
     "fs", "freelist", "slice", "process", "sakshi", "ct", "keccak",
-    "thread", "thread_local", "random", "bench",
+    "thread", "thread_local", "random",
     "net", "async", "atomic", "mmap", "dynlib", "fdlopen", "regression",
     "http", "tls", "ws",
     "sigil", "sankoch", "sandhi",
     "unicode/_decode", "unicode/casefold", "unicode/_casefold_data",
     "unicode/categories", "unicode/_categories_data",
 ]
+
+# Test / bench / fuzz compiles only (cyrius 6.7.6): kept out of the production
+# binary and of dist/mela.deps.
+[test]
+stdlib = ["assert", "bench"]
 
 [deps.agnostik]
 git = "https://github.com/MacCracken/agnostik.git"
