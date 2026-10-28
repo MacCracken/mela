@@ -21,7 +21,9 @@ You'll receive an acknowledgement, and we'll coordinate a fix and disclosure tim
 ## Security model (what Mela guarantees)
 
 - **Signature enforcement.** Every package and agent must carry a valid Ed25519 publisher
-  signature. Unsigned artifacts are **rejected**, not warned about (`trust`).
+  signature. Unsigned artifacts are **rejected**, not warned about (`trust`). A key counts only
+  under the `key_id` it derives, so a keyring entry cannot let one key sign as another
+  (ADR-0017).
 - **Key continuity.** An upgrade must be signed under the key the installed version was published
   under, a successor the keyring declares, or a key the operator approved for that one install
   (ADR-0016).
@@ -30,8 +32,10 @@ You'll receive an acknowledgement, and we'll coordinate a fix and disclosure tim
   comparison; the signature check never is.
 - **Transparency.** Publications are recorded in an append-only, hash-chained transparency log
   (`transparency`). Altering, reordering or backdating a recorded entry is detectable by anyone
-  holding the log. It does not yet prevent a registry from showing different clients different
-  logs (see the threat model).
+  holding the log. The log signs checkpoints of its head, and witnesses cosign them. A client
+  that keeps its last checkpoint refuses a shorter or forked log. With a witness threshold, a
+  split view needs dishonest witnesses (ADR-0018). Carrying checkpoints between registry,
+  witnesses and clients is the consumer's (see the threat model).
 - **Capability disclosure.** Each app ships a sandbox profile (`sandbox_profiles`) declaring
   exactly what it may access; capabilities are surfaced **before** install.
 - **Confined installation.** Installing writes only inside the package's install directory. On

@@ -1,6 +1,8 @@
 # 0016 — Publisher key continuity on upgrade
 
-**Status**: Accepted
+**Status**: Accepted · succession amended by
+[ADR-0017](0017-key-id-must-derive-from-the-key.md) (v1.5.2): a `succeeds` declaration counts only
+from a version whose `key_id` derives from its public key.
 **Date**: 2026-10-28 (v1.5.1)
 
 ## Context

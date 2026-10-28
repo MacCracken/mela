@@ -347,11 +347,8 @@ fn _log_entry_complete(o): i64 {
     return 1;
 }
 
-# from_json() — rebuild a log from JSON, then verify the chain. Returns 0 on a
-# JSON parse error, a non-array root, OR a chain that fails verification (a
-# tampered entry, like the Rust `from_json` which calls verify_chain). Mirrors
-# Rust `from_json`. An entry without `hash_version` is v1 (ADR-0015).
-fn tlog_from_json(json: Str): i64 {
+# A JSON array of complete entries as a Vec, unchained, or 0.
+fn _tlog_parse(json: Str): i64 {
     var root = json_v_parse_buf(str_data(json), str_len(json));   # explicit buf+len (see trust.cyr)
     if (root == 0) { return 0; }
     if (json_v_is_arr(root) == 0) { return 0; }
@@ -375,6 +372,360 @@ fn tlog_from_json(json: Str): i64 {
         vec_push(log, e);
         i = i + 1;
     }
+    return log;
+}
+
+# from_json() — rebuild a log from JSON, then verify the chain. Returns 0 on a
+# JSON parse error, a non-array root, OR a chain that fails verification (a
+# tampered entry, like the Rust `from_json` which calls verify_chain). Mirrors
+# Rust `from_json`. An entry without `hash_version` is v1 (ADR-0015).
+fn tlog_from_json(json: Str): i64 {
+    var log = _tlog_parse(json);
+    if (log == 0) { return 0; }
     if (tlog_verify_chain(log) == 0) { return 0; }
     return log;
+}
+
+# ---------------------------------------------------------------------------
+# Checkpoints — signed heads, witnesses and consistency proofs (ADR-0018)
+# ---------------------------------------------------------------------------
+#
+# The chain alone is tamper-evident, not equivocation-proof: a registry could
+# show two clients two different, internally consistent logs, or drop entries
+# from the end. A checkpoint is the log's signed statement "log <origin> has
+# <size> entries, the last hashing to <head>". The head of a hash chain commits
+# to every entry before it, as a Merkle root would.
+#   - A client keeps the last checkpoint it accepted and takes a new one only if
+#     the entries between them link the old head to the new one (the
+#     consistency proof). A shorter or forked log is refused.
+#   - Witnesses do the same and cosign what they accepted. A client that wants
+#     k cosignatures from witnesses it trusts cannot be shown a fork unless k of
+#     them cosigned it.
+# Two checkpoints the log signed with the same origin and size but different
+# heads are proof that it equivocated.
+#
+# Checkpoint layout (8-byte fields):
+#   0  origin      (Str; names the log)
+#   8  size        (i64; number of entries)
+#   16 head        (Str; entry_hash of the last entry, "" when size is 0)
+#   24 timestamp   (i64; when the log signed it, epoch)
+#   32 key_id      (Str; the log key's key_id)
+#   40 signature   (Str; 128 hex chars, the log key over the body)
+#   48 cosigs      (Vec of cosignatures: 0 key_id (Str), 8 signature (Str hex))
+
+var CKPT_TAG       = "mela.transparency.checkpoint.v1";
+var CKPT_COSIG_TAG = "mela.transparency.cosignature.v1";
+
+fn _ckpt_new(origin: Str, size, head: Str, timestamp, key_id: Str, signature: Str): i64 {
+    var cp = alloc(56);
+    store64(cp,      origin);
+    store64(cp + 8,  size);
+    store64(cp + 16, head);
+    store64(cp + 24, timestamp);
+    store64(cp + 32, key_id);
+    store64(cp + 40, signature);
+    store64(cp + 48, vec_new());
+    return cp;
+}
+
+fn ckpt_origin(cp): Str    { return load64(cp); }
+fn ckpt_size(cp): i64      { return load64(cp + 8); }
+fn ckpt_head(cp): Str      { return load64(cp + 16); }
+fn ckpt_timestamp(cp): i64 { return load64(cp + 24); }
+fn ckpt_key_id(cp): Str    { return load64(cp + 32); }
+fn _ckpt_sig(cp): Str      { return load64(cp + 40); }
+fn _ckpt_cosigs(cp)        { return load64(cp + 48); }
+
+# tlog_head() — the entry_hash of the last entry, or "" for an empty log.
+fn tlog_head(log): Str {
+    if (vec_len(log) == 0) { return str_from(""); }
+    return log_entry_hash(vec_get(log, vec_len(log) - 1));
+}
+
+# 1 if the checkpoint's fields can describe a log: an origin, a size >= 0, and
+# a head that is "" exactly when the log is empty, else a SHA-256 hex.
+fn _ckpt_wellformed(cp): i64 {
+    if (str_len(ckpt_origin(cp)) == 0) { return 0; }
+    if (ckpt_size(cp) < 0) { return 0; }
+    var want = 64;
+    if (ckpt_size(cp) == 0) { want = 0; }
+    if (str_len(ckpt_head(cp)) != want) { return 0; }
+    return 1;
+}
+
+# The bytes a signature covers:
+#   len BE8 || tag || len BE8 || origin || size BE8 || len BE8 || head ||
+#   timestamp BE8 (two's complement).
+# The log signs it under CKPT_TAG, a witness under CKPT_COSIG_TAG, so neither
+# signature can stand in for the other.
+fn _ckpt_body(cp, tag): Str {
+    var t = str_from(tag);
+    var o = ckpt_origin(cp);
+    var h = ckpt_head(cp);
+    var total = 8 + str_len(t) + 8 + str_len(o) + 8 + 8 + str_len(h) + 8;
+    var buf = alloc(total);
+    var off = _append_lp(buf, 0, t);
+    off = _append_lp(buf, off, o);
+    _be64(ckpt_size(cp), buf + off);
+    off = _append_lp(buf, off + 8, h);
+    _be64(ckpt_timestamp(cp), buf + off);
+    return str_new(buf, total);
+}
+
+# 1 if `sighex` is a signature over `body` by a key of `keyring` valid at `now`
+# whose key_id derives from it (ADR-0017).
+fn _ckpt_sig_ok(keyring, key_id: Str, body: Str, sighex: Str, now): i64 {
+    if (keyring == 0) { return 0; }
+    if (str_len(sighex) != 128) { return 0; }
+    var kv = _keyring_trusted_key(keyring, key_id, now);
+    if (kv == 0) { return 0; }
+    var sig = trust_hex_decode(sighex);
+    if (sig == 0) { return 0; }
+    return trust_verify(str_data(body), str_len(body), sig, TRUST_SIG_LEN, kv_verifying_key(kv));
+}
+
+# tlog_checkpoint() — the log's signed checkpoint of its current size and head,
+# under the 64-byte secret key `sk` (seed || public key). Returns 0 for an empty
+# origin, or a log whose chain does not verify: a log never signs a broken chain.
+fn tlog_checkpoint(log, origin: Str, sk, timestamp): i64 {
+    if (str_len(origin) == 0) { return 0; }
+    if (tlog_verify_chain(log) == 0) { return 0; }
+    var cp = _ckpt_new(origin, tlog_len(log), tlog_head(log), timestamp,
+      trust_key_id_from_pk(sk + 32), str_from(""));
+    var body = _ckpt_body(cp, CKPT_TAG);
+    store64(cp + 40, trust_hex_encode(trust_sign(sk, str_data(body), str_len(body)), TRUST_SIG_LEN));
+    return cp;
+}
+
+# ckpt_cosign() — add a witness's cosignature under `sk`. A witness cosigns only
+# a checkpoint that ckpt_advance accepted against its own last one.
+fn ckpt_cosign(cp, sk): i64 {
+    var body = _ckpt_body(cp, CKPT_COSIG_TAG);
+    var c = alloc(16);
+    store64(c, trust_key_id_from_pk(sk + 32));
+    store64(c + 8, trust_hex_encode(trust_sign(sk, str_data(body), str_len(body)), TRUST_SIG_LEN));
+    vec_push(_ckpt_cosigs(cp), c);
+    return 0;
+}
+
+# 1 if `a` and `b` state the same thing: origin, size, head and timestamp.
+fn _ckpt_same_body(a, b): i64 {
+    if (str_eq(ckpt_origin(a), ckpt_origin(b)) == 0) { return 0; }
+    if (ckpt_size(a) != ckpt_size(b)) { return 0; }
+    if (str_eq(ckpt_head(a), ckpt_head(b)) == 0) { return 0; }
+    if (ckpt_timestamp(a) != ckpt_timestamp(b)) { return 0; }
+    return 1;
+}
+
+# ckpt_merge() — add `src`'s cosignatures to `dst`, skipping any `dst` already
+# holds, when both are the same checkpoint: how a log gathers what its
+# witnesses cosigned in parallel. Returns 1, or 0 with `dst` unchanged if they
+# state different things. Nothing is verified here: ckpt_witnesses counts.
+fn ckpt_merge(dst, src): i64 {
+    if (_ckpt_same_body(dst, src) == 0) { return 0; }
+    var cs = _ckpt_cosigs(src);
+    var n = vec_len(cs);
+    var i = 0;
+    while (i < n) {
+        var c = vec_get(cs, i);
+        var have = 0;
+        var d = _ckpt_cosigs(dst);
+        var j = 0;
+        while (j < vec_len(d)) {
+            if (str_eq(load64(vec_get(d, j)), load64(c)) == 1) {
+                if (str_eq(load64(vec_get(d, j) + 8), load64(c + 8)) == 1) { have = 1; }
+            }
+            j = j + 1;
+        }
+        if (have == 0) { vec_push(d, c); }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# ckpt_verify() — 1 if the checkpoint is well formed and signed by its key_id's
+# key in `keyring` (the log keys), current at `now`.
+fn ckpt_verify(cp, keyring, now): i64 {
+    if (_ckpt_wellformed(cp) == 0) { return 0; }
+    return _ckpt_sig_ok(keyring, ckpt_key_id(cp), _ckpt_body(cp, CKPT_TAG), _ckpt_sig(cp), now);
+}
+
+# ckpt_witnesses() — how many distinct keys of `keyring` (the witness keys)
+# validly cosigned the checkpoint at `now`. The log's own key never counts.
+fn ckpt_witnesses(cp, keyring, now): i64 {
+    var body = _ckpt_body(cp, CKPT_COSIG_TAG);
+    var seen = map_new_str();
+    var count = 0;
+    var cs = _ckpt_cosigs(cp);
+    var i = 0;
+    while (i < vec_len(cs)) {
+        var c = vec_get(cs, i);
+        var kid = load64(c);
+        if (str_eq(kid, ckpt_key_id(cp)) == 0) {
+            if (map_has(seen, kid) == 0) {
+                if (_ckpt_sig_ok(keyring, kid, body, load64(c + 8), now) == 1) {
+                    map_set(seen, kid, 1);
+                    count = count + 1;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return count;
+}
+
+# tlog_proof() — the consistency proof from a checkpoint of `size` entries to
+# the log as it is now: the entries after the first `size`, in order. 0 if
+# `size` is negative or past the end.
+fn tlog_proof(log, size): i64 {
+    if (size < 0) { return 0; }
+    if (size > vec_len(log)) { return 0; }
+    var out = vec_new();
+    var i = size;
+    while (i < vec_len(log)) {
+        vec_push(out, vec_get(log, i));
+        i = i + 1;
+    }
+    return out;
+}
+
+# tlog_proof_from_json() — a proof sent as tlog_to_json(proof): its entries,
+# decoded as strictly as a log's, or 0. Not chained here: the proof starts
+# mid-log, and ckpt_consistent checks it against both checkpoints.
+fn tlog_proof_from_json(json: Str): i64 { return _tlog_parse(json); }
+
+# ckpt_consistent() — 1 if `proof` shows `new` extends `old`. Both name the same
+# log, and new.size is old.size plus the proof's length. Each proof entry
+# self-verifies, carries the next sequence number, links to the hash before it
+# (old.head first), and keeps the hash version non-decreasing. The last hash is
+# new.head. An empty proof (or 0) needs the same size and head, so a shorter log
+# or a fork at any point is refused. Signatures are the caller's: ckpt_advance.
+fn ckpt_consistent(old, new, proof): i64 {
+    if (_ckpt_wellformed(old) == 0) { return 0; }
+    if (_ckpt_wellformed(new) == 0) { return 0; }
+    if (str_eq(ckpt_origin(old), ckpt_origin(new)) == 0) { return 0; }
+    var n = 0;
+    if (proof != 0) { n = vec_len(proof); }
+    if (ckpt_size(new) != ckpt_size(old) + n) { return 0; }
+    var prev = ckpt_head(old);
+    var i = 0;
+    while (i < n) {
+        var e = vec_get(proof, i);
+        if (log_entry_verify_self(e) == 0) { return 0; }
+        if (log_seq(e) != ckpt_size(old) + i) { return 0; }
+        if (str_eq(log_previous_hash(e), prev) == 0) { return 0; }
+        if (i > 0) {
+            if (log_hash_version(e) < log_hash_version(vec_get(proof, i - 1))) { return 0; }
+        }
+        prev = log_entry_hash(e);
+        i = i + 1;
+    }
+    return str_eq(prev, ckpt_head(new));
+}
+
+# tlog_matches_ckpt() — 1 if `log` is exactly the log `cp` describes: its chain
+# verifies and it has cp's size and head. A log with entries dropped from its
+# end no longer matches.
+fn tlog_matches_ckpt(log, cp): i64 {
+    if (_ckpt_wellformed(cp) == 0) { return 0; }
+    if (vec_len(log) != ckpt_size(cp)) { return 0; }
+    if (str_eq(tlog_head(log), ckpt_head(cp)) == 0) { return 0; }
+    return tlog_verify_chain(log);
+}
+
+# A client's policy for one log (operator configuration, like the keyring):
+#   0 origin (Str)  8 log keyring  16 witness keyring (or 0)  24 threshold (i64)
+fn ckpt_policy_new(origin: Str, log_keyring, witness_keyring, threshold): i64 {
+    var p = alloc(32);
+    store64(p,      origin);
+    store64(p + 8,  log_keyring);
+    store64(p + 16, witness_keyring);
+    store64(p + 24, threshold);
+    return p;
+}
+
+# 1 if `cp` names the policy's log and its log key signed it.
+fn _ckpt_policy_signed(policy, cp, now): i64 {
+    if (str_eq(ckpt_origin(cp), load64(policy)) == 0) { return 0; }
+    return ckpt_verify(cp, load64(policy + 8), now);
+}
+
+# ckpt_advance() — 1 if a client holding `trusted` (its last accepted checkpoint,
+# or 0 on first contact) may move to `incoming`. Incoming must name the policy's
+# log, be signed by its log key, carry `threshold` witness cosignatures, and,
+# after first contact, be shown by `proof` to extend `trusted`. The caller then
+# stores incoming in place of trusted; on 0 it keeps trusted. `trusted` is the
+# caller's own state and is not re-verified, so a log key may rotate.
+fn ckpt_advance(policy, trusted, incoming, proof, now): i64 {
+    if (_ckpt_policy_signed(policy, incoming, now) == 0) { return 0; }
+    if (ckpt_witnesses(incoming, load64(policy + 16), now) < load64(policy + 24)) { return 0; }
+    if (trusted == 0) { return 1; }                       # first contact: trust on first use
+    return ckpt_consistent(trusted, incoming, proof);
+}
+
+# ckpt_equivocates() — 1 if `a` and `b` are proof that the policy's log signed
+# two histories: both signed by its log key, the same size, different heads.
+fn ckpt_equivocates(policy, a, b, now): i64 {
+    if (_ckpt_policy_signed(policy, a, now) == 0) { return 0; }
+    if (_ckpt_policy_signed(policy, b, now) == 0) { return 0; }
+    if (ckpt_size(a) != ckpt_size(b)) { return 0; }
+    if (str_eq(ckpt_head(a), ckpt_head(b)) == 1) { return 0; }
+    return 1;
+}
+
+# ckpt_to_json() — {"origin", "size", "head", "timestamp", "key_id",
+# "signature", "cosignatures": [{"key_id", "signature"}]}.
+fn ckpt_to_json(cp): Str {
+    var o = json_v_obj_new();
+    json_v_obj_set(o, str_from("origin"),    json_v_str_new(ckpt_origin(cp)));
+    json_v_obj_set(o, str_from("size"),      json_v_int_new(ckpt_size(cp)));
+    json_v_obj_set(o, str_from("head"),      json_v_str_new(ckpt_head(cp)));
+    json_v_obj_set(o, str_from("timestamp"), json_v_int_new(ckpt_timestamp(cp)));
+    json_v_obj_set(o, str_from("key_id"),    json_v_str_new(ckpt_key_id(cp)));
+    json_v_obj_set(o, str_from("signature"), json_v_str_new(_ckpt_sig(cp)));
+    var arr = json_v_arr_new();
+    var cs = _ckpt_cosigs(cp);
+    var i = 0;
+    while (i < vec_len(cs)) {
+        var c = json_v_obj_new();
+        json_v_obj_set(c, str_from("key_id"),    json_v_str_new(load64(vec_get(cs, i))));
+        json_v_obj_set(c, str_from("signature"), json_v_str_new(load64(vec_get(cs, i) + 8)));
+        json_v_arr_push(arr, c);
+        i = i + 1;
+    }
+    json_v_obj_set(o, str_from("cosignatures"), arr);
+    return json_v_build(o);
+}
+
+# ckpt_from_json() — decode a checkpoint, or 0. Every field ckpt_to_json writes
+# is required with its type (ADR-0011), and the result must be well formed.
+# Signatures are not checked here: ckpt_verify / ckpt_advance do that.
+fn ckpt_from_json(json: Str): i64 {
+    var o = json_v_parse_buf(str_data(json), str_len(json));
+    if (o == 0) { return 0; }
+    if (json_v_is_obj(o) == 0) { return 0; }
+    if (_jreq_str(o, "origin") == 0) { return 0; }
+    if (_jreq_uint(o, "size") == 0) { return 0; }
+    if (_jreq_str(o, "head") == 0) { return 0; }
+    if (_jreq_int(o, "timestamp") == 0) { return 0; }
+    if (_jreq_str(o, "key_id") == 0) { return 0; }
+    if (_jreq_str(o, "signature") == 0) { return 0; }
+    var arr = _jf(o, "cosignatures");
+    if (json_v_is_arr(arr) == 0) { return 0; }
+    var cp = _ckpt_new(_log_jstr(o, "origin"), _log_jint(o, "size"), _log_jstr(o, "head"),
+      _log_jint(o, "timestamp"), _log_jstr(o, "key_id"), _log_jstr(o, "signature"));
+    var i = 0;
+    while (i < json_v_arr_len(arr)) {
+        var co = json_v_arr_get(arr, i);
+        if (json_v_is_obj(co) == 0) { return 0; }
+        if (_jreq_str(co, "key_id") == 0) { return 0; }
+        if (_jreq_str(co, "signature") == 0) { return 0; }
+        var c = alloc(16);
+        store64(c, _log_jstr(co, "key_id"));
+        store64(c + 8, _log_jstr(co, "signature"));
+        vec_push(_ckpt_cosigs(cp), c);
+        i = i + 1;
+    }
+    if (_ckpt_wellformed(cp) == 0) { return 0; }
+    return cp;
 }

@@ -692,13 +692,22 @@ fn test_keyring_load() {
     assert_eq(str_len(mela_kv_public_key_hex(kv2)), 64, "kv roundtrip pubkey len");
 
     # write a keys dir: one *.json = array of two KeyVersion, plus a non-json
-    # file that must be ignored.
+    # file that must be ignored. Since v1.5.2 a file loads only if each key_id
+    # derives from its key (ADR-0017), so these are real keys (RFC 8032 tests 2, 3).
+    var gsk[64];
+    var gpk[32];
+    var GAMMA = trust_keypair_from_seed(hex_decode("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb", 64), &gsk, &gpk);
+    var GHEX = trust_hex_encode(&gpk, 32);
+    var dsk[64];
+    var dpk[32];
+    var DELTA = trust_keypair_from_seed(hex_decode("c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7", 64), &dsk, &dpk);
+    var DHEX = trust_hex_encode(&dpk, 32);
     var DIR = "/tmp/mela-test-keyring";
     rclean(DIR);
     sys_mkdir(str_data(str_from(DIR)), 493);
     var arr = json_v_arr_new();
-    json_v_arr_push(arr, kv_to_jv(kv_new(str_from("gamma"), 0,    0, 0,    ZHEX)));
-    json_v_arr_push(arr, kv_to_jv(kv_new(str_from("gamma"), 1000, 1, 2000, ZHEX)));
+    json_v_arr_push(arr, kv_to_jv(kv_new(GAMMA, 0,    0, 0,    GHEX)));
+    json_v_arr_push(arr, kv_to_jv(kv_new(GAMMA, 1000, 1, 2000, GHEX)));
     var body = json_v_build(arr);
     var fp = path_join(str_from(DIR), str_from("gamma.json"));
     file_write_all(str_data(fp), str_data(body), str_len(body));
@@ -707,15 +716,15 @@ fn test_keyring_load() {
 
     var kr = mela_keyring_new();
     assert_eq(keyring_load_dir(kr, str_from(DIR)), 2, "loaded 2 key versions");
-    assert_eq(vec_len(mela_keyring_get_all_versions(kr, str_from("gamma"))), 2, "gamma has 2 versions");
-    assert_neq(keyring_get_current_key(kr, str_from("gamma"), 1500), 0, "current gamma key at t=1500");
+    assert_eq(vec_len(mela_keyring_get_all_versions(kr, GAMMA)), 2, "gamma has 2 versions");
+    assert_neq(keyring_get_current_key(kr, GAMMA, 1500), 0, "current gamma key at t=1500");
 
     # absent dir loads nothing (no crash)
     assert_eq(keyring_load_dir(mela_keyring_new(), str_from("/tmp/mela-nope-xyz")), 0, "absent dir loads 0");
 
     # v1.1.1 (D5): a load replaces the keyring
     assert_eq(keyring_load_dir(kr, str_from(DIR)), 2, "reload counts 2");
-    assert_eq(vec_len(mela_keyring_get_all_versions(kr, str_from("gamma"))), 2, "reload: no duplicated versions");
+    assert_eq(vec_len(mela_keyring_get_all_versions(kr, GAMMA)), 2, "reload: no duplicated versions");
     mela_keyring_add_key(kr, kv_new(str_from("manual"), 0, 0, 0, ZHEX));
     keyring_load_dir(kr, str_from(DIR));
     assert_eq(vec_len(mela_keyring_get_all_versions(kr, str_from("manual"))), 0, "load drops keys not in the dir");
@@ -727,20 +736,20 @@ fn test_keyring_load() {
 
     # one malformed version skips its whole file (Rust: the Vec parse fails)
     var mixed = json_v_arr_new();
-    json_v_arr_push(mixed, kv_to_jv(kv_new(str_from("delta"), 0, 0, 0, ZHEX)));
+    json_v_arr_push(mixed, kv_to_jv(kv_new(DELTA, 0, 0, 0, DHEX)));
     json_v_arr_push(mixed, json_v_int_new(42));
     var mb = json_v_build(mixed);
     var mp = path_join(str_from(DIR), str_from("delta.json"));
     file_write_all(str_data(mp), str_data(mb), str_len(mb));
     assert_eq(keyring_load_dir(kr, str_from(DIR)), 2, "mixed file skipped whole");
-    assert_eq(vec_len(mela_keyring_get_all_versions(kr, str_from("delta"))), 0, "no delta version loaded");
+    assert_eq(vec_len(mela_keyring_get_all_versions(kr, DELTA)), 0, "no delta version loaded");
     sys_unlink(str_data(mp));
     sys_unlink(str_data(badp));
 
     # revocation: delete gamma.json, reload the same keyring
     sys_unlink(str_data(fp));
     assert_eq(keyring_load_dir(kr, str_from(DIR)), 0, "revoked: reload loads 0");
-    assert_eq(keyring_get_current_key(kr, str_from("gamma"), 1500), 0, "revoked key no longer trusted");
+    assert_eq(keyring_get_current_key(kr, GAMMA, 1500), 0, "revoked key no longer trusted");
     assert_eq(mela_keyring_len(kr), 0, "keyring empty after revocation");
 
     # Rust keyring_load_malformed_file, exactly: a dir holding only bad.json loads 0
@@ -1062,6 +1071,356 @@ fn test_transparency_v2() {
     }
     var jv1 = str_cat(str_sub(str_from(T_V1_LOG), 0, str_len(str_from(T_V1_LOG)) - 2), str_from(",\"hash_version\":1}]"));
     assert_neq(tlog_from_json(jv1), 0, "json: an explicit hash_version 1 is accepted");
+    return 0;
+}
+
+# --- checkpoint test helpers (ADR-0018) ---
+
+# A keyring holding one key, valid from 0, under the key_id `pk` derives.
+fn _t_kr1(pk) {
+    var kr = mela_keyring_new();
+    mela_keyring_add_key(kr, kv_new(trust_key_id_from_pk(pk), 0, 0, 0, trust_hex_encode(pk, 32)));
+    return kr;
+}
+# A new log holding the first `n` entries of `log` (the same entry objects).
+fn _t_log_prefix(log, n) {
+    var out = tlog_new();
+    var i = 0;
+    while (i < n) { vec_push(out, vec_get(log, i)); i = i + 1; }
+    return out;
+}
+# A copy of `cp` with one field replaced and the original signature kept:
+# which = 0 origin, 1 size, 2 head, 3 timestamp.
+fn _t_ckpt_with(cp, which, v) {
+    var o = load64(cp);
+    var s = load64(cp + 8);
+    var h = load64(cp + 16);
+    var t = load64(cp + 24);
+    if (which == 0) { o = v; }
+    if (which == 1) { s = v; }
+    if (which == 2) { h = v; }
+    if (which == 3) { t = v; }
+    return _ckpt_new(o, s, h, t, ckpt_key_id(cp), _ckpt_sig(cp));
+}
+# ckpt_to_json(cp) with the field text `from` replaced by `to` (first match).
+fn _t_cj_swap(cp, from, to) {
+    var j = ckpt_to_json(cp);
+    var at = str_index_of_cstr(j, from);
+    if (at < 0) { return str_from("{}"); }
+    return str_cat(str_cat(str_sub(j, 0, at), str_from(to)),
+      str_sub(j, at + strlen(from), str_len(j) - at - strlen(from)));
+}
+
+# v1.5.2 (ADR-0018): signed checkpoints, witness cosignatures and consistency
+# proofs over the hash chain.
+fn test_log_checkpoints() {
+    test_group("log-checkpoints");
+    var NOW = 2000;
+    var ORIGIN = str_from("example.org/log");
+    var skl[64]; var pkl[32];
+    var kl = trust_keypair_from_seed(hex_decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", 64), &skl, &pkl);
+    var sk1[64]; var pk1[32];
+    var k1 = trust_keypair_from_seed(hex_decode("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb", 64), &sk1, &pk1);
+    var sk2[64]; var pk2[32];
+    trust_keypair_from_seed(hex_decode("c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7", 64), &sk2, &pk2);
+    var sk3[64]; var pk3[32];
+    trust_keypair_from_seed(hex_decode("f5e5767cf153319517630f226876b86c8160cc583bc013744c6bf255f5cc0ee5", 64), &sk3, &pk3);
+    var skr[64]; var pkr[32];
+    trust_keypair_from_seed(hex_decode("833fe62409237b9d62ec77587520911e9a759cec1d19755b7da901b96dca3d42", 64), &skr, &pkr);
+    var logkr = _t_kr1(&pkl);
+    var wkr = _t_kr1(&pk1);
+    mela_keyring_add_key(wkr, kv_new(trust_key_id_from_pk(&pk2), 0, 0, 0, trust_hex_encode(&pk2, 32)));
+    mela_keyring_add_key(wkr, kv_new(trust_key_id_from_pk(&pk3), 0, 0, 0, trust_hex_encode(&pk3, 32)));
+
+    # known answers, computed independently (Python `cryptography`) from the
+    # layout in transparency.cyr: body, the log's signature, a cosignature
+    var kat = _ckpt_new(ORIGIN, 0, str_from(""), 1700000000, kl, str_from(""));
+    var kb0 = _ckpt_body(kat, CKPT_TAG);
+    assert_eq(str_eq_cstr(trust_hex_encode(str_data(kb0), str_len(kb0)),
+      "000000000000001f6d656c612e7472616e73706172656e63792e636865636b706f696e742e7631000000000000000f6578616d706c652e6f72672f6c6f6700000000000000000000000000000000000000006553f100"),
+      1, "kat: empty-log body");
+    var kat5 = _ckpt_new(ORIGIN, 5, str_from("abababababababababababababababababababababababababababababababab"), 0 - 1, kl, str_from(""));
+    var kb5 = _ckpt_body(kat5, CKPT_TAG);
+    assert_eq(str_eq_cstr(trust_hex_encode(str_data(kb5), str_len(kb5)),
+      "000000000000001f6d656c612e7472616e73706172656e63792e636865636b706f696e742e7631000000000000000f6578616d706c652e6f72672f6c6f670000000000000005000000000000004061626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162ffffffffffffffff"),
+      1, "kat: size, head and a negative timestamp");
+    var e0 = tlog_checkpoint(tlog_new(), ORIGIN, &skl, 1700000000);
+    assert_eq(str_eq_cstr(_ckpt_sig(e0),
+      "36081635fe9c85776b4702ae1c64281b95c38b576435b8891663be7a0d76be41b62ffa05a63d0bf260726238529d29ea12dac6968075d5a791b66757d2ca1b0b"),
+      1, "kat: the log's signature");
+    ckpt_cosign(e0, &sk1);
+    assert_eq(str_eq_cstr(load64(vec_get(_ckpt_cosigs(e0), 0) + 8),
+      "cb0b41415c36f9e9a903601c9a116784171a0267489bfb510b48602dc22d75a77703d3532b79aa07254143c9bf0227e52f13a44e9d4868ac55098ed4c5d42e02"),
+      1, "kat: a witness cosignature");
+    assert_eq(str_eq(ckpt_key_id(e0), kl), 1, "kat: key_id derives from the secret key");
+    assert_eq(ckpt_verify(e0, logkr, NOW), 1, "empty log: verifies");
+    assert_eq(str_len(ckpt_head(e0)), 0, "empty log: head is empty");
+
+    # a log of three entries, then five
+    var log = tlog_new();
+    assert_eq(str_len(tlog_head(log)), 0, "head: empty log");
+    tlog_add(log, "p/a", "1.0.0", "k", "c0", "s0");
+    tlog_add(log, "p/b", "1.0.0", "k", "c1", "s1");
+    tlog_add(log, "p/c", "1.0.0", "k", "c2", "s2");
+    assert_eq(str_eq(tlog_head(log), log_entry_hash(vec_get(log, 2))), 1, "head: the last entry's hash");
+    var cp3 = tlog_checkpoint(log, ORIGIN, &skl, 1500);
+    assert_neq(cp3, 0, "checkpoint: made");
+    assert_eq(ckpt_size(cp3), 3, "checkpoint: size");
+    assert_eq(str_eq(ckpt_head(cp3), tlog_head(log)), 1, "checkpoint: head");
+    assert_eq(str_eq(ckpt_origin(cp3), ORIGIN), 1, "checkpoint: origin");
+    assert_eq(ckpt_timestamp(cp3), 1500, "checkpoint: timestamp");
+    assert_eq(ckpt_verify(cp3, logkr, NOW), 1, "checkpoint: verifies under the log key");
+    assert_eq(tlog_checkpoint(log, str_from(""), &skl, 1500), 0, "checkpoint: an empty origin is refused");
+    var prefix3 = _t_log_prefix(log, 3);
+    tlog_add(log, "p/d", "1.0.0", "k", "c3", "s3");
+    tlog_add(log, "p/e", "1.0.0", "k", "c4", "s4");
+    var cp5 = tlog_checkpoint(log, ORIGIN, &skl, 1600);
+
+    # what the log signature binds
+    assert_eq(ckpt_verify(_t_ckpt_with(cp3, 0, str_from("example.org/other")), logkr, NOW), 0, "binds: origin");
+    assert_eq(ckpt_verify(_t_ckpt_with(cp3, 1, 4), logkr, NOW), 0, "binds: size");
+    assert_eq(ckpt_verify(_t_ckpt_with(cp3, 2, ckpt_head(cp5)), logkr, NOW), 0, "binds: head");
+    assert_eq(ckpt_verify(_t_ckpt_with(cp3, 3, 1501), logkr, NOW), 0, "binds: timestamp");
+    assert_eq(ckpt_verify(_ckpt_new(ORIGIN, 3, ckpt_head(cp3), 1500, kl, str_cat(_ckpt_sig(cp3), str_from("00"))),
+      logkr, NOW), 0, "verify: a signature with trailing hex");
+    assert_eq(ckpt_verify(_ckpt_new(ORIGIN, 3, ckpt_head(cp3), 1500, kl, str_sub(_ckpt_sig(cp3), 0, 126)),
+      logkr, NOW), 0, "verify: a short signature");
+    assert_eq(ckpt_verify(cp3, wkr, NOW), 0, "verify: a key not in the keyring");
+    assert_eq(ckpt_verify(cp3, 0, NOW), 0, "verify: no keyring");
+    var latekr = mela_keyring_new();
+    mela_keyring_add_key(latekr, kv_new(kl, 3000, 0, 0, trust_hex_encode(&pkl, 32)));
+    assert_eq(ckpt_verify(cp3, latekr, NOW), 0, "verify: a log key not yet valid");
+    var mixkr = mela_keyring_new();
+    mela_keyring_add_key(mixkr, kv_new(kl, 0, 0, 0, trust_hex_encode(&pk1, 32)));
+    assert_eq(ckpt_verify(cp3, mixkr, NOW), 0, "verify: another key under the log's key_id (ADR-0017)");
+    var w1_as_log = tlog_checkpoint(prefix3, ORIGIN, &sk1, 1500);
+    var claimed = _ckpt_new(ORIGIN, 3, ckpt_head(cp3), 1500, kl, _ckpt_sig(w1_as_log));
+    assert_eq(ckpt_verify(claimed, mixkr, NOW), 0, "verify: that key cannot sign as the log");
+    mela_keyring_add_key(mixkr, kv_new(kl, 0, 0, 0, trust_hex_encode(&pkl, 32)));
+    assert_eq(ckpt_verify(cp3, mixkr, NOW), 1, "verify: the log's own entry behind the mismatched one");
+    var bent = tlog_new();
+    tlog_add(bent, "p/a", "1.0.0", "k", "c0", "s0");
+    store64(vec_get(bent, 0) + 16, str_from("p/z"));
+    assert_eq(tlog_checkpoint(bent, ORIGIN, &skl, 1500), 0, "checkpoint: a broken chain is never signed");
+
+    # witnesses
+    assert_eq(ckpt_witnesses(cp5, wkr, NOW), 0, "witnesses: none yet");
+    ckpt_cosign(cp5, &sk1);
+    ckpt_cosign(cp5, &sk2);
+    ckpt_cosign(cp5, &sk1);                                     # a repeat counts once
+    assert_eq(ckpt_witnesses(cp5, wkr, NOW), 2, "witnesses: two distinct");
+    assert_eq(ckpt_witnesses(cp5, _t_kr1(&pk1), NOW), 1, "witnesses: only keys in the keyring");
+    assert_eq(ckpt_witnesses(cp5, 0, NOW), 0, "witnesses: no keyring");
+    ckpt_cosign(cp5, &skr);                                     # not a trusted witness
+    assert_eq(ckpt_witnesses(cp5, wkr, NOW), 2, "witnesses: an unknown key does not count");
+    var selfkr = _t_kr1(&pkl);
+    ckpt_cosign(cp5, &skl);
+    assert_eq(ckpt_witnesses(cp5, selfkr, NOW), 0, "witnesses: the log's own key never counts");
+    # a witness's checkpoint signature is not a cosignature (tags differ)...
+    var as_w3 = tlog_checkpoint(log, ORIGIN, &sk3, 1600);
+    var fake = alloc(16);
+    store64(fake, trust_key_id_from_pk(&pk3));
+    store64(fake + 8, _ckpt_sig(as_w3));
+    vec_push(_ckpt_cosigs(cp5), fake);
+    assert_eq(ckpt_witnesses(cp5, wkr, NOW), 2, "witnesses: a log signature is not a cosignature");
+    # ...and a cosignature is not a log signature
+    var cs1 = load64(vec_get(_ckpt_cosigs(cp5), 0) + 8);
+    var as_log = _ckpt_new(ORIGIN, 5, ckpt_head(cp5), 1600, k1, cs1);
+    assert_eq(ckpt_verify(as_log, _t_kr1(&pk1), NOW), 0, "verify: a cosignature is not a log signature");
+    var c3 = tlog_checkpoint(log, ORIGIN, &skl, 1600);
+    ckpt_cosign(c3, &sk3);
+    var cs3 = load64(vec_get(_ckpt_cosigs(c3), 0) + 8);
+    store8(str_data(cs3) + 5, 48 + ((load8(str_data(cs3) + 5) - 47) % 10));   # change one hex digit
+    assert_eq(ckpt_witnesses(c3, wkr, NOW), 0, "witnesses: a damaged cosignature does not count");
+
+    # witnesses cosign copies in parallel; the log merges them
+    var mj = ckpt_to_json(tlog_checkpoint(log, ORIGIN, &skl, 1650));
+    var master = ckpt_from_json(mj);
+    var w1c = ckpt_from_json(mj);
+    var w2c = ckpt_from_json(mj);
+    ckpt_cosign(w1c, &sk1);
+    ckpt_cosign(w2c, &sk2);
+    assert_eq(ckpt_merge(master, w1c), 1, "merge: the first witness's copy");
+    assert_eq(ckpt_merge(master, w2c), 1, "merge: the second witness's copy");
+    assert_eq(ckpt_witnesses(master, wkr, NOW), 2, "merge: both cosignatures count");
+    assert_eq(ckpt_merge(master, w1c), 1, "merge: again");
+    assert_eq(vec_len(_ckpt_cosigs(master)), 2, "merge: a held cosignature is not added twice");
+    assert_eq(ckpt_merge(master, master), 1, "merge: into itself");
+    assert_eq(vec_len(_ckpt_cosigs(master)), 2, "merge: into itself adds nothing");
+    assert_eq(ckpt_merge(master, _t_ckpt_with(w1c, 0, str_from("example.org/other"))), 0, "merge: another origin");
+    assert_eq(ckpt_merge(master, _t_ckpt_with(w1c, 1, 4)), 0, "merge: another size");
+    assert_eq(ckpt_merge(master, _t_ckpt_with(w1c, 2, ckpt_head(cp3))), 0, "merge: another head");
+    var later = _t_ckpt_with(w1c, 3, 1651);
+    ckpt_cosign(later, &sk3);
+    assert_eq(ckpt_merge(master, later), 0, "merge: another timestamp");
+    assert_eq(vec_len(_ckpt_cosigs(master)), 2, "merge: a refused merge adds nothing");
+    assert_eq(ckpt_verify(master, logkr, NOW), 1, "merge: the log signature is untouched");
+    var fresh = ckpt_from_json(mj);
+    var bad1 = ckpt_from_json(mj);
+    ckpt_cosign(bad1, &sk1);
+    var b1s = load64(vec_get(_ckpt_cosigs(bad1), 0) + 8);
+    store8(str_data(b1s) + 5, 48 + ((load8(str_data(b1s) + 5) - 47) % 10));   # change one hex digit
+    ckpt_merge(fresh, bad1);
+    ckpt_merge(fresh, w1c);
+    assert_eq(ckpt_witnesses(fresh, wkr, NOW), 1, "merge: a damaged cosignature does not block a good one");
+
+    # consistency proofs
+    assert_eq(tlog_proof(log, 0 - 1), 0, "proof: negative size");
+    assert_eq(tlog_proof(log, 6), 0, "proof: past the end");
+    assert_eq(vec_len(tlog_proof(log, 5)), 0, "proof: from the current size is empty");
+    var p3 = tlog_proof(log, 3);
+    assert_eq(vec_len(p3), 2, "proof: the entries after the checkpoint");
+    assert_eq(ckpt_consistent(cp3, cp5, p3), 1, "consistent: 3 -> 5");
+    assert_eq(ckpt_consistent(cp3, cp3, 0), 1, "consistent: the same checkpoint, no proof");
+    assert_eq(ckpt_consistent(cp3, cp3, vec_new()), 1, "consistent: the same checkpoint, empty proof");
+    var cp0 = tlog_checkpoint(tlog_new(), ORIGIN, &skl, 1400);
+    assert_eq(ckpt_consistent(cp0, cp5, tlog_proof(log, 0)), 1, "consistent: from the empty log");
+    assert_eq(ckpt_consistent(cp5, cp3, 0), 0, "consistent: a shorter log is refused");
+    assert_eq(ckpt_consistent(cp3, cp5, 0), 0, "consistent: growth without a proof");
+    var short = _t_log_prefix(p3, 1);
+    assert_eq(ckpt_consistent(cp3, cp5, short), 0, "consistent: a proof missing an entry");
+    var rev = tlog_new();
+    vec_push(rev, vec_get(p3, 1));
+    vec_push(rev, vec_get(p3, 0));
+    assert_eq(ckpt_consistent(cp3, cp5, rev), 0, "consistent: a reordered proof");
+    var gap = tlog_new();
+    vec_push(gap, vec_get(p3, 1));
+    assert_eq(ckpt_consistent(cp3, _t_ckpt_with(cp5, 1, 4), gap), 0, "consistent: a proof skipping an entry");
+    assert_eq(ckpt_consistent(_t_ckpt_with(cp3, 0, str_from("example.org/other")), cp5, p3), 0,
+      "consistent: another origin");
+    assert_eq(ckpt_consistent(cp3, _t_ckpt_with(cp5, 1, 6), p3), 0,
+      "consistent: a size the proof does not reach");
+
+    # a fork after entry 3 extends cp3 but not cp5; a fork at entry 2 extends neither
+    var forkb = _t_log_prefix(prefix3, 3);
+    tlog_add(forkb, "p/d", "1.0.0", "k", "c3", "s3");
+    tlog_add(forkb, "p/x", "6.6.6", "k", "evil", "s4");
+    var cpb = tlog_checkpoint(forkb, ORIGIN, &skl, 1600);
+    assert_eq(ckpt_consistent(cp3, cpb, tlog_proof(forkb, 3)), 1, "fork: extends the common prefix");
+    assert_eq(ckpt_consistent(cp5, cpb, 0), 0, "fork: same size, other head");
+    assert_eq(ckpt_consistent(cp5, cpb, tlog_proof(forkb, 5)), 0, "fork: same size, other head (empty proof)");
+    var forkc = _t_log_prefix(log, 2);
+    tlog_add(forkc, "p/c", "1.0.1", "k", "c2", "s2");
+    tlog_add(forkc, "p/d", "1.0.0", "k", "c3", "s3");
+    tlog_add(forkc, "p/e", "1.0.0", "k", "c4", "s4");
+    var cpc = tlog_checkpoint(forkc, ORIGIN, &skl, 1600);
+    assert_eq(ckpt_consistent(cp3, cpc, tlog_proof(forkc, 3)), 0, "fork: diverged before the checkpoint");
+
+    # proof entries are checked one by one
+    var tam = tlog_new();
+    vec_push(tam, log_entry_new(3, 1000, str_from("p/q"), str_from("1.0.0"), str_from("k"), str_from("c3"),
+      str_from("s3"), ckpt_head(cp3), log_entry_hash(vec_get(p3, 0))));
+    vec_push(tam, vec_get(p3, 1));
+    assert_eq(ckpt_consistent(cp3, cp5, tam), 0, "proof: an entry whose hash is not its own");
+    var odd = log_entry_new(7, 1000, str_from("p/d"), str_from("1.0.0"), str_from("k"), str_from("c3"),
+      str_from("s3"), ckpt_head(cp3), str_from(""));
+    log_set_entry_hash(odd, log_entry_compute_hash(odd));
+    var oddp = tlog_new();
+    vec_push(oddp, odd);
+    var cp4odd = _ckpt_new(ORIGIN, 4, log_entry_hash(odd), 1600, kl, str_from(""));
+    assert_eq(ckpt_consistent(cp3, cp4odd, oddp), 0, "proof: an entry out of sequence");
+    var v2e = log_entry_new(3, 1000, str_from("p/d"), str_from("1.0.0"), str_from("k"), str_from("c3"),
+      str_from("s3"), ckpt_head(cp3), str_from(""));
+    log_set_entry_hash(v2e, log_entry_compute_hash(v2e));
+    var v1e = log_entry_new(4, 1000, str_from("p/e"), str_from("1.0.0"), str_from("k"), str_from("c4"),
+      str_from("s4"), log_entry_hash(v2e), str_from(""));
+    log_set_hash_version(v1e, LOG_HASH_V1);
+    log_set_entry_hash(v1e, log_entry_compute_hash(v1e));
+    var down = tlog_new();
+    vec_push(down, v2e);
+    vec_push(down, v1e);
+    var cpdown = _ckpt_new(ORIGIN, 5, log_entry_hash(v1e), 1600, kl, str_from(""));
+    assert_eq(ckpt_consistent(cp3, cpdown, down), 0, "proof: a hash-version downgrade");
+    log_set_hash_version(v1e, LOG_HASH_V2);
+    log_set_entry_hash(v1e, log_entry_compute_hash(v1e));
+    store64(cpdown + 16, log_entry_hash(v1e));
+    assert_eq(ckpt_consistent(cp3, cpdown, down), 1, "proof: the same entries without the downgrade");
+
+    # a log matches its checkpoint; one with entries dropped from its end does not
+    assert_eq(tlog_matches_ckpt(log, cp5), 1, "matches: the log and its checkpoint");
+    assert_eq(tlog_verify_chain(prefix3), 1, "truncated: the chain alone still verifies");
+    assert_eq(tlog_matches_ckpt(prefix3, cp5), 0, "truncated: the checkpoint catches it");
+    assert_eq(tlog_matches_ckpt(forkb, cp5), 0, "matches: a fork of the same size");
+    assert_eq(tlog_matches_ckpt(log, _t_ckpt_with(cp5, 1, 6)), 0, "matches: a size the head does not reach");
+    var broke = _t_log_prefix(bent, 1);
+    assert_eq(tlog_matches_ckpt(broke, _ckpt_new(ORIGIN, 1, log_entry_hash(vec_get(bent, 0)), 1, kl, str_from(""))), 0,
+      "matches: a chain that does not verify");
+
+    # the client's rule: ckpt_advance under a policy
+    var pol = ckpt_policy_new(ORIGIN, logkr, wkr, 2);
+    ckpt_cosign(cp3, &sk1);
+    assert_eq(ckpt_advance(pol, 0, cp3, 0, NOW), 0, "advance: first contact short of the threshold");
+    ckpt_cosign(cp3, &sk3);
+    assert_eq(ckpt_advance(pol, 0, cp3, 0, NOW), 1, "advance: first contact with two witnesses");
+    assert_eq(ckpt_advance(pol, cp3, cp5, p3, NOW), 1, "advance: 3 -> 5 with its proof");
+    assert_eq(ckpt_advance(pol, cp3, cp5, 0, NOW), 0, "advance: 3 -> 5 without a proof");
+    assert_eq(ckpt_advance(pol, cp5, cp3, 0, NOW), 0, "advance: never back to a shorter log");
+    assert_eq(ckpt_advance(pol, cp5, cp5, 0, NOW), 1, "advance: the same checkpoint again");
+    ckpt_cosign(cpb, &sk1);
+    ckpt_cosign(cpb, &sk2);
+    assert_eq(ckpt_advance(pol, cp5, cpb, 0, NOW), 0, "advance: a witnessed fork is still refused");
+    assert_eq(ckpt_advance(pol, 0, cpb, 0, NOW), 1, "advance: (a fresh client could be shown the fork)");
+    var other = ckpt_policy_new(str_from("example.org/other"), logkr, wkr, 2);
+    assert_eq(ckpt_advance(other, 0, cp5, 0, NOW), 0, "advance: another log's checkpoint, even on first contact");
+    var unsigned = _ckpt_new(ORIGIN, 5, ckpt_head(cp5), 1600, kl, str_from(""));
+    ckpt_cosign(unsigned, &sk1);
+    ckpt_cosign(unsigned, &sk2);
+    assert_eq(ckpt_advance(pol, cp3, unsigned, p3, NOW), 0, "advance: witnessed but not signed by the log");
+    var nowit = ckpt_policy_new(ORIGIN, logkr, 0, 0);
+    assert_eq(ckpt_advance(nowit, cp3, tlog_checkpoint(log, ORIGIN, &skl, 1700), p3, NOW), 1,
+      "advance: threshold 0 needs no witness keyring");
+    # a rotated log key: the stored checkpoint is not re-verified
+    var rotkr = _t_kr1(&pkr);
+    var rot = ckpt_policy_new(ORIGIN, rotkr, 0, 0);
+    var cpr = tlog_checkpoint(log, ORIGIN, &skr, 1800);
+    assert_eq(ckpt_verify(cp3, rotkr, NOW), 0, "rotation: the old checkpoint's key is gone");
+    assert_eq(ckpt_advance(rot, cp3, cpr, p3, NOW), 1, "rotation: the client still advances");
+
+    # equivocation evidence
+    assert_eq(ckpt_equivocates(pol, cp5, cpb, NOW), 1, "equivocates: one size, two heads, both signed");
+    assert_eq(ckpt_equivocates(pol, cp5, cp5, NOW), 0, "equivocates: not with itself");
+    assert_eq(ckpt_equivocates(pol, cp3, cp5, NOW), 0, "equivocates: different sizes prove nothing alone");
+    var forged = _t_ckpt_with(cp5, 2, ckpt_head(cpb));
+    assert_eq(ckpt_equivocates(pol, cp5, forged, NOW), 0, "equivocates: not with a checkpoint the log did not sign");
+    assert_eq(ckpt_equivocates(other, cp5, cpb, NOW), 0, "equivocates: not for another log");
+
+    # JSON
+    var j5 = ckpt_to_json(cp5);
+    var back = ckpt_from_json(j5);
+    assert_neq(back, 0, "json: round-trips");
+    if (back != 0) {
+        assert_eq(str_eq(ckpt_to_json(back), j5), 1, "json: byte for byte");
+        assert_eq(ckpt_verify(back, logkr, NOW), 1, "json: still verifies");
+        assert_eq(ckpt_witnesses(back, wkr, NOW), 2, "json: cosignatures kept");
+        assert_eq(ckpt_consistent(cp3, back, p3), 1, "json: still consistent");
+    }
+    assert_neq(ckpt_from_json(ckpt_to_json(cp0)), 0, "json: an empty log's checkpoint");
+    assert_eq(ckpt_from_json(str_from("not json")), 0, "json: garbage");
+    assert_eq(ckpt_from_json(str_from("[]")), 0, "json: not an object");
+    assert_eq(ckpt_from_json(_t_cj_swap(cp5, "\"origin\"", "\"origin_\"")), 0, "json: origin required");
+    assert_eq(ckpt_from_json(_t_cj_swap(cp5, "\"size\"", "\"size_\"")), 0, "json: size required");
+    assert_eq(ckpt_from_json(_t_cj_swap(cp5, "\"head\"", "\"head_\"")), 0, "json: head required");
+    assert_eq(ckpt_from_json(_t_cj_swap(cp5, "\"timestamp\"", "\"timestamp_\"")), 0, "json: timestamp required");
+    assert_eq(ckpt_from_json(_t_cj_swap(cp5, "\"key_id\":\"d7", "\"key_id_\":\"d7")), 0, "json: key_id required");
+    assert_eq(ckpt_from_json(_t_cj_swap(cp5, "\"signature\"", "\"signature_\"")), 0, "json: signature required");
+    assert_eq(ckpt_from_json(_t_cj_swap(cp5, "\"cosignatures\"", "\"cosignatures_\"")), 0, "json: cosignatures required");
+    assert_eq(ckpt_from_json(_t_cj_swap(cp5, "\"size\":5", "\"size\":-5")), 0, "json: a negative size");
+    assert_eq(ckpt_from_json(_t_cj_swap(cp5, "\"size\":5", "\"size\":\"5\"")), 0, "json: a string size");
+    assert_eq(ckpt_from_json(_t_cj_swap(cp5, "\"size\":5", "\"size\":0")), 0, "json: size 0 with a head");
+    assert_eq(ckpt_from_json(_t_cj_swap(cp0, "\"size\":0", "\"size\":1")), 0, "json: size 1 without a head");
+    assert_eq(ckpt_from_json(_t_cj_swap(cp5, "\"origin\":\"example.org/log\"", "\"origin\":\"\"")), 0, "json: an empty origin");
+    assert_eq(ckpt_from_json(_t_cj_swap(cp5, "\"cosignatures\":[", "\"cosignatures\":[7,")), 0, "json: a cosignature not an object");
+    assert_eq(ckpt_from_json(_t_cj_swap(cp5, "\"cosignatures\":[{\"key_id\"", "\"cosignatures\":[{\"key_\"")), 0,
+      "json: a cosignature without its key_id");
+    assert_eq(ckpt_from_json(_t_cj_swap(cp5, "\"timestamp\":1600", "\"timestamp\":1.5")), 0, "json: a fractional timestamp");
+
+    # a proof travels as tlog_to_json; only tlog_proof_from_json reads it back
+    var pj = tlog_to_json(p3);
+    assert_eq(tlog_from_json(pj), 0, "proof json: not a log from the start");
+    var pback = tlog_proof_from_json(pj);
+    assert_neq(pback, 0, "proof json: decodes");
+    if (pback != 0) { assert_eq(ckpt_consistent(cp3, cp5, pback), 1, "proof json: still proves 3 -> 5"); }
+    assert_eq(tlog_proof_from_json(str_from("[{\"sequence\":3}]")), 0, "proof json: incomplete entries refused");
     return 0;
 }
 
@@ -2976,6 +3335,8 @@ fn test_keyring_provenance() {
     var bad = kv_new(str_from("0000000000000000"), 0, 0, 0, mela_kv_public_key_hex(good));
     assert_eq(str_eq(trust_key_id_from_pk(kv_verifying_key(bad)), mela_kv_key_id(bad)), 0,
       "guide check: a mismatched key_id is caught");
+    assert_eq(kv_key_id_derives(good), 1, "guide check (v1.5.2): kv_key_id_derives passes it");
+    assert_eq(kv_key_id_derives(bad), 0, "guide check (v1.5.2): kv_key_id_derives catches it");
 
     # the documented gap: a second trusted key can upgrade the first one's package,
     # and the guide's continuity check sees it
@@ -3182,6 +3543,198 @@ fn test_key_continuity() {
     var lk = mela_keyring_new();
     assert_eq(keyring_load_dir(lk, str_from(SD)), 1, "key file with succeeds loads");
     assert_eq(_keyring_succeeds(lk, kb, ka), 1, "key file: succession declared on disk");
+    return 0;
+}
+
+# The witness step of docs/guides/transparency-checkpoints.md: decode, advance
+# against its own state, then (state first) cosign. Returns the reply JSON, or "".
+fn _t_witness(pol, state, cp_json, proof_json, sk, now) {
+    var trusted = 0;
+    if (str_len(load64(state)) != 0) { trusted = ckpt_from_json(load64(state)); }
+    var incoming = ckpt_from_json(cp_json);
+    var proof = tlog_proof_from_json(proof_json);
+    if (incoming != 0) {
+        if (ckpt_advance(pol, trusted, incoming, proof, now) == 1) {
+            store64(state, ckpt_to_json(incoming));
+            ckpt_cosign(incoming, sk);
+            return ckpt_to_json(incoming);
+        }
+    }
+    return str_from("");
+}
+# The size a role last accepted (0 before its first).
+fn _t_state_size(state) {
+    if (str_len(load64(state)) == 0) { return 0; }
+    return ckpt_size(ckpt_from_json(load64(state)));
+}
+
+# v1.5.2: the transparency-checkpoints guide, end to end: publish, parallel
+# witnesses and the merge, a client following the log, a fork refused, and an
+# install bound to the log through gate 2.
+fn test_checkpoint_guide() {
+    test_group("checkpoint-guide");
+    var NOW = 5000;
+    var ORIGIN = str_from("market.example.org/log");
+    var ska[64]; var pka[32];
+    var ka = trust_keypair_from_seed(hex_decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", 64), &ska, &pka);
+    var skl[64]; var pkl[32];
+    trust_keypair_from_seed(hex_decode("833fe62409237b9d62ec77587520911e9a759cec1d19755b7da901b96dca3d42", 64), &skl, &pkl);
+    var sk1[64]; var pk1[32];
+    trust_keypair_from_seed(hex_decode("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb", 64), &sk1, &pk1);
+    var sk2[64]; var pk2[32];
+    trust_keypair_from_seed(hex_decode("c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7", 64), &sk2, &pk2);
+    var publishers = _t_kr1(&pka);
+    var log_keys = _t_kr1(&pkl);
+    var witness_keys = _t_kr1(&pk1);
+    mela_keyring_add_key(witness_keys, kv_new(trust_key_id_from_pk(&pk2), 0, 0, 0, trust_hex_encode(&pk2, 32)));
+    var wpol = ckpt_policy_new(ORIGIN, log_keys, 0, 0);
+    var cpol = ckpt_policy_new(ORIGIN, log_keys, witness_keys, 2);
+    var w1 = alloc(8); store64(w1, str_from(""));
+    var w2 = alloc(8); store64(w2, str_from(""));
+    var client = alloc(8); store64(client, str_from(""));
+
+    # round 1: publish, checkpoint, two witnesses in parallel, merge, client's first contact
+    var log = tlog_new();
+    var s1[64];
+    var b1 = _t_kc_bundle("scanner", "2.1.0", ka, &ska, &s1, "one");
+    var p1[64];
+    pipeline_publish(log, b1, &ska, &p1, NOW);
+    var cp = tlog_checkpoint(log, ORIGIN, &skl, NOW);
+    var cj = ckpt_to_json(cp);
+    var r1 = _t_witness(wpol, w1, cj, tlog_to_json(tlog_proof(log, _t_state_size(w1))), &sk1, NOW);
+    var r2 = _t_witness(wpol, w2, cj, tlog_to_json(tlog_proof(log, _t_state_size(w2))), &sk2, NOW);
+    assert_neq(str_len(r1), 0, "guide: witness 1 cosigns");
+    assert_neq(str_len(r2), 0, "guide: witness 2 cosigns");
+    assert_eq(ckpt_merge(cp, ckpt_from_json(r1)), 1, "guide: merge witness 1");
+    assert_eq(ckpt_merge(cp, ckpt_from_json(r2)), 1, "guide: merge witness 2");
+    var served = ckpt_to_json(cp);
+    var in1 = ckpt_from_json(served);
+    assert_eq(ckpt_advance(cpol, 0, in1, tlog_proof_from_json(tlog_to_json(tlog_proof(log, 0))), NOW), 1,
+      "guide: the client's first contact");
+    store64(client, served);
+
+    # round 2: the client follows with a proof from its own size
+    var s2[64];
+    var b2 = _t_kc_bundle("scanner", "2.2.0", ka, &ska, &s2, "two");
+    var p2[64];
+    pipeline_publish(log, b2, &ska, &p2, NOW + 10);
+    var cp2 = tlog_checkpoint(log, ORIGIN, &skl, NOW + 10);
+    var cj2 = ckpt_to_json(cp2);
+    ckpt_merge(cp2, ckpt_from_json(_t_witness(wpol, w1, cj2, tlog_to_json(tlog_proof(log, _t_state_size(w1))), &sk1, NOW)));
+    ckpt_merge(cp2, ckpt_from_json(_t_witness(wpol, w2, cj2, tlog_to_json(tlog_proof(log, _t_state_size(w2))), &sk2, NOW)));
+    var trusted = ckpt_from_json(load64(client));
+    var proof = tlog_proof_from_json(tlog_to_json(tlog_proof(log, ckpt_size(trusted))));
+    assert_eq(vec_len(proof), 1, "guide: the proof is the one new entry");
+    assert_eq(ckpt_advance(cpol, trusted, ckpt_from_json(ckpt_to_json(cp2)), proof, NOW), 1, "guide: the client advances");
+    store64(client, ckpt_to_json(cp2));
+
+    # a fork: the log rewrites entry 1; witnesses refuse it, so it never reaches k
+    var fork = _t_log_prefix(log, 1);
+    var s3[64];
+    var b3 = _t_kc_bundle("scanner", "2.2.0", ka, &ska, &s3, "evil");
+    var p3[64];
+    pipeline_publish(fork, b3, &ska, &p3, NOW + 20);
+    var cpf = tlog_checkpoint(fork, ORIGIN, &skl, NOW + 20);
+    var cfj = ckpt_to_json(cpf);
+    assert_eq(str_len(_t_witness(wpol, w1, cfj, tlog_to_json(tlog_proof(fork, 1)), &sk1, NOW)), 0,
+      "guide: a witness refuses the fork");
+    assert_eq(_t_state_size(w1), 2, "guide: and keeps its state");
+    assert_eq(ckpt_advance(cpol, 0, cpf, 0, NOW), 0, "guide: unwitnessed, even a new client refuses it");
+    assert_eq(ckpt_equivocates(cpol, ckpt_from_json(load64(client)), cpf, NOW), 1,
+      "guide: the client's checkpoint and the fork prove it");
+
+    # binding an install to the accepted log
+    var full = tlog_from_json(tlog_to_json(log));
+    assert_eq(tlog_matches_ckpt(full, ckpt_from_json(load64(client))), 1, "guide: the log matches the accepted checkpoint");
+    var e = tlog_find(full, str_from("p/scanner"), str_from("2.1.0"));
+    assert_neq(e, 0, "guide: the version is logged");
+    var reg = registry_in_memory();
+    assert_neq(pipeline_install(reg, publishers, b1, &s1, 64, log_content_hash(e), NOW), 0,
+      "guide: the logged bundle installs");
+    var e2 = tlog_find(full, str_from("p/scanner"), str_from("2.2.0"));
+    assert_eq(pipeline_install(reg, publishers, b3, &s3, 64, log_content_hash(e2), NOW), 0,
+      "guide: the fork's bundle does not match the logged digest");
+    assert_neq(pipeline_install(reg, publishers, b2, &s2, 64, log_content_hash(e2), NOW), 0,
+      "guide: (control) the logged 2.2.0 installs");
+    assert_eq(vec_len(tlog_entries_for_package(full, str_from("p/scanner"))), 2, "guide: one entry per version");
+    return 0;
+}
+
+# v1.5.2 (ADR-0017): a key counts only under the key_id its public key derives:
+# at load, at the signature gate, and for succession.
+fn test_key_id_derivation() {
+    test_group("key-id-derivation");
+    var NOW = 1000;
+    var ska[64]; var pka[32];
+    var ka = trust_keypair_from_seed(hex_decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", 64), &ska, &pka);
+    var skb[64]; var pkb[32];
+    var kb = trust_keypair_from_seed(hex_decode("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb", 64), &skb, &pkb);
+    var ha = trust_hex_encode(&pka, 32);
+    var hb = trust_hex_encode(&pkb, 32);
+
+    # the predicate
+    assert_eq(kv_key_id_derives(kv_new(ka, 0, 0, 0, ha)), 1, "derives: A's key under A's key_id");
+    assert_eq(kv_key_id_derives(kv_new(ka, 0, 0, 0, hb)), 0, "derives: B's key under A's key_id");
+    assert_eq(kv_key_id_derives(kv_new(str_from("alpha"), 0, 0, 0, ha)), 0, "derives: a made-up key_id");
+    assert_eq(kv_key_id_derives(kv_new(ka, 0, 0, 0, str_from("aabb"))), 0, "derives: a short key");
+    assert_eq(kv_key_id_derives(kv_new(ka, 0, 0, 0, repeat_char(64, 122))), 0, "derives: a non-hex key");
+    assert_eq(kv_key_id_derives(kv_new(str_from("D75A980182B10AB7"), 0, 0, 0, ha)), 0, "derives: key_ids are lowercase");
+    assert_eq(kv_key_id_derives(kv_new(ka, 0, 0, 0, str_from("D75A980182B10AB7D54BFED3C964073A0EE172F3DAA62325AF021A68F707511A"))), 1, "derives: an uppercase key hex is the same key");
+
+    # the loader: a file with one mismatched entry is skipped whole; others load
+    var KD = "/tmp/mela-kid-keys";
+    _t_fresh_dir(KD);
+    var bad = json_v_arr_new();
+    json_v_arr_push(bad, kv_to_jv(kv_new(kb, 0, 0, 0, hb)));
+    json_v_arr_push(bad, kv_to_jv(kv_new(ka, 0, 0, 0, hb)));        # B's key claiming A's key_id
+    var badj = json_v_build(bad);
+    file_write_all("/tmp/mela-kid-keys/mixed.json", str_data(badj), str_len(badj));
+    var good = json_v_arr_new();
+    json_v_arr_push(good, kv_to_jv(kv_new(ka, 0, 0, 0, ha)));
+    var goodj = json_v_build(good);
+    file_write_all("/tmp/mela-kid-keys/a.json", str_data(goodj), str_len(goodj));
+    var lk = mela_keyring_new();
+    assert_eq(keyring_load_dir(lk, str_from(KD)), 1, "load: the mismatched file is skipped, a.json loads");
+    assert_eq(vec_len(mela_keyring_get_all_versions(lk, kb)), 0, "load: nothing from the mismatched file");
+    assert_eq(vec_len(mela_keyring_get_all_versions(lk, ka)), 1, "load: A's own entry");
+    xunlink("/tmp/mela-kid-keys/a.json");
+    assert_eq(keyring_load_dir(lk, str_from(KD)), 0, "load: the mismatched file alone loads nothing");
+
+    # the gate: B's key under A's key_id signs nothing as A, and is passed over
+    var sigb[64];
+    ed25519_sign(&skb, "package bytes", 13, &sigb);
+    var siga[64];
+    ed25519_sign(&ska, "package bytes", 13, &siga);
+    var forged = mela_keyring_new();
+    mela_keyring_add_key(forged, kv_new(ka, 0, 0, 0, hb));
+    assert_eq(registry_verify_package(forged, ka, "package bytes", 13, &sigb, 64, NOW), 0,
+      "gate: B cannot sign as A through a mismatched entry");
+    mela_keyring_add_key(forged, kv_new(ka, 0, 0, 0, ha));
+    assert_eq(registry_verify_package(forged, ka, "package bytes", 13, &siga, 64, NOW), 1,
+      "gate: A's own entry still verifies behind the mismatched one");
+    assert_eq(registry_verify_package(forged, ka, "package bytes", 13, &sigb, 64, NOW), 0,
+      "gate: and B still cannot sign as A");
+
+    # end to end: a bundle naming A, signed by B, against that keyring
+    var sx[64];
+    var bx = _t_kc_bundle("kid-pkg", "1.0.0", ka, &skb, &sx, "x");
+    assert_eq(pipeline_install(registry_in_memory(), forged, bx, &sx, 64, str_from(""), NOW), 0,
+      "install: refused");
+    var sy[64];
+    var by = _t_kc_bundle("kid-pkg", "1.0.0", ka, &ska, &sy, "y");
+    assert_neq(pipeline_install(registry_in_memory(), forged, by, &sy, 64, str_from(""), NOW), 0,
+      "install: A's own bundle installs");
+
+    # succession: a declaration counts only from an entry whose key_id derives
+    var kr = mela_keyring_new();
+    mela_keyring_add_key(kr, kv_new(ka, 0, 0, 0, ha));
+    mela_keyring_add_key(kr, kv_new(kb, 0, 0, 0, hb));
+    var stray = kv_new(kb, 0, 0, 0, ha);                           # under B's key_id, A's key
+    kv_add_succeeds(stray, ka);
+    mela_keyring_add_key(kr, stray);
+    assert_eq(_keyring_succeeds(kr, kb, ka), 0, "succession: ignored from a mismatched entry");
+    kv_add_succeeds(keyring_get_current_key(kr, kb, NOW), ka);
+    assert_eq(_keyring_succeeds(kr, kb, ka), 1, "succession: counted from B's own entry");
     return 0;
 }
 
@@ -3919,6 +4472,7 @@ fn main() {
     test_transparency();
     test_transparency_json();
     test_transparency_v2();
+    test_log_checkpoints();
     test_registry();
     test_registry_persistence();
     test_registry_uninstall_fs();
@@ -3942,6 +4496,8 @@ fn main() {
     test_confinement();
     test_keyring_provenance();
     test_key_continuity();
+    test_key_id_derivation();
+    test_checkpoint_guide();
     test_pipeline();
     test_install_txn();
     test_strict_decode();

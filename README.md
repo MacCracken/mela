@@ -32,7 +32,8 @@ A sovereign OS still needs a front door for software. Mela is that front door, b
 - **Integrity is verified on every download** (SHA-256), not assumed.
 - **Publication is transparent.** An append-only, verifiable transparency log (CT-style)
   records what was published, by whom, and when — so a malicious or compromised publisher
-  can't quietly backdate or disappear an artifact.
+  can't quietly backdate or disappear an artifact. Signed checkpoints, witness cosignatures and
+  consistency proofs let clients refuse a truncated or forked log.
 - **Capability is explicit.** Each app ships a sandbox profile declaring exactly what it may
   touch; the marketplace surfaces those capabilities before install, not after.
 - **Agents are first-class.** Mela distributes AI agents alongside apps — the same trust,

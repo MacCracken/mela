@@ -148,6 +148,15 @@ fn kv_verifying_key(kv): i64 {
     return hex_decode(str_data(hexs), str_len(hexs));   # 0 on non-hex digit
 }
 
+# 1 if the key's key_id is the one its public key derives (trust_key_id_from_pk).
+# 0 for a public key that is not 32 bytes of hex, or a key_id naming another
+# key: that would let this key sign as whoever owns the key_id (ADR-0017).
+fn kv_key_id_derives(kv): i64 {
+    var pk = kv_verifying_key(kv);
+    if (pk == 0) { return 0; }
+    return str_eq(trust_key_id_from_pk(pk), mela_kv_key_id(kv));
+}
+
 # ---------------------------------------------------------------------------
 # PublisherKeyring — trusted publisher keys, key_id -> [KeyVersion]
 # ---------------------------------------------------------------------------
@@ -187,6 +196,23 @@ fn keyring_get_current_key(kr, key_id, now): i64 {
         i = i + 1;
     }
     return found;
+}
+
+# The first version of `key_id` valid at `now` whose key_id derives from its
+# public key, or 0. The trust gates verify with this (ADR-0017), so a version
+# whose key_id names another key is passed over, however the keyring was built.
+fn _keyring_trusted_key(kr, key_id: Str, now): i64 {
+    var list = map_get(kr, key_id);
+    if (list == 0) { return 0; }
+    var i = 0;
+    while (i < vec_len(list)) {
+        var kv = vec_get(list, i);
+        if (mela_kv_is_valid_at(kv, now) == 1) {
+            if (kv_key_id_derives(kv) == 1) { return kv; }
+        }
+        i = i + 1;
+    }
+    return 0;
 }
 
 # get_all_versions(key_id) — every KeyVersion (incl. expired), or an empty Vec
@@ -320,14 +346,18 @@ fn keyring_load_dir(kr, dir: Str): i64 {
                 if (root != 0) {
                     if (json_v_is_arr(root) == 1) {
                         # a file loads whole or not at all: one malformed version
-                        # skips the file (Rust: the Vec<KeyVersion> parse fails)
+                        # skips the file (Rust: the Vec<KeyVersion> parse fails),
+                        # and so does one whose key_id is not its key's (ADR-0017)
                         var parsed = vec_new();
                         var ok = 1;
                         var an = json_v_arr_len(root);
                         var j = 0;
                         while (j < an) {
                             var kv = kv_from_jv(json_v_arr_get(root, j));
-                            if (kv == 0) { ok = 0; } else { vec_push(parsed, kv); }
+                            if (kv == 0) { ok = 0; }
+                            else {
+                                if (kv_key_id_derives(kv) == 0) { ok = 0; } else { vec_push(parsed, kv); }
+                            }
                             j = j + 1;
                         }
                         if (ok == 1) {

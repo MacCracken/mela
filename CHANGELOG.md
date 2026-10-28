@@ -4,6 +4,133 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
+## [1.5.2] - 2026-10-28
+
+**The two remaining trust follow-ups.**
+- **A key counts only under the `key_id` its public key derives**
+  ([ADR-0017](docs/adr/0017-key-id-must-derive-from-the-key.md)). Until now a keyring entry could
+  file one publisher's key under another's `key_id`, and that key could then sign, and since
+  v1.5.1 upgrade, as the other publisher.
+- **Transparency checkpoints, witness cosignatures and consistency proofs**
+  ([ADR-0018](docs/adr/0018-transparency-checkpoints-witnesses-and-consistency.md)). The hash chain
+  showed edits, but not truncation, forks or a registry showing clients different logs.
+
+**Gates:** 1358 passed / 0 failed (was 1195); fuzz 1 / 0; bench 1 / 0; coverage 90% (324/359).
+- The API surface is 360 public fns (21 added, none changed).
+- The GNU tar cross-check and the live transport check pass.
+- `--agnos` / `--aarch64` build with no `src/` warnings.
+
+### Breaking — a key file with a mismatched `key_id` no longer loads
+
+`keyring_load_dir` skips, whole, a key file with any entry whose `key_id` is not
+`trust_key_id_from_pk` of its `public_key_hex`. That includes an uppercase `key_id`. The other
+files still load. Gate 1 also passes over such an entry in a keyring built in memory.
+
+**Migration:**
+- Check each key file before upgrading: `kv_key_id_derives(kv)` must be 1 for every entry.
+- A file that fails holds a mistake or a forgery. Rewrite its `key_id` as the lowercase hex of the
+  key's first 8 bytes. Manifests already carry that form, so a manifest naming the old `key_id`
+  never matched the key anyway.
+
+### Added — the `key_id` check (ADR-0017)
+
+- `kv_key_id_derives(kv)` is 1 when `public_key_hex` is 32 bytes of hex (any case) and derives
+  exactly `key_id`.
+- It is checked in three places:
+  - **`keyring_load_dir`:** the file is skipped whole, like a malformed one (ADR-0011).
+  - **Gate 1 (`registry_verify_package`, `pipeline_install`):** the first version valid at `now`
+    *that derives* verifies. A mismatched entry ahead of a good one is passed over, not used.
+  - **Succession (ADR-0016):** a `succeeds` declaration counts only from an entry that derives.
+- **Unchanged:** `kv_from_json`, `mela_keyring_add_key` and `keyring_get_current_key` keep their
+  Rust shape. The check lives in the loader and the gates.
+
+### Added — log checkpoints (ADR-0018)
+
+- **The checkpoint:** a log signs "*origin* has *size* entries, the last hashing to *head*" at
+  *timestamp*, over a tagged, length-prefixed preimage. The head of a hash chain commits to every
+  entry before it.
+  - Witnesses cosign the same fields under a different tag, so a log signature and a cosignature
+    cannot stand in for each other.
+  - Every key lookup follows ADR-0017.
+- **Log operator:**
+  - `tlog_head`;
+  - `tlog_checkpoint(log, origin, sk, timestamp)`, which never signs an empty origin or a broken
+    chain;
+  - `tlog_proof(log, size)`, the entries after `size`;
+  - `ckpt_merge`, which gathers cosignatures witnesses added in parallel.
+- **Witness:** `ckpt_cosign` after `ckpt_advance` accepts the new checkpoint against the witness's
+  own last one.
+- **Client:**
+  - `ckpt_policy_new(origin, log_keyring, witness_keyring, threshold)`.
+  - `ckpt_advance(policy, trusted, incoming, proof, now)`: the origin, the log signature and k
+    distinct witnesses, then the proof from `trusted`. First contact is trust on first use.
+  - `ckpt_equivocates(policy, a, b, now)`: two signed heads of one size.
+- **Building blocks:**
+  - `ckpt_verify` and `ckpt_witnesses`;
+  - `ckpt_consistent(old, new, proof)`: same origin, sizes add up, each entry self-verifies, is
+    in sequence, links and never lowers the hash version;
+  - `tlog_matches_ckpt`, which catches a log with entries dropped from its end.
+- **Codecs:**
+  - `ckpt_to_json` / `ckpt_from_json`: strict, every field required, well-formedness checked;
+  - `tlog_proof_from_json`: entries as strict as a log's, not chained from 0. A proof travels as
+    `tlog_to_json(proof)`.
+- **Accessors:** `ckpt_origin`, `ckpt_size`, `ckpt_head`, `ckpt_timestamp`, `ckpt_key_id`.
+- **Not included:** transport, a freshness bound, and binding `pipeline_install` to the log. These
+  are the roadmap's new *Proposed* items. The guide shows the gate-2 binding that works today.
+
+### Changed
+
+- `tlog_from_json` parses through a shared `_tlog_parse` (no behavior change).
+- The `keyring-load` test fixtures use real derived keys (RFC 8032 test keys 2 and 3) instead of
+  made-up ids over an all-zero key. Every assertion keeps its meaning.
+
+### Verified
+
+- **New tests (163):**
+  - `key-id-derivation`: the predicate, the loader, the gate both ways, end-to-end install, and
+    succession.
+  - `log-checkpoints`:
+    - known answers;
+    - what each signature binds, and domain separation;
+    - witnesses, merging and proofs: forks, gaps, reordering, sequence, version downgrade and
+      sizes;
+    - truncation, the client rule, key rotation, evidence, and the strict codecs.
+  - `keyring-provenance`: the guide's check, now `kv_key_id_derives`.
+  - `checkpoint-guide`: the new guide end to end. Two witnesses cosign in parallel and are merged;
+    a client follows with a proof; a fork is refused by a witness and proven by the client; and an
+    install is bound to the logged digest, with a control.
+- **Known answers:** the checkpoint preimage, a log signature and a witness cosignature match
+  values computed independently with Python's `cryptography` (`tests/mela.tcyr`).
+- **Fuzz:**
+  - `fuzz_main` feeds both new decoders and `kv_key_id_derives`.
+  - `fuzz_ckpt` sweeps every byte of a cosigned checkpoint's JSON through eight values and uses
+    every result that decodes. It also fails if any change to a signed field still verifies. That
+    check was itself confirmed: with the timestamp dropped from the preimage, it fails.
+- **Mutations:** 38 applied to the new code (5 to the `key_id` check, 33 to checkpoints). Five
+  stayed green at first, and each now has a test that turns it red:
+  - the proof's size equation;
+  - `tlog_matches_ckpt`'s size check;
+  - the ADR-0017 lookup for checkpoint signatures;
+  - the 128-character signature length, without which trailing hex verified;
+  - merge deduplication by key and signature.
+- **Bench:** no change to the timed code; `agpkg_inspect` 116.5 µs, `ed25519_verify` 5.29 ms.
+
+### Docs
+
+- **ADR-0017** and **ADR-0018** are new. ADR-0016 carries an amendment note.
+- **New guide** `docs/guides/transparency-checkpoints.md` covers the log operator, witnesses,
+  clients, choosing a threshold, binding installs to the log, and evidence of equivocation.
+- **The keyring provenance guide:** the loader and the gate now enforce the derivation check;
+  the guide's check becomes `kv_key_id_derives`, a pre-flight test.
+- **The threat model:**
+  - new controls for one key under another's `key_id`, for truncation, rollback and forks, and
+    for split views;
+  - the equivocation gap is replaced by what the checkpoints leave to the consumer.
+- **Also updated:**
+  - the ADR index, API reference, parity table (two rows), audit status, SECURITY.md, README,
+    state.md and the roadmap (new *Proposed* log follow-ups);
+  - `docs/api-surface.snapshot` (+21).
+
 ## [1.5.1] - 2026-10-28
 
 **Publisher key continuity on upgrade**

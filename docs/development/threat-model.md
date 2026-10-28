@@ -6,9 +6,11 @@
 > control holds each boundary. Pairs with the dated audits in
 > [`../audit/`](../audit/).
 >
-> **Current as of v1.5.1 (2026-10-28).** The v0.9.0 audit's follow-ups are closed: on-disk
+> **Current as of v1.5.2 (2026-10-28).** The v0.9.0 audit's follow-ups are closed: on-disk
 > extraction and live transport shipped in v0.9.2, extraction is confined since v1.4.0, and an
-> upgrade keeps its publisher key since v1.5.1. The open items are restated under *Known gaps*.
+> upgrade keeps its publisher key since v1.5.1. Since v1.5.2 a key counts only under the `key_id` it
+> derives, and the log has signed checkpoints, witnesses and consistency proofs. The open items are
+> restated under *Known gaps*.
 
 ## Assets
 
@@ -19,7 +21,7 @@
 3. **Publisher trust** — installs are bound to a trusted publisher key, not to a
    package name.
 4. **Auditability** — every publication is recorded in a tamper-evident,
-   append-only log.
+   append-only log, and every client that follows it sees the same log (v1.5.2).
 5. **Availability of the installer** — parsing hostile input must not crash or
    exhaust resources.
 6. **Files outside the install directory** — installing never writes, truncates or chmods
@@ -53,6 +55,9 @@
   decompression bombs, or craft malicious archive structures.
 - **Malicious publisher of an *untrusted* key** — can sign their own bundle, but
   their key is not in the victim's keyring.
+- **A log operator that equivocates** — signs checkpoints for its own log, and can show different
+  clients different logs or drop entries (since v1.5.2: refused against a client's last checkpoint,
+  and split views need dishonest witnesses beyond the client's threshold).
 - **A trusted publisher acting outside its own packages** — its key is in the keyring. It can
   install new package names, but since v1.5.1 it cannot upgrade a package installed under another
   key (ADR-0016).
@@ -71,6 +76,7 @@ sandbox profile's concern, not the installer's).
 | Boundary | Threat | Control |
 |---|---|---|
 | B1 | forged authorship | Ed25519 signature over the whole bundle; `key_id` = first 8 bytes of the public key |
+| B1 | one key filed under another's `key_id` | a key counts only under the `key_id` it derives: `keyring_load_dir` skips such a file, gate 1 and succession pass over such an entry (ADR-0017) |
 | B2 | tampered / swapped bundle | **gate 2** — SHA-256 content digest must match the expected hash before install |
 | B2 | unsigned / signature-stripped | **gate 1** — install refuses a bundle whose publisher `key_id` is absent from the keyring or whose signature fails |
 | B2 | signature malleability | `sigil` enforces RFC 8032 §5.1.7 (`S < L`) + canonical encoding, and rejects small-order keys; mela requires a 64-byte signature |
@@ -87,6 +93,8 @@ sandbox profile's concern, not the installer's).
 | B4 | symlink / hard-link redirection | extraction walks the install dir with `openat` + `O_NOFOLLOW`: a symlink anywhere at or below it fails the install; an existing file is unlinked and recreated with `O_EXCL`, never written into (ADR-0015) |
 | B4 | permission escalation through modes | files extract 0755 or 0644 only (no setuid, nothing group/world-writable); directories 0755 (ADR-0014, ADR-0015) |
 | audit | silent substitution / reordering | append-only hash-chained transparency log; `verify_chain` detects any mutation, reorder or truncation of the front; hash v2 makes each entry's preimage unambiguous (ADR-0015) |
+| audit | truncation, rollback, fork | signed checkpoints of the chain head; `ckpt_advance` moves a client only to a checkpoint a consistency proof shows extends its last one; `tlog_matches_ckpt` catches a log with its end dropped (ADR-0018) |
+| audit | split view (equivocation) | witness cosignatures: a client can require k of its witness keys, each of which cosigns only checkpoints consistent with its own last one; `ckpt_equivocates` turns two signed heads of one size into evidence (ADR-0018) |
 | resolve | dependency confusion | single explicit dependency graph; `check_missing` surfaces gaps, no cross-registry version race |
 
 ## Enforcement points (in code)
@@ -110,7 +118,10 @@ sandbox profile's concern, not the installer's).
 - `_tar_cur_next` / `_tar_entry_safe` — archive validation and entry safety;
   `_agpkg_extract` / `_agpkg_put` — confined writes. (`src/flutter_agpkg.cyr`.)
 - `manifest_validate` — name/version/publisher rules. (`src/manifest.cyr`.)
-- `tlog_verify_chain` — auditability. (`src/transparency.cyr`.)
+- `tlog_verify_chain` — auditability; `ckpt_advance` / `ckpt_consistent` /
+  `tlog_matches_ckpt` — one log for every client (ADR-0018). (`src/transparency.cyr`.)
+- `_keyring_trusted_key` — the key lookup behind gate 1 and checkpoint signatures; `kv_key_id_derives`
+  at load and in succession (ADR-0017). (`src/trust.cyr`.)
 
 ## Known gaps / future work
 
@@ -118,11 +129,19 @@ sandbox profile's concern, not the installer's).
   package. Any trusted key can still install a name that is not installed yet. Binding names or
   namespaces to publishers is the consumer's table:
   [`../guides/keyring-provenance.md`](../guides/keyring-provenance.md).
-- **The transparency log is tamper-evident, not equivocation-proof.** It is a local hash chain.
-  There are no signed tree heads, no consistency proofs and no witnesses, so a registry could
-  show different clients different, internally consistent logs. A log with entries dropped from
-  its end also still verifies. Detecting either needs log signing and gossip; it is not designed
-  yet.
+- **Log checkpoints are building blocks, not a service.** Since v1.5.2 (ADR-0018) the checks
+  exist, but:
+  - **No transport:** mela neither serves nor fetches checkpoints, proofs or cosignatures; the
+    consumer wires them.
+  - **First contact is trust on first use**, unless the client checks the whole log.
+  - **Split-view protection is only as strong as the witness threshold.** A threshold of 0 relies
+    on clients comparing checkpoints.
+  - **Freshness is the client's:** a registry can keep serving an old checkpoint (a freeze).
+  - **`pipeline_install` does not consult the log.** Binding an install to it means taking gate 2's
+    digest from the accepted log
+    ([`../guides/transparency-checkpoints.md`](../guides/transparency-checkpoints.md)).
+  - **Proofs are linear** in the entries since the client's checkpoint. A light client proving one
+    entry would need a Merkle tree.
 - **Gate 2 is only as independent as its digest.**
   - `expected_hash` = `""` skips the comparison (the digest is still recorded).
   - A digest supplied by the same server as the bundle protects transport integrity, not
@@ -136,8 +155,9 @@ sandbox profile's concern, not the installer's).
 - **agnos confinement is path-based.** agnos has no `openat` family, so its build checks each
   component and then opens it, which leaves a window for a concurrent swap. agnos runtime
   correctness is unvalidated in general (roadmap: targets beyond x86_64 Linux).
-- **The keyring is the operator's.** mela does not check that a key file's `key_id` derives from
-  its public key, and validity windows trust the caller's `now`. The provenance guide covers both:
+- **The keyring is the operator's.** mela checks that each key's `key_id` derives from it
+  (v1.5.2), but which keys belong in the keyring is the operator's call. Validity windows trust the
+  caller's `now`. The provenance guide covers both:
   [`../guides/keyring-provenance.md`](../guides/keyring-provenance.md).
 - **`ed25519_verify` costs about 5 ms.** That is fine per install, but a DoS factor for any bulk,
   server-side verify. It is a `sigil` optimisation.

@@ -29,7 +29,8 @@ required, and `valid_until` is required when `has_until` is 1 (ADR-0011):
 
 `keyring_load_dir(kr, dir)` loads every `*.json` file in `dir`.
 - **It replaces the keyring.** A file deleted between loads is a key no longer trusted.
-- **A file loads whole or not at all.** One malformed entry skips the whole file.
+- **A file loads whole or not at all.** One malformed entry skips the whole file, and so does one
+  whose `key_id` does not derive from its `public_key_hex` (v1.5.2, ADR-0017).
 - **A file over 1 MiB is skipped.**
 - **A missing directory gives an empty keyring.** Nothing then installs.
 
@@ -37,14 +38,17 @@ required, and `valid_until` is required when `has_until` is 1 (ADR-0011):
 
 `pipeline_install(reg, keyring, bundle, sig, sig_len, expected_hash, now)`:
 1. reads `manifest.json` from the bundle and takes the publisher's `key_id`;
-2. asks `keyring_get_current_key(keyring, key_id, now)` for a key valid at `now`;
+2. takes the first key filed under that `key_id` that is valid at `now` and whose `key_id`
+   derives from it (v1.5.2, ADR-0017);
 3. verifies the Ed25519 signature over the whole bundle with that key's `public_key_hex`;
 4. for an upgrade, requires that key to continue the installed version's key (v1.5.1,
    ADR-0016). It must be the same `key_id`, a declared successor, or one the operator approved.
 
 **The `key_id` only selects a key; the stored public key decides.** A bundle that names a trusted
 `key_id` but is signed by a different key fails. That is why the public key in the keyring is the
-thing to protect, not the `key_id` or the publisher's name.
+thing to protect, not the `key_id` or the publisher's name. Since v1.5.2 a keyring entry cannot
+file one key under another key's `key_id`: the loader skips such a file, and the gate passes over
+such an entry in a keyring built in memory.
 
 ## Distributing the keyring
 
@@ -67,13 +71,12 @@ thing to protect, not the `key_id` or the publisher's name.
 1. **Get the full public key out of band.** Use a channel the registry does not control: the
    publisher's own site over HTTPS, a signed release note, or in person. A `key_id` alone is not
    enough: it is 64 bits, and only the full key is what verification uses.
-2. **Check the `key_id` derives from the key.** The loader does not check this. A mismatched
-   file, someone's key under someone else's `key_id`, lets one publisher sign as another:
+2. **Check the `key_id` derives from the key** before you install the file. Since v1.5.2 the
+   loader enforces it and skips a mismatched file whole; checking first tells you why a key is
+   missing. A mismatched entry files someone's key under someone else's `key_id`:
 
    ```cyrius
-   var pk = kv_verifying_key(kv);                 # 0 if the hex is not a 32-byte key
-   if (pk == 0) { /* reject the file */ }
-   if (str_eq(trust_key_id_from_pk(pk), mela_kv_key_id(kv)) == 0) { /* reject the file */ }
+   if (kv_key_id_derives(kv) == 0) { /* reject the file: not 32 bytes of hex, or another key's id */ }
    ```
 
 3. **Write one file per publisher** (for example `acme.json`), so revoking a publisher is
@@ -161,12 +164,17 @@ Beyond continuity, a consumer can pin further:
   publisher writes, so the binding has to come from the consumer's own table.
 - **Pin the expected digest.** Pass `expected_hash` (gate 2) from a source other than the bundle
   server where you have one: a signed catalogue, or the transparency log's `content_hash` for that
-  version.
+  version, from a log that matches a checkpoint you accepted
+  ([`transparency-checkpoints.md`](transparency-checkpoints.md)).
 
 ## See also
 
 - [ADR-0003](../adr/0003-trust-time-and-deferred-keyring-load.md): time and the keyring loader.
 - [ADR-0011](../adr/0011-fail-closed-decoding-at-the-trust-boundary.md): strict key files, and
   reloading as revocation.
+- [ADR-0017](../adr/0017-key-id-must-derive-from-the-key.md): a key counts only under the
+  `key_id` it derives.
+- [`transparency-checkpoints.md`](transparency-checkpoints.md): log and witness keys, which are
+  key files like these.
 - [`../development/threat-model.md`](../development/threat-model.md): where the keyring sits among
   the trust boundaries.

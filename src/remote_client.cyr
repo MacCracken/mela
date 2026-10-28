@@ -18,7 +18,7 @@ var REQUEST_TIMEOUT_SECS  = 30;
 var DOWNLOAD_TIMEOUT_SECS  = 300;
 var RC_MAX_HOPS           = 10;          # reqwest's default redirect limit
 var RC_DOWNLOAD_MAX_BYTES = 104857600;   # 100 MiB: Rust MAX_PACKAGE_SIZE
-var MELA_VERSION          = "1.5.1";     # == VERSION; pinned by a test (User-Agent)
+var MELA_VERSION          = "1.5.2";     # == VERSION; pinned by a test (User-Agent)
 
 # ---------------------------------------------------------------------------
 # Helpers

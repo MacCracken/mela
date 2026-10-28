@@ -285,7 +285,8 @@ fn registry_allow_key_change(r, name: Str, key_id: Str): i64 {
 
 # 1 if `key_id` succeeds `old_id` in `keyring`: some KeyVersion of `key_id`
 # lists `old_id` in `succeeds`, directly or through a chain of such keys. Every
-# version counts, whatever its validity window; a visited set ends cycles.
+# version counts, whatever its validity window, if its key_id derives from its
+# key (ADR-0017); a visited set ends cycles.
 fn _keyring_succeeds(keyring, key_id: Str, old_id: Str): i64 {
     var seen = map_new_str();
     var todo = vec_new();
@@ -297,6 +298,7 @@ fn _keyring_succeeds(keyring, key_id: Str, old_id: Str): i64 {
         var i = 0;
         while (i < vec_len(vers)) {
             var preds = kv_succeeds(vec_get(vers, i));
+            if (kv_key_id_derives(vec_get(vers, i)) == 0) { preds = vec_new(); }   # ADR-0017
             var j = 0;
             while (j < vec_len(preds)) {
                 var p = vec_get(preds, j);
@@ -479,9 +481,10 @@ fn mela_registry_search(r, query: Str): i64 {
 # otherwise (no trusted key, undecodable key, or bad signature). This is the
 # trust gate the registry enforces at install — mirrors the Rust
 # install_package verification branch (get_current_key -> verifying_key ->
-# verify_signature). `now` is explicit (ADR-0003).
+# verify_signature). `now` is explicit (ADR-0003). Only a version whose key_id
+# derives from its public key counts (ADR-0017).
 fn registry_verify_package(keyring, key_id: Str, content, content_len, sig, sig_len, now): i64 {
-    var kv = keyring_get_current_key(keyring, key_id, now);
+    var kv = _keyring_trusted_key(keyring, key_id, now);
     if (kv == 0) { return 0; }              # no trusted key for this publisher
     var pk = kv_verifying_key(kv);
     if (pk == 0) { return 0; }              # undecodable public key

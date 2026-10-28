@@ -36,6 +36,13 @@ fn fuzz_main(data, len) {
     # transparency log import (v0.4.0): arbitrary bytes -> 0, never a crash
     tlog_from_json(s);
 
+    # v1.5.2 (ADR-0017 / ADR-0018): the key_id check, checkpoints and proofs
+    kv_key_id_derives(kv_new(s, 0, 0, 0, s));
+    var cp = ckpt_from_json(s);
+    if (cp != 0) { _fz_ckpt_use(cp); }
+    var pf = tlog_proof_from_json(s);
+    if (pf != 0) { ckpt_consistent(_ckpt_new(str_from("o"), 0, str_from(""), 0, str_from("k"), str_from("")), _ckpt_new(str_from("o"), vec_len(pf), str_from(""), 0, str_from("k"), str_from("")), pf); }
+
     # registry index import (v0.5.0): arbitrary bytes into a fresh index
     registry_index_from_json_into(s, map_new_str());
 
@@ -174,6 +181,66 @@ fn fuzz_tar_ext() {
     return 0;
 }
 
+# Everything a client does with a decoded checkpoint, against an empty keyring.
+fn _fz_ckpt_use(cp): i64 {
+    var kr = mela_keyring_new();
+    ckpt_verify(cp, kr, 0);
+    ckpt_witnesses(cp, kr, 0);
+    ckpt_consistent(cp, cp, 0);
+    ckpt_merge(cp, cp);
+    tlog_matches_ckpt(tlog_new(), cp);
+    ckpt_advance(ckpt_policy_new(ckpt_origin(cp), kr, kr, 0), cp, cp, 0, 0);
+    ckpt_to_json(cp);
+    return 0;
+}
+
+# What the log's signature vouches for: the checkpoint without its cosignatures.
+fn _fz_signed(cp): Str {
+    return ckpt_to_json(_ckpt_new(ckpt_origin(cp), ckpt_size(cp), ckpt_head(cp), ckpt_timestamp(cp),
+      ckpt_key_id(cp), _ckpt_sig(cp)));
+}
+
+# v1.5.2 (ADR-0018): every byte of a real, cosigned checkpoint's JSON takes the
+# eight boundary values; each result is decoded and, if it decodes, used. A log
+# signature that still verifies after a change to a field it covers would be a
+# forgery, so the sweep also checks that none does (cosignatures may change).
+fn fuzz_ckpt(): i64 {
+    var sk[64];
+    var pk[32];
+    trust_keypair_from_seed(hex_decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", 64), &sk, &pk);
+    var kr = mela_keyring_new();
+    mela_keyring_add_key(kr, kv_new(trust_key_id_from_pk(&pk), 0, 0, 0, trust_hex_encode(&pk, 32)));
+    var log = tlog_new();
+    tlog_append(log, str_from("p/a"), str_from("1.0.0"), str_from("k"), str_from("c"), str_from("s"), 1);
+    var cp = tlog_checkpoint(log, str_from("example.org/log"), &sk, 1);
+    ckpt_cosign(cp, &sk);
+    var j = ckpt_to_json(cp);
+    var n = str_len(j);
+    if (ckpt_verify(ckpt_from_json(j), kr, 1) != 1) { println("fuzz_ckpt: base checkpoint does not verify"); return 1; }
+    var buf = alloc(n);
+    var pos = 0;
+    while (pos < n) {
+        var k = 0;
+        while (k < 8) {
+            memcpy(buf, str_data(j), n);
+            var was = load8(buf + pos);
+            store8(buf + pos, _fz_val(k));
+            var m = ckpt_from_json(str_new(buf, n));
+            if (m != 0) {
+                _fz_ckpt_use(m);
+                if (was != _fz_val(k)) {
+                    if (ckpt_verify(m, kr, 1) == 1) {
+                        if (str_eq(_fz_signed(m), _fz_signed(cp)) == 0) { println("fuzz_ckpt: a changed checkpoint verifies"); return 1; }
+                    }
+                }
+            }
+            k = k + 1;
+        }
+        pos = pos + 1;
+    }
+    return 0;
+}
+
 fn _fz_rep(n, ch): Str {
     var b = alloc(n + 1);
     memset(b, ch, n);
@@ -185,6 +252,7 @@ fn main() {
     alloc_init();
     fuzz_tar();
     if (fuzz_tar_ext() != 0) { return 1; }
+    if (fuzz_ckpt() != 0) { return 1; }
     # Smoke inputs (the fuzzer replaces these with mutations): valid, partial,
     # garbage, plus crypto-shaped blobs — all have to be survived.
     fuzz_main("{\"name\":\"x\",\"version\":\"1.0.0\",\"category\":\"Utility\"}",

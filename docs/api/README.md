@@ -106,6 +106,10 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   `kv_succeeds(kv): Vec<Str>` and `kv_add_succeeds(kv, key_id)`. In a key file it is optional
   (absent, or an array of strings, or the file is refused), and `kv_to_json` writes it only when
   it is non-empty.
+- *v1.5.2 (ADR-0017):* `kv_key_id_derives(kv): i64` — `1` iff `public_key_hex` is 32 bytes of hex
+  and its `trust_key_id_from_pk` is exactly `key_id` (lowercase). `keyring_load_dir` skips a file
+  with any entry that fails it. `kv_from_json`, `mela_keyring_add_key` and
+  `keyring_get_current_key` do not check it, but no gate uses an entry that fails it.
 
 ## transparency — `src/transparency.cyr`
 
@@ -131,6 +135,29 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   - `tlog_verify_chain` also refuses a version lower than the entry before it.
   - Logs written before v1.4.0 import and verify unchanged. A log with v2 entries does not import
     into earlier releases.
+- *v1.5.2 (ADR-0018):* checkpoints, witnesses and consistency proofs. Guide:
+  [`../guides/transparency-checkpoints.md`](../guides/transparency-checkpoints.md).
+  - `tlog_head(log): Str` — the last entry's hash, `""` if empty.
+  - `tlog_checkpoint(log, origin: Str, sk, timestamp): ckpt|0` — the log's signed checkpoint
+    (`sk` = seed‖pk); 0 for an empty origin or a chain that does not verify. Accessors
+    `ckpt_origin` / `ckpt_size` / `ckpt_head` / `ckpt_timestamp` / `ckpt_key_id`.
+  - `tlog_proof(log, size): Vec|0` — the entries after the first `size` (0 if `size` is negative
+    or past the end). It travels as `tlog_to_json(proof)` and is read back with
+    `tlog_proof_from_json(Str): Vec|0` (strict entries, not chained from 0).
+  - `ckpt_cosign(cp, sk): 0` — add a witness cosignature. `ckpt_merge(dst, src): i64` — add
+    `src`'s cosignatures to `dst` if both state the same checkpoint (`0` otherwise).
+  - `ckpt_verify(cp, keyring, now): i64` — well formed and signed by a current log key.
+    `ckpt_witnesses(cp, keyring, now): i64` — distinct witness keys with a valid cosignature (the
+    log's own key never counts).
+  - `ckpt_consistent(old, new, proof): i64` — `proof` links `old.head` to `new.head`: same origin,
+    sizes add up, every entry self-verifies, is in sequence and links, hash versions never go
+    down. A proof of 0 counts as empty. Signatures are not checked.
+  - `tlog_matches_ckpt(log, cp): i64` — the log's chain verifies, with cp's size and head.
+  - `ckpt_policy_new(origin, log_keyring, witness_keyring, threshold): policy`;
+    `ckpt_advance(policy, trusted, incoming, proof, now): i64` — the client's rule (`trusted` = 0
+    on first contact); `ckpt_equivocates(policy, a, b, now): i64` — two signed heads of one size.
+  - Codec: `ckpt_to_json(cp): Str` / `ckpt_from_json(Str): ckpt|0` — every field required,
+    well formed; signatures not checked.
 
 ## local_registry — `src/local_registry.cyr`
 
@@ -157,7 +184,8 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
 - Installed record: `imp_name` / `imp_version` / `imp_publisher` / `imp_manifest` /
   `imp_installed_at` / `imp_install_dir` / `imp_package_hash` / `imp_installed_size`.
 - `registry_verify_package(keyring, key_id, content, content_len, sig, sig_len, now): i64`
-  — the trust gate (current-key lookup → decode → `trust_verify`).
+  — the trust gate (current-key lookup → decode → `trust_verify`). Since v1.5.2 (ADR-0017) the
+  lookup takes the first version valid at `now` whose `key_id` derives from its key.
 - Persistence: `registry_save_index(reg): bytes|<0` (creates parent dirs) /
   `registry_load_index(reg): 1|0|-1` (loaded / no index / unloadable);
   `registry_index_to_json` / `registry_index_from_json_into`.

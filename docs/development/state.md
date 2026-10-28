@@ -5,6 +5,16 @@
 
 ## Version
 
+**1.5.2** — The two remaining trust follow-ups (2026-10-28).
+- **A key counts only under the `key_id` it derives (ADR-0017).** `keyring_load_dir` skips a key
+  file with a mismatched entry. Gate 1, succession and checkpoint signatures pass over such an
+  entry, however the keyring was built.
+- **Transparency checkpoints (ADR-0018):** the log signs checkpoints of its chain head, and
+  witnesses cosign them. A client moves only to a checkpoint that a consistency proof shows extends
+  its last one, so truncation, rollback and forks are refused.
+- New guide: `docs/guides/transparency-checkpoints.md`.
+- 1358/1358; 360 public fns; coverage 90% (324/359).
+
 **1.5.1** — Publisher key continuity on upgrade (2026-10-28, ADR-0016). An upgrade must be
 published under the installed version's key, a successor the keyring declares (`succeeds`,
 transitive), or a key the operator approved for that one install (`registry_allow_key_change`).
@@ -145,6 +155,8 @@ remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once 
     `agpkg_extract_to_dir` / `agpkg_read_entry` do the on-disk unpack. Since v1.3.0 it refuses a
     bundle over 100 MiB first, checks the quota on both sizes before any write, and inflates once.
     Since v1.5.1 an upgrade must keep its publisher key (ADR-0016).
+  - `src/transparency.cyr` — the hash-chained log, and since v1.5.2 signed checkpoints, witness
+    cosignatures and consistency proofs (`tlog_checkpoint`, `ckpt_advance`, ADR-0018).
   - `src/main.cyr` wires all twelve source modules.
 - **Packaged as a library**: `dist/mela.cyr` (`[lib]` + `cyrius distlib`, ADR-0010) — what ark
   consumes via `[deps.mela]`.
@@ -152,12 +164,13 @@ remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once 
 
 ## Tests
 
-**1075/1075** tests green (`tests/mela.tcyr` — groups across the 9 modules, plus `pipeline`
+**1358/1358** tests green (`tests/mela.tcyr` — groups across the 9 modules, plus `pipeline`
 (end-to-end), `hardening` (zip-slip), `tar-reader` (v1.1.1: checksum, strict octal, bounds,
 duplicate names, the D1 crash input), `install-txn` (v1.1.3: fail-closed index, save rollback), `strict-decode` (v1.1.5: serde rules,
 Unicode), `long-names` / `file-modes` / `install-limits` (v1.3.0, ADR-0014), `confinement` /
 `transparency-v2` / `keyring-provenance` (v1.4.0, ADR-0015), `key-continuity` (v1.5.1,
-ADR-0016), `transport` (HTTP logic),
+ADR-0016), `key-id-derivation` (v1.5.2, ADR-0017), `log-checkpoints` / `checkpoint-guide` (v1.5.2,
+ADR-0018), `transport` (HTTP logic),
 `extraction` (on-disk unpack),
 `keyring-load` (disk `load()` + `KeyVersion` JSON round-trip), and `registry-uninstall-fs` (files
 gone after uninstall)). `trust` has SHA-256 + RFC 8032 Ed25519 KAT vectors; `registry-persist`
@@ -166,7 +179,8 @@ gone after uninstall)). `trust` has SHA-256 + RFC 8032 Ed25519 KAT vectors; `reg
 package→sign→log→verify→install and rejects tampered / digest-mismatch / untrusted / wrong-key.
 Fuzz harness at `tests/mela.fcyr` covers every external-data parser (survive arbitrary bytes),
 including a byte sweep over an archive with a PAX record, a GNU `L` entry and a ustar prefix
-(v1.3.0).
+(v1.3.0), and one over a cosigned checkpoint's JSON that also checks no changed checkpoint still
+verifies (v1.5.2).
 Benchmarks at [`tests/mela.bcyr`](../../tests/mela.bcyr) (`cyrius bench`) /
 [`docs/benchmarks-rust-v-cyrius.md`](../benchmarks-rust-v-cyrius.md). `cyrius test` is the gate.
 
@@ -209,15 +223,12 @@ Direct (declared in `cyrius.cyml`):
 See [`roadmap.md`](roadmap.md). **v1.1.x is complete**: the 2026-10-14 parity audit's twelve
 defects are fixed, 202 of the Rust original's 204 tests are covered (2 N/A), every divergence is
 decided (ADR-0013) and `rust-old/` is retired. CI runs test, fuzz, bench, an 88% coverage floor
-(299/334 at v1.4.0), the API-surface snapshot (v1.5.0), the GNU tar cross-check and a live
+(324/359 at v1.5.2), the API-surface snapshot (v1.5.0), the GNU tar cross-check and a live
 transport check.
 
 **v1.3.0** shipped Large bundles, part one; part two (streaming, and bundles over 16 MiB) is
-blocked on sankoch. **v1.4.0** shipped the hardening residuals. **v1.5.1** shipped key
-continuity on upgrade, the first of its three trust follow-ups. Two remain proposed, each needing
-a maintainer decision:
-- checking a key file's `key_id` on load;
-- log equivocation.
+blocked on sankoch. **v1.4.0** shipped the hardening residuals; its three trust follow-ups are
+done: key continuity on upgrade (v1.5.1), and the `key_id` check and log checkpoints (v1.5.2).
 
 **v1.5.0** shipped API and build hygiene. The **v1.x** backlog after it maps aarch64 and agnos
 runtime (v1.6.0), and the unscheduled features (discovery, paid distribution).

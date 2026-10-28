@@ -74,6 +74,8 @@ Rust behavior so it survives the deletion of `rust-old/`.
 | No `MAX_PACKAGE_SIZE` (100 MB) check at install | **matched** v1.3.0: checked first | ADR-0014 §1 |
 | Quota checked on the bundle size only | **kept** (stricter): the extracted size too, both before any write since v1.3.0 | ADR-0014 §2 |
 | Any trusted key could upgrade any installed package | **kept** (stricter) since v1.5.1: the installed key, a declared successor or an approved key | ADR-0016 |
+| A keyring entry's `key_id` was never checked against its key | **kept** (stricter) since v1.5.2: a file with a mismatched entry is skipped; gate 1 and succession pass over such an entry | ADR-0017 |
+| The log had no checkpoints or consistency proofs | **added** v1.5.2: signed checkpoints, witness cosignatures, consistency proofs; Rust's log API is unchanged | ADR-0018 |
 | Files extracted 0644 (Rust kept `mode & 0o777`) | **decided** v1.3.0: 0755 if the owner-execute bit is set, else 0644 | ADR-0014 |
 | No resolved-path containment check | **kept**, and since v1.4.0 stronger: extraction never follows a symlink at or below the destination | ADR-0013 §5, ADR-0015 |
 | Archive metadata normalized; compact JSON | **kept** (reproducible bundles) | ADR-0013 §6 |

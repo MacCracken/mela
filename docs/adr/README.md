@@ -79,3 +79,11 @@ Decisions about mela — what we chose, the context, and the consequences we acc
   *Accepted (v1.5.1)* · an upgrade must be published under the installed version's key, a
   successor the keyring declares (`succeeds`, transitive), or a key approved for that one install
   (`registry_allow_key_change`); checked in `pipeline_install` after both gates, before any write.
+- [0017 — A key counts only under the key_id its public key derives](0017-key-id-must-derive-from-the-key.md) —
+  *Accepted (v1.5.2)* · `keyring_load_dir` skips a key file with an entry whose `key_id` is not its
+  key's; gate 1, succession and checkpoint signatures pass over such an entry however the keyring
+  was built (`kv_key_id_derives`).
+- [0018 — Transparency checkpoints, witness cosignatures and consistency proofs](0018-transparency-checkpoints-witnesses-and-consistency.md) —
+  *Accepted (v1.5.2)* · the log signs checkpoints of its hash-chain head; a client moves only to a
+  checkpoint a consistency proof shows extends its last one, with k witness cosignatures if it
+  asks; truncation, rollback and forks are refused, and two signed heads of one size are evidence.
