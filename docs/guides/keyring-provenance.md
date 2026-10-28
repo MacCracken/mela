@@ -15,6 +15,7 @@ A trusted key is a `KeyVersion` ([`src/trust.cyr`](../../src/trust.cyr)):
 | `public_key_hex` | the 32-byte Ed25519 public key, 64 hex characters |
 | `valid_from` | the key is not trusted before this time (an i64 epoch) |
 | `has_until`, `valid_until` | when `has_until` is 1, the key is not trusted after `valid_until` |
+| `succeeds` *(optional, v1.5.1)* | `key_id`s this key succeeds; an upgrade published under one of them may move to this key (see *Rotating a key*) |
 
 A **key file** is `<anything>.json` holding a JSON array of these objects. Every field is
 required, and `valid_until` is required when `has_until` is 1 (ADR-0011):
@@ -37,7 +38,9 @@ required, and `valid_until` is required when `has_until` is 1 (ADR-0011):
 `pipeline_install(reg, keyring, bundle, sig, sig_len, expected_hash, now)`:
 1. reads `manifest.json` from the bundle and takes the publisher's `key_id`;
 2. asks `keyring_get_current_key(keyring, key_id, now)` for a key valid at `now`;
-3. verifies the Ed25519 signature over the whole bundle with that key's `public_key_hex`.
+3. verifies the Ed25519 signature over the whole bundle with that key's `public_key_hex`;
+4. for an upgrade, requires that key to continue the installed version's key (v1.5.1,
+   ADR-0016). It must be the same `key_id`, a declared successor, or one the operator approved.
 
 **The `key_id` only selects a key; the stored public key decides.** A bundle that names a trusted
 `key_id` but is signed by a different key fails. That is why the public key in the keyring is the
@@ -79,10 +82,24 @@ thing to protect, not the `key_id` or the publisher's name.
 ## Rotating a key
 
 A new keypair has a new `key_id`, so rotation is two entries, not an edit of one:
-1. Add the new key with `valid_from` = the switch-over time T.
+1. Add the new key with `valid_from` = the switch-over time T, and **`"succeeds": ["<old
+   key_id>"]`**. Without it, every installed package of that publisher refuses its next upgrade,
+   because mela keeps an upgrade on the installed key (ADR-0016).
 2. Give the old key `has_until: 1` and a `valid_until` after T. Leave an overlap long enough for
    the publisher to re-sign what is still being installed.
 3. The publisher's new manifests carry the new `key_id`.
+
+```json
+[
+  {"key_id": "3d4017c3e843895a", "valid_from": 1800000000, "has_until": 0, "valid_until": 0,
+   "public_key_hex": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+   "succeeds": ["d75a980182b10ab7"]}
+]
+```
+
+Succession is transitive: a key that succeeds B also continues packages installed under A if B
+succeeds A. Declare it only for the same publisher's keys. It lets the new key take over every
+package installed under the old one.
 
 ⚠ **Expiry stops installs of everything the old key signed.** mela checks the key against `now`,
 the time of install, not the time of signing. After `valid_until`, a bundle signed only with the
@@ -109,29 +126,36 @@ must stop being trusted.
   Installed packages record it too:
   `pub_key_id(man_publisher(imp_manifest(registry_get_package(reg, name))))`.
 
-## Pinning: what a consumer (ark) should add
+## Key continuity, and what a consumer (ark) should add
 
-mela's trust is **any trusted key may sign any package name**. A key in the keyring can install a
-new package under any name, and can also **upgrade a package another publisher installed**:
-`pipeline_install` compares the signature with the bundle's own `key_id`, not with the installed
-version's. Until mela enforces key continuity itself, a consumer that installs on a user's behalf
-should pin it:
+**mela pins each installed package to the key it was installed under (v1.5.1, ADR-0016).** An
+upgrade published under any other key is refused, even a trusted one, unless:
+- the keyring declares the new key a successor (`succeeds`, above); or
+- the operator approved this one change with
+  `registry_allow_key_change(reg, name, new_key_id)`.
 
-- **Pin upgrades to the installed key.** Before an upgrade, require the incoming manifest's
-  `key_id` to equal the installed one, unless the operator approves a change:
+An approval:
+- is held in memory only;
+- covers the next install of that package under that key, and is used up by it;
+- stays pending if that install fails.
 
-  ```cyrius
-  var incoming = pipeline_extract_manifest(bundle);
-  var installed = registry_get_package(reg, man_name(incoming));
-  if (installed != 0) {
-      var was = pub_key_id(man_publisher(imp_manifest(installed)));
-      if (str_eq(was, pub_key_id(man_publisher(incoming))) == 0) { /* refuse, or ask the operator */ }
-  }
-  ```
+Uninstalling and reinstalling also resets the pin, but it removes the installed files.
 
-  The manifest read here is pre-signature, so this is a policy check on top of
-  `pipeline_install`, not instead of it: `pipeline_install` still verifies that bundle's
-  signature.
+A consumer that installs on a user's behalf can ask first, to know when to prompt:
+
+```cyrius
+var incoming = pipeline_extract_manifest(bundle);       # pre-signature: for the prompt only
+if (registry_key_continuous(reg, keyring, incoming) == 0) {
+    # a key change: show the old and new publisher keys; on the user's yes:
+    registry_allow_key_change(reg, man_name(incoming), pub_key_id(man_publisher(incoming)));
+}
+var res = pipeline_install(reg, keyring, bundle, sig, 64, expected_hash, now);   # checks it all again
+```
+
+An approval never lets an untrusted key in: gate 1 still requires the new key in the keyring.
+
+Beyond continuity, a consumer can pin further:
+
 - **Pin names to publishers** if the catalogue has namespaces: for example, accept `acme-*` only
   from Acme's `key_id`. mela's qualified names (`publisher/name`) come from the manifest, which the
   publisher writes, so the binding has to come from the consumer's own table.

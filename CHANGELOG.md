@@ -4,6 +4,102 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
+## [1.5.1] - 2026-10-28
+
+**Publisher key continuity on upgrade**
+([ADR-0016](docs/adr/0016-publisher-key-continuity-on-upgrade.md)). Until now any key in the
+keyring could upgrade any installed package, including another publisher's. Now an upgrade must
+be published under one of:
+- the installed version's key;
+- a successor the keyring declares;
+- a key the operator approved for that one install.
+
+The maintainer chose the override mechanism (keyring succession plus one-shot approval) on
+2026-10-28.
+
+**Gates:** 1195 passed / 0 failed (was 1146); fuzz 1 / 0; bench 1 / 0; coverage 89% (303/338).
+The API surface is 339 public fns (4 added; the CI gate caught them until the snapshot was
+updated). The GNU tar cross-check and the live transport check pass, and `--agnos` / `--aarch64`
+build with no `src/` warnings.
+
+### Breaking — upgrades under another key are refused
+
+`pipeline_install` returns 0, writing nothing, for an upgrade whose publisher `key_id` differs
+from the installed version's, unless the keyring declares the new key a successor or the operator
+approved the change. It used to install it. Fresh installs are unaffected (trust on first use),
+and so are upgrades under the same key.
+
+**Migration:**
+- **For a publisher's key rotation:** add `"succeeds": ["<old key_id>"]` to the new key's entry
+  in its key file.
+- **For a one-off change** (a package moving to a new publisher): call
+  `registry_allow_key_change(reg, name, new_key_id)` before that install.
+- **Ask first:** `registry_key_continuous(reg, keyring, pipeline_extract_manifest(bundle))` tells
+  a consumer when to ask.
+
+### Added
+
+- **The check:** in `pipeline_install`, after gates 1 and 2 and before the quota and extraction.
+  - A refused upgrade leaves the installed version, its files and its index record as they were
+    (on disk and after reopening).
+  - Gate 1 still runs first, so neither override lets an untrusted key in.
+- **`succeeds` on a key-file entry:** optional, an array of `key_id` strings. Anything else
+  refuses the whole file (ADR-0011).
+  - `kv_to_json` writes it only when non-empty, so existing key files re-export unchanged.
+  - Succession is followed transitively across every version of each key, whatever its validity
+    window. A visited set ends cycles.
+  - `kv_succeeds(kv)` and `kv_add_succeeds(kv, key_id)` read and extend it.
+- **`registry_allow_key_change(reg, name, key_id)`** approves the next install of `name` under
+  `key_id`:
+  - it is held in memory only, not saved;
+  - a later call replaces it;
+  - the install it allows uses it up, and a failed install leaves it pending;
+  - an approval on one registry object does not carry over to another.
+- **`registry_key_continuous(reg, keyring, manifest)`:** `1` if the manifest may be installed as
+  far as continuity goes, else `0`.
+- **Unchanged:** `registry_install`, the low-level, unsigned record call, does not check
+  continuity. Its records still pin their `key_id`, which `manifest_validate` already required to
+  be non-empty.
+
+### Changed — a test that pinned the old behavior
+
+The v1.4.0 `keyring-provenance` assertion "a second trusted key can upgrade it" now asserts the
+refusal, under ADR-0016.
+
+### Verified
+
+- **New tests (49):** the `key-continuity` group, plus the guide's rotation example in
+  `keyring-provenance`. They cover:
+  - fresh installs, same-key upgrades, refusals;
+  - approvals for the wrong package or key;
+  - approval use-up, and approval surviving a failed install;
+  - the gate-1-first rule;
+  - direct, chained and reverse succession, succession declared on an expired version, and
+    cycles;
+  - a `registry_install` record's pin;
+  - on-disk refusal and reopen;
+  - the `succeeds` JSON rules and loading from disk.
+- **Mutations:** five applied to the new code (no check; approval never used up; succession not
+  transitive; approval for any key; succession ignored). All five turn tests red.
+- **Bench:** no change to the timed code; `agpkg_inspect` 116.3 µs, `ed25519_verify` 5.30 ms,
+  within run-to-run variation.
+
+### Docs
+
+- **ADR-0016** is new.
+- **The keyring provenance guide:**
+  - the key-file table gains `succeeds`;
+  - rotation now declares succession, with a tested example;
+  - the pinning section describes the built-in rule, approvals and the ask-first call, where it
+    used to tell consumers to write the check themselves.
+- **The threat model:** continuity is now a control in the pipeline order. The gap narrows to
+  *new names are first come, first served*.
+- **Also updated:**
+  - the audit status (finding G), SECURITY.md (key continuity), the ADR index, the parity table
+    (a stricter-than-Rust row), the API reference, the roadmap (two trust follow-ups remain) and
+    state.md;
+  - `docs/api-surface.snapshot` (+4).
+
 ## [1.5.0] - 2026-10-28
 
 **API and build hygiene.** No behavior change.

@@ -157,6 +157,8 @@ fn registry_index_from_json_into(js: Str, index): i64 {
 #   16 keyring           (PublisherKeyring, from trust)
 #   24 transparency_log  (TransparencyLog)
 #   32 storage_quota     (i64; 0 = unlimited)
+#   40 key_approvals     (Str-keyed map: name -> key_id approved for its next
+#                         install, in memory only; ADR-0016)
 
 fn registry_root(r): Str   { return load64(r); }
 fn registry_index(r)       { return load64(r + 8); }
@@ -164,6 +166,7 @@ fn registry_keyring(r)     { return load64(r + 16); }
 fn registry_tlog(r)        { return load64(r + 24); }
 fn registry_quota(r): i64  { return load64(r + 32); }
 fn registry_set_storage_quota(r, q) { store64(r + 32, q); return 0; }
+fn _registry_approvals(r)  { return load64(r + 40); }
 
 fn _registry_index_path(r): Str {
     return path_join(registry_root(r), str_from(REG_INDEX_FILENAME));
@@ -207,24 +210,26 @@ fn _registry_on_disk(r): i64 {
 # an index exists but cannot be loaded: Rust's new() errored, and opening it as
 # empty would let the next install overwrite every record (D9). Mirrors Rust `new`.
 fn mela_registry_new(root_dir: Str): i64 {
-    var r = alloc(40);
+    var r = alloc(48);
     store64(r,      root_dir);
     store64(r + 8,  map_new_str());
     store64(r + 16, mela_keyring_new());
     store64(r + 24, tlog_new());
     store64(r + 32, 0);
+    store64(r + 40, map_new_str());
     if (registry_load_index(r) < 0) { return 0; }
     return r;
 }
 
 # in_memory() — no persistence (root "/dev/null"). Mirrors Rust `in_memory`.
 fn registry_in_memory(): i64 {
-    var r = alloc(40);
+    var r = alloc(48);
     store64(r,      str_from("/dev/null"));
     store64(r + 8,  map_new_str());
     store64(r + 16, mela_keyring_new());
     store64(r + 24, tlog_new());
     store64(r + 32, 0);
+    store64(r + 40, map_new_str());
     return r;
 }
 
@@ -258,6 +263,78 @@ fn registry_admits(r, manifest, installed_size): i64 {
         if (registry_total_installed_size(r) + installed_size > quota) { return 0; }
     }
     if (vec_len(manifest_validate(manifest)) != 0) { return 0; }
+    return 1;
+}
+
+# ---------------------------------------------------------------------------
+# Publisher key continuity (ADR-0016)
+# ---------------------------------------------------------------------------
+#
+# An upgrade must be published under the installed version's key, a key the
+# keyring declares as its successor, or a key the operator approved for that
+# one install. pipeline_install checks it after both trust gates and before
+# anything is written. registry_install (unsigned) does not.
+
+# Approve the next install of package `name` under `key_id`, a key change the
+# continuity rule would otherwise refuse. Held in memory, not saved; a later
+# call for the same name replaces it; the install it allows uses it up.
+fn registry_allow_key_change(r, name: Str, key_id: Str): i64 {
+    map_set(_registry_approvals(r), name, key_id);
+    return 0;
+}
+
+# 1 if `key_id` succeeds `old_id` in `keyring`: some KeyVersion of `key_id`
+# lists `old_id` in `succeeds`, directly or through a chain of such keys. Every
+# version counts, whatever its validity window; a visited set ends cycles.
+fn _keyring_succeeds(keyring, key_id: Str, old_id: Str): i64 {
+    var seen = map_new_str();
+    var todo = vec_new();
+    vec_push(todo, key_id);
+    map_set(seen, key_id, 1);
+    var t = 0;
+    while (t < vec_len(todo)) {
+        var vers = mela_keyring_get_all_versions(keyring, vec_get(todo, t));
+        var i = 0;
+        while (i < vec_len(vers)) {
+            var preds = kv_succeeds(vec_get(vers, i));
+            var j = 0;
+            while (j < vec_len(preds)) {
+                var p = vec_get(preds, j);
+                if (str_eq(p, old_id) == 1) { return 1; }
+                if (map_has(seen, p) == 0) {
+                    map_set(seen, p, 1);
+                    vec_push(todo, p);
+                }
+                j = j + 1;
+            }
+            i = i + 1;
+        }
+        t = t + 1;
+    }
+    return 0;
+}
+
+# How `manifest` stands against the installed version's key: 0 refused; 1
+# allowed (no installed version, the same key_id, or a declared successor); 2
+# allowed by the operator's approval. A recorded key_id is never empty
+# (manifest_validate); a hand-edited empty one matches nothing, so fails closed.
+fn _registry_continuity(r, keyring, manifest): i64 {
+    var installed = registry_get_package(r, man_name(manifest));
+    if (installed == 0) { return 1; }                          # first use pins the key
+    var was = pub_key_id(man_publisher(imp_manifest(installed)));
+    var now_id = pub_key_id(man_publisher(manifest));
+    if (str_eq(was, now_id) == 1) { return 1; }
+    if (_keyring_succeeds(keyring, now_id, was) == 1) { return 1; }
+    var ok = map_get(_registry_approvals(r), man_name(manifest));
+    if (ok != 0) { if (str_eq(ok, now_id) == 1) { return 2; } }
+    return 0;
+}
+
+# 1 if `manifest` may be installed as far as key continuity goes (see above),
+# else 0. pipeline_install enforces it; a consumer can ask first, with
+# pipeline_extract_manifest(bundle), to know when to ask the operator.
+fn registry_key_continuous(r, keyring, manifest): i64 {
+    if (_registry_continuity(r, keyring, manifest) == 0) { return 0; }
     return 1;
 }
 

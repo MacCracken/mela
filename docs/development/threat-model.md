@@ -6,9 +6,9 @@
 > control holds each boundary. Pairs with the dated audits in
 > [`../audit/`](../audit/).
 >
-> **Current as of v1.4.0 (2026-10-28).** The v0.9.0 audit's follow-ups are closed: on-disk
-> extraction and live transport shipped in v0.9.2, and extraction is confined since v1.4.0. The
-> open items are restated under *Known gaps*.
+> **Current as of v1.5.1 (2026-10-28).** The v0.9.0 audit's follow-ups are closed: on-disk
+> extraction and live transport shipped in v0.9.2, extraction is confined since v1.4.0, and an
+> upgrade keeps its publisher key since v1.5.1. The open items are restated under *Known gaps*.
 
 ## Assets
 
@@ -53,8 +53,9 @@
   decompression bombs, or craft malicious archive structures.
 - **Malicious publisher of an *untrusted* key** — can sign their own bundle, but
   their key is not in the victim's keyring.
-- **A trusted publisher acting outside its own packages** — its key is in the keyring, and mela
-  lets any trusted key install or upgrade any package name (see *Known gaps*).
+- **A trusted publisher acting outside its own packages** — its key is in the keyring. It can
+  install new package names, but since v1.5.1 it cannot upgrade a package installed under another
+  key (ADR-0016).
 - **Look-alike / typosquatting publisher** — relies on the user confusing names.
 - **A running installed app** — unprivileged, but able to write inside its own install directory
   between installs (B4).
@@ -80,6 +81,7 @@ sandbox profile's concern, not the installer's).
 | B2 | disk exhaustion | the storage quota is checked on the bundle size and the extracted size before anything is written (ADR-0014) |
 | B2 | malformed input → crash | every external-data parser fuzzed; bounds-checked ustar reader; parsers return 0, not faults |
 | B2 | expired/rotated key | `keyring_get_current_key(key_id, now)` honours `KeyVersion` validity windows |
+| B2 | another trusted publisher replacing a package | **key continuity** — an upgrade must be published under the installed version's key, a successor the keyring declares (`succeeds`), or a key the operator approved for that one install (ADR-0016) |
 | B2 | transport MITM | HTTPS through the stdlib's native TLS (no OpenSSL), verifying the server chain against the system roots; https→http redirects refused (ADR-0006, ADR-0012) |
 | B3 | path traversal at install | manifest name validated to `[a-z0-9-]` before forming `packages/<name>` |
 | B4 | symlink / hard-link redirection | extraction walks the install dir with `openat` + `O_NOFOLLOW`: a symlink anywhere at or below it fails the install; an existing file is unlinked and recreated with `O_EXCL`, never written into (ADR-0015) |
@@ -96,9 +98,10 @@ sandbox profile's concern, not the installer's).
   3. manifest;
   4. **gate 1** (signature);
   5. **gate 2** (digest);
-  6. manifest validation and the quota, on both sizes;
-  7. confined extraction;
-  8. record and save.
+  6. key continuity;
+  7. manifest validation and the quota, on both sizes;
+  8. confined extraction;
+  9. record and save.
 
   Any failure installs nothing. A fresh install's partial directory is removed, but a symlink
   found in its place is left alone.
@@ -111,10 +114,9 @@ sandbox profile's concern, not the installer's).
 
 ## Known gaps / future work
 
-- **Key continuity on upgrade.** Any trusted key may install or upgrade any package name.
-  `pipeline_install` checks the new bundle against its own `key_id`, not against the installed
-  version's. A trusted publisher can therefore replace another publisher's package. Until mela
-  enforces continuity (a behavior change, so an ADR), consumers should pin it themselves:
+- **New names are first come, first served.** Key continuity (v1.5.1) protects an installed
+  package. Any trusted key can still install a name that is not installed yet. Binding names or
+  namespaces to publishers is the consumer's table:
   [`../guides/keyring-provenance.md`](../guides/keyring-provenance.md).
 - **The transparency log is tamper-evident, not equivocation-proof.** It is a local hash chain.
   There are no signed tree heads, no consistency proofs and no witnesses, so a registry could

@@ -22,6 +22,9 @@ You'll receive an acknowledgement, and we'll coordinate a fix and disclosure tim
 
 - **Signature enforcement.** Every package and agent must carry a valid Ed25519 publisher
   signature. Unsigned artifacts are **rejected**, not warned about (`trust`).
+- **Key continuity.** An upgrade must be signed under the key the installed version was published
+  under, a successor the keyring declares, or a key the operator approved for that one install
+  (ADR-0016).
 - **Integrity verification.** A bundle's SHA-256 must match the expected digest the caller
   supplies before it is installed (`trust`, `pipeline`). An empty expected digest skips the
   comparison; the signature check never is.

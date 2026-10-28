@@ -103,6 +103,7 @@ local_registry::instres_version/1
 local_registry::mela_registry_new/1
 local_registry::mela_registry_search/2
 local_registry::registry_admits/3
+local_registry::registry_allow_key_change/3
 local_registry::registry_get_package/2
 local_registry::registry_in_memory/0
 local_registry::registry_index/1
@@ -110,6 +111,7 @@ local_registry::registry_index_from_json_into/2
 local_registry::registry_index_to_json/1
 local_registry::registry_install/5
 local_registry::registry_is_empty/1
+local_registry::registry_key_continuous/3
 local_registry::registry_keyring/1
 local_registry::registry_len/1
 local_registry::registry_list_installed/1
@@ -307,10 +309,12 @@ transparency::tlog_to_json/1
 transparency::tlog_verify_chain/1
 trust::keyring_get_current_key/3
 trust::keyring_load_dir/2
+trust::kv_add_succeeds/2
 trust::kv_from_json/1
 trust::kv_from_jv/1
 trust::kv_has_until/1
 trust::kv_new/5
+trust::kv_succeeds/1
 trust::kv_to_json/1
 trust::kv_to_jv/1
 trust::kv_verifying_key/1

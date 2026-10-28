@@ -2959,6 +2959,16 @@ fn test_keyring_provenance() {
     assert_neq(keyring_get_current_key(kr, kid, 1700000001), 0, "guide: valid after valid_from");
     assert_eq(keyring_get_current_key(kr, kid, 1699999999), 0, "guide: not before valid_from");
 
+    # the guide's rotation example (v1.5.1), verbatim beside the first file
+    var rot = "[\n  {\"key_id\": \"3d4017c3e843895a\", \"valid_from\": 1800000000, \"has_until\": 0, \"valid_until\": 0,\n   \"public_key_hex\": \"3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c\",\n   \"succeeds\": [\"d75a980182b10ab7\"]}\n]\n";
+    file_write_all("/tmp/mela-guide-keys/acme-2.json", rot, strlen(rot));
+    var kr2 = mela_keyring_new();
+    assert_eq(keyring_load_dir(kr2, str_from(KD)), 2, "guide: the rotation example loads beside the first");
+    assert_eq(_keyring_succeeds(kr2, str_from("3d4017c3e843895a"), kid), 1, "guide: the new key succeeds the old");
+    var rpk = kv_verifying_key(keyring_get_current_key(kr2, str_from("3d4017c3e843895a"), 1800000000));
+    assert_eq(str_eq_cstr(trust_key_id_from_pk(rpk), "3d4017c3e843895a"), 1, "guide: the rotation key's key_id derives");
+    xunlink("/tmp/mela-guide-keys/acme-2.json");
+
     # the guide's key_id check
     var good = keyring_get_current_key(kr, kid, 1700000001);
     assert_eq(str_eq(trust_key_id_from_pk(kv_verifying_key(good)), mela_kv_key_id(good)), 1,
@@ -2994,8 +3004,184 @@ fn test_keyring_provenance() {
     var installed = registry_get_package(reg, man_name(incoming));
     var was = pub_key_id(man_publisher(imp_manifest(installed)));
     assert_eq(str_eq(was, pub_key_id(man_publisher(incoming))), 0, "guide check: the key change is visible");
-    assert_neq(pipeline_install(reg, both, bb, &sigb, 64, str_from(""), 1000), 0,
-      "today: a second trusted key can upgrade it (threat model, Known gaps)");
+    assert_eq(pipeline_install(reg, both, bb, &sigb, 64, str_from(""), 1000), 0,
+      "v1.5.1 (ADR-0016): a second trusted key can no longer upgrade it");
+    return 0;
+}
+
+# A signed bundle for package `name` at `ver`, published under `kid` with `sk`.
+fn _t_kc_bundle(name, ver, kid, sk, sig, extra) {
+    var m = mela_manifest_new(mk_agent(str_from(name), str_from("d")), publisher_new(str_from("P"), kid, str_from("")),
+      CAT_UTILITY, str_from(ver));
+    var es = _t_es1(str_from("manifest.json"), mela_manifest_to_json(m));
+    _t_push(es, str_from("marker.txt"), str_from(extra));
+    return _t_signed(es, sk, sig);
+}
+fn _t_kc_ver(reg, name) {
+    var p = registry_get_package(reg, str_from(name));
+    if (p == 0) { return str_from(""); }
+    return imp_version(p);
+}
+
+# v1.5.1 (ADR-0016): an upgrade keeps the installed key, a declared successor,
+# or an operator-approved one.
+fn test_key_continuity() {
+    test_group("key-continuity");
+    var NOW = 1000;
+    var ska[64]; var pka[32];
+    var ka = trust_keypair_from_seed(hex_decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", 64), &ska, &pka);
+    var skb[64]; var pkb[32];
+    var kb = trust_keypair_from_seed(hex_decode("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb", 64), &skb, &pkb);
+    var skc[64]; var pkc[32];
+    var kc = trust_keypair_from_seed(hex_decode("c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7", 64), &skc, &pkc);
+    var kr = mela_keyring_new();
+    var va = kv_new(ka, 0, 0, 0, trust_hex_encode(&pka, 32));
+    var vb = kv_new(kb, 0, 0, 0, trust_hex_encode(&pkb, 32));
+    var vc = kv_new(kc, 0, 0, 0, trust_hex_encode(&pkc, 32));
+    mela_keyring_add_key(kr, va);
+    mela_keyring_add_key(kr, vb);
+    mela_keyring_add_key(kr, vc);
+
+    var s1[64]; var b1 = _t_kc_bundle("kc-pkg", "1.0.0", ka, &ska, &s1, "one");
+    var s2[64]; var b2 = _t_kc_bundle("kc-pkg", "2.0.0", ka, &ska, &s2, "two");
+    var s3[64]; var b3 = _t_kc_bundle("kc-pkg", "3.0.0", kb, &skb, &s3, "three");
+    var s4[64]; var b4 = _t_kc_bundle("kc-pkg", "4.0.0", kc, &skc, &s4, "four");
+    var s5[64]; var b5 = _t_kc_bundle("kc-pkg", "5.0.0", ka, &ska, &s5, "five");
+
+    # first use pins; the same key upgrades
+    var reg = registry_in_memory();
+    assert_neq(pipeline_install(reg, kr, b1, &s1, 64, str_from(""), NOW), 0, "fresh install under A");
+    assert_neq(pipeline_install(reg, kr, b2, &s2, 64, str_from(""), NOW), 0, "upgrade under A");
+
+    # another trusted key: refused, nothing changes
+    assert_eq(registry_key_continuous(reg, kr, pipeline_extract_manifest(b3)), 0, "B: not continuous");
+    assert_eq(pipeline_install(reg, kr, b3, &s3, 64, str_from(""), NOW), 0, "upgrade under B: refused");
+    assert_eq(str_eq_cstr(_t_kc_ver(reg, "kc-pkg"), "2.0.0"), 1, "refused: 2.0.0 still recorded");
+
+    # an approval for another package, or another key, does not apply
+    registry_allow_key_change(reg, str_from("other-pkg"), kb);
+    assert_eq(pipeline_install(reg, kr, b3, &s3, 64, str_from(""), NOW), 0, "approval for another package: refused");
+    registry_allow_key_change(reg, str_from("kc-pkg"), kc);
+    assert_eq(pipeline_install(reg, kr, b3, &s3, 64, str_from(""), NOW), 0, "approval for another key: refused");
+
+    # the approval for B allows one install, then is used up
+    registry_allow_key_change(reg, str_from("kc-pkg"), kb);
+    assert_eq(registry_key_continuous(reg, kr, pipeline_extract_manifest(b3)), 1, "B approved: continuous");
+    assert_neq(pipeline_install(reg, kr, b3, &s3, 64, str_from(""), NOW), 0, "approved upgrade under B");
+    assert_eq(str_eq_cstr(_t_kc_ver(reg, "kc-pkg"), "3.0.0"), 1, "approved: 3.0.0 recorded");
+    assert_eq(map_has(_registry_approvals(reg), str_from("kc-pkg")), 0, "approval used up");
+    assert_eq(pipeline_install(reg, kr, b5, &s5, 64, str_from(""), NOW), 0, "back to A: refused (B is pinned now)");
+
+    # a failed install leaves the approval pending
+    registry_allow_key_change(reg, str_from("kc-pkg"), kc);
+    var bad[64];
+    memset(&bad, 0, 64);
+    assert_eq(pipeline_install(reg, kr, b4, &bad, 64, str_from(""), NOW), 0, "approved C, bad signature: refused");
+    assert_eq(map_has(_registry_approvals(reg), str_from("kc-pkg")), 1, "failed install: approval still pending");
+    assert_neq(pipeline_install(reg, kr, b4, &s4, 64, str_from(""), NOW), 0, "approved C, good signature: installs");
+
+    # an approval never admits an untrusted key (gate 1 first)
+    var kr_ab = mela_keyring_new();
+    mela_keyring_add_key(kr_ab, kv_new(ka, 0, 0, 0, trust_hex_encode(&pka, 32)));
+    var rg = registry_in_memory();
+    assert_neq(pipeline_install(rg, kr_ab, b1, &s1, 64, str_from(""), NOW), 0, "gate first: A installs");
+    registry_allow_key_change(rg, str_from("kc-pkg"), kc);
+    assert_eq(pipeline_install(rg, kr_ab, b4, &s4, 64, str_from(""), NOW), 0, "approved but untrusted C: refused");
+
+    # succession: B succeeds A; C succeeds B (a chain); not the reverse
+    var krs = mela_keyring_new();
+    var sa = kv_new(ka, 0, 0, 0, trust_hex_encode(&pka, 32));
+    var sb = kv_new(kb, 0, 0, 0, trust_hex_encode(&pkb, 32));
+    var sc = kv_new(kc, 0, 0, 0, trust_hex_encode(&pkc, 32));
+    kv_add_succeeds(sb, ka);
+    kv_add_succeeds(sc, kb);
+    mela_keyring_add_key(krs, sa);
+    mela_keyring_add_key(krs, sb);
+    mela_keyring_add_key(krs, sc);
+    var r1 = registry_in_memory();
+    assert_neq(pipeline_install(r1, krs, b1, &s1, 64, str_from(""), NOW), 0, "succession: A installs");
+    assert_neq(pipeline_install(r1, krs, b3, &s3, 64, str_from(""), NOW), 0, "succession: B succeeds A");
+    assert_eq(pipeline_install(r1, krs, b5, &s5, 64, str_from(""), NOW), 0, "succession: A does not succeed B");
+    var r2 = registry_in_memory();
+    pipeline_install(r2, krs, b1, &s1, 64, str_from(""), NOW);
+    assert_neq(pipeline_install(r2, krs, b4, &s4, 64, str_from(""), NOW), 0, "succession: C succeeds A through B");
+    assert_eq(_keyring_succeeds(krs, kc, ka), 1, "succession: chain C -> B -> A");
+    assert_eq(_keyring_succeeds(krs, ka, kc), 0, "succession: no reverse chain");
+
+    # an expired version's declaration still counts (identity, not validity)
+    var kre = mela_keyring_new();
+    mela_keyring_add_key(kre, kv_new(ka, 0, 0, 0, trust_hex_encode(&pka, 32)));
+    var old_b = kv_new(kb, 0, 1, 10, trust_hex_encode(&pkb, 32));
+    kv_add_succeeds(old_b, ka);
+    mela_keyring_add_key(kre, old_b);
+    mela_keyring_add_key(kre, kv_new(kb, 11, 0, 0, trust_hex_encode(&pkb, 32)));
+    var r3 = registry_in_memory();
+    pipeline_install(r3, kre, b1, &s1, 64, str_from(""), NOW);
+    assert_neq(pipeline_install(r3, kre, b3, &s3, 64, str_from(""), NOW), 0, "succession on an expired version counts");
+
+    # a cycle in the declarations ends
+    var krc = mela_keyring_new();
+    var ca = kv_new(ka, 0, 0, 0, trust_hex_encode(&pka, 32));
+    var cb = kv_new(kb, 0, 0, 0, trust_hex_encode(&pkb, 32));
+    kv_add_succeeds(ca, kb);
+    kv_add_succeeds(cb, ka);
+    mela_keyring_add_key(krc, ca);
+    mela_keyring_add_key(krc, cb);
+    assert_eq(_keyring_succeeds(krc, ka, kc), 0, "cycle: ends, and C is not reached");
+    assert_eq(_keyring_succeeds(krc, ka, kb), 1, "cycle: A succeeds B as declared");
+
+    # a record made by registry_install (no signature) pins its key_id too, and
+    # it cannot record an empty one (manifest_validate)
+    var r4 = registry_in_memory();
+    var unsigned = mela_manifest_new(mk_agent(str_from("kc-pkg"), str_from("d")), publisher_new(str_from("P"), str_from(""),
+      str_from("")), CAT_UTILITY, str_from("0.1.0"));
+    assert_eq(registry_install(r4, unsigned, str_from("h"), 1, NOW), 0, "registry_install: an empty key_id is refused");
+    var direct = mela_manifest_new(mk_agent(str_from("kc-pkg"), str_from("d")), publisher_new(str_from("P"), str_from("abc12345"),
+      str_from("")), CAT_UTILITY, str_from("0.1.0"));
+    assert_neq(registry_install(r4, direct, str_from("h"), 1, NOW), 0, "registry_install records abc12345");
+    assert_eq(pipeline_install(r4, kr, b3, &s3, 64, str_from(""), NOW), 0, "signed upgrade over another recorded key: refused");
+    registry_allow_key_change(r4, str_from("kc-pkg"), kb);
+    assert_neq(pipeline_install(r4, kr, b3, &s3, 64, str_from(""), NOW), 0, "approved: installs");
+
+    # on disk: a refused upgrade leaves the files and the index as they were
+    var KD = "/tmp/mela-kc-disk";
+    rclean(KD);
+    var kpk = path_join(str_from(KD), str_from("packages/kc-pkg"));
+    if (is_dir(kpk) == 1) { _rmtree(kpk); }
+    var dr = mela_registry_new(str_from(KD));
+    assert_neq(pipeline_install(dr, kr, b1, &s1, 64, str_from(""), NOW), 0, "disk: A installs");
+    assert_eq(pipeline_install(dr, kr, b3, &s3, 64, str_from(""), NOW), 0, "disk: B refused");
+    assert_eq(str_eq_cstr(_t_slurp(str_data(path_join(kpk, str_from("marker.txt")))), "one"), 1, "disk: files untouched");
+    var dr2 = mela_registry_new(str_from(KD));
+    assert_eq(str_eq_cstr(_t_kc_ver(dr2, "kc-pkg"), "1.0.0"), 1, "disk: reopened index keeps 1.0.0 under A");
+    assert_eq(pipeline_install(dr2, kr, b3, &s3, 64, str_from(""), NOW), 0, "disk: the pin survives a reopen");
+    registry_allow_key_change(dr, str_from("kc-pkg"), kb);
+    assert_eq(pipeline_install(dr2, kr, b3, &s3, 64, str_from(""), NOW), 0,
+      "disk: an approval on another registry object does not carry over");
+
+    # the key-file field
+    var kvj = kv_to_json(va);
+    assert_eq(str_contains(kvj, str_from("succeeds")), 0, "json: no succeeds written when empty");
+    var kvs = kv_new(kb, 0, 0, 0, trust_hex_encode(&pkb, 32));
+    kv_add_succeeds(kvs, ka);
+    var back = kv_from_json(kv_to_json(kvs));
+    assert_neq(back, 0, "json: succeeds round-trips");
+    if (back != 0) {
+        assert_eq(vec_len(kv_succeeds(back)), 1, "json: one predecessor");
+        assert_eq(str_eq(vec_get(kv_succeeds(back), 0), ka), 1, "json: the predecessor's key_id");
+    }
+    var base = "{\"key_id\":\"k\",\"valid_from\":0,\"has_until\":0,\"valid_until\":0,\"public_key_hex\":\"aa\"";
+    assert_neq(kv_from_json(str_cat(str_from(base), str_from("}"))), 0, "json: succeeds is optional");
+    assert_neq(kv_from_json(str_cat(str_from(base), str_from(",\"succeeds\":[]}"))), 0, "json: empty succeeds ok");
+    assert_eq(kv_from_json(str_cat(str_from(base), str_from(",\"succeeds\":\"a\"}"))), 0, "json: succeeds not an array refused");
+    assert_eq(kv_from_json(str_cat(str_from(base), str_from(",\"succeeds\":[\"a\",1]}"))), 0, "json: a non-string predecessor refused");
+    var SD = "/tmp/mela-kc-keys";
+    _t_fresh_dir(SD);
+    var kf = str_cat(str_cat(str_from("["), kv_to_json(kvs)), str_from("]"));
+    file_write_all("/tmp/mela-kc-keys/b.json", str_data(kf), str_len(kf));
+    var lk = mela_keyring_new();
+    assert_eq(keyring_load_dir(lk, str_from(SD)), 1, "key file with succeeds loads");
+    assert_eq(_keyring_succeeds(lk, kb, ka), 1, "key file: succession declared on disk");
     return 0;
 }
 
@@ -3755,6 +3941,7 @@ fn main() {
     test_install_limits();
     test_confinement();
     test_keyring_provenance();
+    test_key_continuity();
     test_pipeline();
     test_install_txn();
     test_strict_decode();

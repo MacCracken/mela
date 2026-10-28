@@ -71,7 +71,8 @@ fn _pipeline_undo_dir(dir: Str): i64 {
 # install — verify a downloaded bundle and record it, enforcing BOTH gates.
 # Returns the install result, or 0 on any of: a bundle over
 # AGPKG_MAX_PACKAGE_SIZE, malformed bundle, unknown/invalid publisher key, bad
-# signature (gate 1), digest mismatch (gate 2), invalid manifest, quota.
+# signature (gate 1), digest mismatch (gate 2), an upgrade under a key that does
+# not continue the installed one (ADR-0016), invalid manifest, quota.
 # `expected_hash` of "" skips the digest comparison (compute + record only); a
 # non-empty value must match the bundle's SHA-256. The bundle is inflated once
 # for the whole install (ADR-0014).
@@ -97,6 +98,11 @@ fn pipeline_install(reg, keyring, bundle, sig, sig_len, expected_hash: Str, now)
         if (str_eq(package_hash, expected_hash) == 0) { return 0; }
     }
 
+    # key continuity — an upgrade keeps the installed key, a declared successor,
+    # or an operator-approved one (ADR-0016)
+    var cont = _registry_continuity(reg, keyring, manifest);
+    if (cont == 0) { return 0; }
+
     if (registry_admits(reg, manifest, len) == 0) { return 0; }   # quota on the bundle size, as Rust
     var extracted = _agpkg_payload(arc);                            # recorded size: what lands on disk
     # ...and on the extracted size, which registry_install checks too: here it
@@ -119,6 +125,8 @@ fn pipeline_install(reg, keyring, bundle, sig, sig_len, expected_hash: Str, now)
         if (_registry_on_disk(reg) == 1) {
             if (fresh == 1) { _pipeline_undo_dir(dir); }
         }
+        return 0;
     }
+    if (cont == 2) { map_delete(_registry_approvals(reg), man_name(manifest)); }   # approval used up
     return res;
 }

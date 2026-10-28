@@ -102,6 +102,10 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   returns 0 (parity with rust-old `PublisherKeyring::load`; v1.1.1, ADR-0011). `KeyVersion` JSON
   codec: `kv_to_json(kv): Str` / `kv_from_json(json: Str): kv|0` — every field `kv_to_json`
   writes is required (`has_until` 0/1; `valid_until` when it is 1); nothing defaults.
+- *v1.5.1 (ADR-0016):* a `KeyVersion` may carry `succeeds`, the `key_id`s it succeeds:
+  `kv_succeeds(kv): Vec<Str>` and `kv_add_succeeds(kv, key_id)`. In a key file it is optional
+  (absent, or an array of strings, or the file is refused), and `kv_to_json` writes it only when
+  it is non-empty.
 
 ## transparency — `src/transparency.cyr`
 
@@ -130,6 +134,11 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
 
 ## local_registry — `src/local_registry.cyr`
 
+- *v1.5.1 (ADR-0016):* `registry_key_continuous(reg, keyring, manifest): i64` — `1` if the
+  manifest may be installed as far as key continuity goes (no installed version, the same
+  `key_id`, a declared successor, or an approval), else `0`. `registry_allow_key_change(reg, name,
+  key_id): 0` approves the next install of `name` under `key_id`; it is held in memory and used up
+  by that install. `registry_install` does not check continuity.
 - `mela_registry_new(root_dir: Str): reg|0` — loads `index.json` if present; **0 if one exists
   but cannot be loaded** (unreadable, over 1 MiB, invalid, or a record that does not decode —
   v1.1.3, ADR-0012). `registry_in_memory(): reg`.
@@ -293,6 +302,10 @@ The end-to-end flow (ADR-0009); both trust gates are enforced at install.
   written; the bundle is inflated once.
   *v1.4.0 (ADR-0015):* extraction is confined (see `agpkg_extract_to_dir`). A fresh install's
   rollback removes only a real directory; a symlink at `packages/<name>` is left as found.
+  *v1.5.1 (ADR-0016):* after both gates, an upgrade must keep its publisher key: the installed
+  version's `key_id`, a successor the keyring declares, or one approved with
+  `registry_allow_key_change`. Otherwise it returns `0` and nothing is written. An approval it
+  uses is used up.
 
 ---
 

@@ -104,14 +104,16 @@ fn trust_generate_keypair(sk_out, pk_out): Str {
 #   16 has_until       (i64; 1 if an expiry is set, else 0)
 #   24 valid_until     (i64 epoch; meaningful only when has_until == 1)
 #   32 public_key_hex  (Str; 64 hex chars for a 32-byte key)
+#   40 succeeds        (Vec of key_id Strs this key succeeds; ADR-0016)
 
 fn kv_new(key_id: Str, valid_from, has_until, valid_until, public_key_hex: Str): i64 {
-    var kv = alloc(40);
+    var kv = alloc(48);
     store64(kv,      key_id);
     store64(kv + 8,  valid_from);
     store64(kv + 16, has_until);
     store64(kv + 24, valid_until);
     store64(kv + 32, public_key_hex);
+    store64(kv + 40, vec_new());
     return kv;
 }
 
@@ -120,6 +122,12 @@ fn mela_kv_valid_from(kv): i64     { return load64(kv + 8); }
 fn kv_has_until(kv): i64      { return load64(kv + 16); }
 fn mela_kv_valid_until(kv): i64    { return load64(kv + 24); }
 fn mela_kv_public_key_hex(kv): Str { return load64(kv + 32); }
+
+# The key_ids this key succeeds (a rotation the operator declares, ADR-0016):
+# an upgrade published under one of them, directly or through a chain, may move
+# to this key.
+fn kv_succeeds(kv)                 { return load64(kv + 40); }
+fn kv_add_succeeds(kv, key_id: Str) { vec_push(kv_succeeds(kv), key_id); return 0; }
 
 # is_valid_at(when) — Rust parity: false before valid_from, false after
 # valid_until (when set), else true.
@@ -198,6 +206,8 @@ fn mela_keyring_is_empty(kr): i64 { if (map_size(kr) == 0) { return 1; } return 
 
 var KEYRING_MAXLEN = 1048576;     # 1 MiB read buffer per key file
 
+# The Str of a JSON string value (the caller checked its type).
+fn _kv_vstr(v): Str { return json_v_str(v); }
 fn _kv_jstr(o, key): Str {
     var v = bayan_json_v_obj_get_by_cstr(o, key);
     if (v == 0) { return str_from(""); }
@@ -218,6 +228,13 @@ fn kv_to_jv(kv): i64 {
     json_v_obj_set(o, str_from("has_until"),      json_v_int_new(kv_has_until(kv)));
     json_v_obj_set(o, str_from("valid_until"),    json_v_int_new(mela_kv_valid_until(kv)));
     json_v_obj_set(o, str_from("public_key_hex"), json_v_str_new(mela_kv_public_key_hex(kv)));
+    var sc = kv_succeeds(kv);
+    if (vec_len(sc) != 0) {                      # written only when set: older files re-export unchanged
+        var arr = json_v_arr_new();
+        var i = 0;
+        while (i < vec_len(sc)) { json_v_arr_push(arr, json_v_str_new(vec_get(sc, i))); i = i + 1; }
+        json_v_obj_set(o, str_from("succeeds"), arr);
+    }
     return o;
 }
 # 1 if `key` is present in `o` as a string / an integer.
@@ -236,6 +253,7 @@ fn _kv_field_int(o, key): i64 {
 # its type: key_id / public_key_hex strings, valid_from / has_until integers,
 # has_until 0 or 1, and valid_until an integer when has_until is 1. Nothing is
 # defaulted: a missing has_until used to decode as "never expires" (D5, ADR-0011).
+# `succeeds` is optional: absent, or an array of key_id strings (ADR-0016).
 fn kv_from_jv(o): i64 {
     if (json_v_is_obj(o) == 0) { return 0; }
     if (_kv_field_str(o, "key_id") == 0) { return 0; }
@@ -249,8 +267,18 @@ fn kv_from_jv(o): i64 {
         if (_kv_field_int(o, "valid_until") == 0) { return 0; }
         valid_until = _kv_jint(o, "valid_until");
     }
-    return kv_new(_kv_jstr(o, "key_id"), _kv_jint(o, "valid_from"), has_until, valid_until,
+    if (_jopt_arr_str(o, "succeeds") == 0) { return 0; }
+    var kv = kv_new(_kv_jstr(o, "key_id"), _kv_jint(o, "valid_from"), has_until, valid_until,
       _kv_jstr(o, "public_key_hex"));
+    var sv = bayan_json_v_obj_get_by_cstr(o, "succeeds");
+    if (sv != 0) {
+        var i = 0;
+        while (i < json_v_arr_len(sv)) {
+            kv_add_succeeds(kv, _kv_vstr(json_v_arr_get(sv, i)));
+            i = i + 1;
+        }
+    }
+    return kv;
 }
 fn kv_to_json(kv): Str { return json_v_build(kv_to_jv(kv)); }
 fn kv_from_json(json: Str): i64 {

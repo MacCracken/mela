@@ -75,3 +75,7 @@ Decisions about mela — what we chose, the context, and the consequences we acc
   symlink and never writes into an existing inode (agnos: path checks); new log entries hash with an
   unambiguous, tagged, length-prefixed v2 preimage, v1 entries still verify, and versions never go
   back within a log.
+- [0016 — Publisher key continuity on upgrade](0016-publisher-key-continuity-on-upgrade.md) —
+  *Accepted (v1.5.1)* · an upgrade must be published under the installed version's key, a
+  successor the keyring declares (`succeeds`, transitive), or a key approved for that one install
+  (`registry_allow_key_change`); checked in `pipeline_install` after both gates, before any write.

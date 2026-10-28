@@ -5,6 +5,12 @@
 
 ## Version
 
+**1.5.1** — Publisher key continuity on upgrade (2026-10-28, ADR-0016). An upgrade must be
+published under the installed version's key, a successor the keyring declares (`succeeds`,
+transitive), or a key the operator approved for that one install (`registry_allow_key_change`).
+`pipeline_install` checks it after both gates and before any write.
+`registry_key_continuous` lets a consumer ask first. 1195/1195; 339 public fns.
+
 **1.5.0** — API and build hygiene (2026-10-28).
 - `docs/api-surface.snapshot` (335 public fns) is committed, and CI fails on any difference from
   it.
@@ -138,6 +144,7 @@ remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once 
     then **extracting the bundle to disk** under the install dir (ADR-0009, ADR-0005).
     `agpkg_extract_to_dir` / `agpkg_read_entry` do the on-disk unpack. Since v1.3.0 it refuses a
     bundle over 100 MiB first, checks the quota on both sizes before any write, and inflates once.
+    Since v1.5.1 an upgrade must keep its publisher key (ADR-0016).
   - `src/main.cyr` wires all twelve source modules.
 - **Packaged as a library**: `dist/mela.cyr` (`[lib]` + `cyrius distlib`, ADR-0010) — what ark
   consumes via `[deps.mela]`.
@@ -149,7 +156,8 @@ remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once 
 (end-to-end), `hardening` (zip-slip), `tar-reader` (v1.1.1: checksum, strict octal, bounds,
 duplicate names, the D1 crash input), `install-txn` (v1.1.3: fail-closed index, save rollback), `strict-decode` (v1.1.5: serde rules,
 Unicode), `long-names` / `file-modes` / `install-limits` (v1.3.0, ADR-0014), `confinement` /
-`transparency-v2` / `keyring-provenance` (v1.4.0, ADR-0015), `transport` (HTTP logic),
+`transparency-v2` / `keyring-provenance` (v1.4.0, ADR-0015), `key-continuity` (v1.5.1,
+ADR-0016), `transport` (HTTP logic),
 `extraction` (on-disk unpack),
 `keyring-load` (disk `load()` + `KeyVersion` JSON round-trip), and `registry-uninstall-fs` (files
 gone after uninstall)). `trust` has SHA-256 + RFC 8032 Ed25519 KAT vectors; `registry-persist`
@@ -205,9 +213,9 @@ decided (ADR-0013) and `rust-old/` is retired. CI runs test, fuzz, bench, an 88%
 transport check.
 
 **v1.3.0** shipped Large bundles, part one; part two (streaming, and bundles over 16 MiB) is
-blocked on sankoch. **v1.4.0** shipped the hardening residuals. Three trust follow-ups are
-proposed, each needing a maintainer decision:
-- key continuity on upgrade;
+blocked on sankoch. **v1.4.0** shipped the hardening residuals. **v1.5.1** shipped key
+continuity on upgrade, the first of its three trust follow-ups. Two remain proposed, each needing
+a maintainer decision:
 - checking a key file's `key_id` on load;
 - log equivocation.
 
