@@ -125,6 +125,7 @@ A guided walkthrough lives in [`docs/guides/getting-started.md`](docs/guides/get
 - [`docs/development/state.md`](docs/development/state.md) — live status snapshot
 - [`docs/development/rust-parity.md`](docs/development/rust-parity.md) — the parity record: what the retired Rust original specified, and every change from it
 - [`docs/development/threat-model.md`](docs/development/threat-model.md) + [`docs/audit/`](docs/audit/) — trust boundaries, controls, audit findings
+- [`docs/guides/keyring-provenance.md`](docs/guides/keyring-provenance.md) — distributing, rotating and pinning trusted publisher keys
 - [`docs/benchmarks-rust-v-cyrius.md`](docs/benchmarks-rust-v-cyrius.md) — hot-path benchmarks
 - [`docs/adr/`](docs/adr/) — architectural decision records
 - [`SECURITY.md`](SECURITY.md) — vulnerability reporting

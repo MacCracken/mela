@@ -70,3 +70,8 @@ Decisions about mela — what we chose, the context, and the consequences we acc
   the prefix, to 256 bytes); files extract 0755 or 0644 by the owner-execute bit; a 100 MiB bundle
   cap and the quota on both sizes, before any write; a 16 MiB ceiling (sankoch's) and one inflate
   per install. Streaming waits on sankoch.
+- [0015 — Confined extraction and transparency hash v2](0015-confined-extraction-and-transparency-hash-v2.md) —
+  *Accepted (v1.4.0)* · extraction walks the install dir with `openat` + `O_NOFOLLOW`, fails on any
+  symlink and never writes into an existing inode (agnos: path checks); new log entries hash with an
+  unambiguous, tagged, length-prefixed v2 preimage, v1 entries still verify, and versions never go
+  back within a log.

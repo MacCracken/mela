@@ -5,6 +5,10 @@
 > what we protect, who the attacker is, where the boundaries are, and which
 > control holds each boundary. Pairs with the dated audits in
 > [`../audit/`](../audit/).
+>
+> **Current as of v1.4.0 (2026-10-28).** The v0.9.0 audit's follow-ups are closed: on-disk
+> extraction and live transport shipped in v0.9.2, and extraction is confined since v1.4.0. The
+> open items are restated under *Known gaps*.
 
 ## Assets
 
@@ -18,14 +22,17 @@
    append-only log.
 5. **Availability of the installer** — parsing hostile input must not crash or
    exhaust resources.
+6. **Files outside the install directory** — installing never writes, truncates or chmods
+   anything outside `packages/<name>/`.
 
 ## Trust boundaries
 
 ```
  publisher ──pack/sign──▶ [bundle + sig] ──distribute──▶ device installer ──▶ local registry
-                                                  ▲                  │
-                                          (B2) untrusted bytes   (B3) on-disk state
- keyring (trusted publisher keys) ─────────────────┘
+                                                  ▲                  │              │
+                                          (B2) untrusted bytes   (B3) on-disk state  (B4) install dir
+ keyring (trusted publisher keys) ─────────────────┘                                  ▲
+                                                                     installed apps ──┘
 ```
 
 - **B1 — publisher → artifact**: the publisher signs the bundle offline
@@ -36,6 +43,8 @@
   is hostile until both trust gates pass.
 - **B3 — installer → on-disk registry**: the index and install directory are
   derived only from *validated* manifest fields.
+- **B4 — installed apps → install directory** *(untrusted)*: an app that can write inside its own
+  install directory can leave symlinks or hard links there for the next upgrade to follow.
 
 ## Attacker model
 
@@ -44,11 +53,17 @@
   decompression bombs, or craft malicious archive structures.
 - **Malicious publisher of an *untrusted* key** — can sign their own bundle, but
   their key is not in the victim's keyring.
+- **A trusted publisher acting outside its own packages** — its key is in the keyring, and mela
+  lets any trusted key install or upgrade any package name (see *Known gaps*).
 - **Look-alike / typosquatting publisher** — relies on the user confusing names.
+- **A running installed app** — unprivileged, but able to write inside its own install directory
+  between installs (B4).
 
 Out of scope: a compromised trusted publisher key (key custody is the
 publisher's responsibility); local root on the installing device; side channels
-in the underlying crypto library beyond what `sigil` already hardens.
+in the underlying crypto library beyond what `sigil` already hardens; the
+contents of a correctly signed package (what an app does once installed is the
+sandbox profile's concern, not the installer's).
 
 ## Controls (mapped to boundaries)
 
@@ -57,34 +72,70 @@ in the underlying crypto library beyond what `sigil` already hardens.
 | B1 | forged authorship | Ed25519 signature over the whole bundle; `key_id` = first 8 bytes of the public key |
 | B2 | tampered / swapped bundle | **gate 2** — SHA-256 content digest must match the expected hash before install |
 | B2 | unsigned / signature-stripped | **gate 1** — install refuses a bundle whose publisher `key_id` is absent from the keyring or whose signature fails |
-| B2 | signature malleability | `sigil` enforces RFC 8032 §5.1.7 (`S < L`) + canonical encoding; mela requires a 64-byte signature |
-| B2 | decompression bomb | bounded inflate into a fixed buffer (`AGPKG_BUF_MAXLEN`); fails closed past the cap |
-| B2 | zip-slip / symlink escape | `_tar_entry_safe` rejects non-regular typeflags and `..` / absolute names in the ustar reader |
+| B2 | signature malleability | `sigil` enforces RFC 8032 §5.1.7 (`S < L`) + canonical encoding, and rejects small-order keys; mela requires a 64-byte signature |
+| B2 | oversized bundle | `AGPKG_MAX_PACKAGE_SIZE` (100 MiB) refused before anything is read; downloads stream to disk under the same cap (ADR-0012, ADR-0014) |
+| B2 | decompression bomb | inflate stops at 16 MiB (sankoch's gzip ceiling, `AGPKG_BUF_MAXLEN`); fails closed past it |
+| B2 | crafted archive structure | the whole archive is validated before any write: checksums, strict octal fields, bounds, duplicate names, malformed long-name / PAX records (ADR-0011, ADR-0014) |
+| B2 | zip-slip via names | non-regular entries and absolute / `..` / trailing-`/` names are skipped, judged on the full name (ustar prefix, GNU `L`, PAX `path`) |
+| B2 | disk exhaustion | the storage quota is checked on the bundle size and the extracted size before anything is written (ADR-0014) |
 | B2 | malformed input → crash | every external-data parser fuzzed; bounds-checked ustar reader; parsers return 0, not faults |
 | B2 | expired/rotated key | `keyring_get_current_key(key_id, now)` honours `KeyVersion` validity windows |
+| B2 | transport MITM | HTTPS through the stdlib's native TLS (no OpenSSL), verifying the server chain against the system roots; https→http redirects refused (ADR-0006, ADR-0012) |
 | B3 | path traversal at install | manifest name validated to `[a-z0-9-]` before forming `packages/<name>` |
-| audit | silent substitution / equivocation | append-only hash-chained transparency log; `verify_chain` detects any mutation |
+| B4 | symlink / hard-link redirection | extraction walks the install dir with `openat` + `O_NOFOLLOW`: a symlink anywhere at or below it fails the install; an existing file is unlinked and recreated with `O_EXCL`, never written into (ADR-0015) |
+| B4 | permission escalation through modes | files extract 0755 or 0644 only (no setuid, nothing group/world-writable); directories 0755 (ADR-0014, ADR-0015) |
+| audit | silent substitution / reordering | append-only hash-chained transparency log; `verify_chain` detects any mutation, reorder or truncation of the front; hash v2 makes each entry's preimage unambiguous (ADR-0015) |
 | resolve | dependency confusion | single explicit dependency graph; `check_missing` surfaces gaps, no cross-registry version race |
 
 ## Enforcement points (in code)
 
-- `pipeline_install` — the single choke point: extract manifest → **gate 1**
-  (signature) → **gate 2** (digest) → manifest validation → record. Any failure
-  installs nothing. (`src/pipeline.cyr`, ADR-0009.)
+- `pipeline_install` — the single choke point, in order (`src/pipeline.cyr`, ADR-0009, ADR-0012,
+  ADR-0014, ADR-0015):
+  1. size cap;
+  2. one inflate, with the whole archive validated;
+  3. manifest;
+  4. **gate 1** (signature);
+  5. **gate 2** (digest);
+  6. manifest validation and the quota, on both sizes;
+  7. confined extraction;
+  8. record and save.
+
+  Any failure installs nothing. A fresh install's partial directory is removed, but a symlink
+  found in its place is left alone.
 - `trust_verify` / `registry_verify_package` — signature gate; `trust_hash_data`
   — digest. (`src/trust.cyr`, `src/local_registry.cyr`.)
-- `_tar_entry_safe` — archive entry safety. (`src/flutter_agpkg.cyr`.)
+- `_tar_cur_next` / `_tar_entry_safe` — archive validation and entry safety;
+  `_agpkg_extract` / `_agpkg_put` — confined writes. (`src/flutter_agpkg.cyr`.)
 - `manifest_validate` — name/version/publisher rules. (`src/manifest.cyr`.)
 - `tlog_verify_chain` — auditability. (`src/transparency.cyr`.)
 
 ## Known gaps / future work
 
-- **On-disk extraction** (deferred, ADR-0005): when bundles are unpacked to disk,
-  apply `_tar_entry_safe` per write **and** verify each resolved path stays
-  within the destination (defeats the CVE-2025-45582 two-step symlink case).
-- **Live transport** (deferred, ADR-0006): the HTTPS client is not yet wired; it
-  must use stdlib `tls` (no OpenSSL), validate the server certificate, and feed
-  the bounded decompressor + verified-install path unchanged.
-- **Keyring provenance**: the process for distributing/rotating trusted publisher
-  keys is operational and out of mela's code; document it for consumers (ark)
-  before v1.0.
+- **Key continuity on upgrade.** Any trusted key may install or upgrade any package name.
+  `pipeline_install` checks the new bundle against its own `key_id`, not against the installed
+  version's. A trusted publisher can therefore replace another publisher's package. Until mela
+  enforces continuity (a behavior change, so an ADR), consumers should pin it themselves:
+  [`../guides/keyring-provenance.md`](../guides/keyring-provenance.md).
+- **The transparency log is tamper-evident, not equivocation-proof.** It is a local hash chain.
+  There are no signed tree heads, no consistency proofs and no witnesses, so a registry could
+  show different clients different, internally consistent logs. A log with entries dropped from
+  its end also still verifies. Detecting either needs log signing and gossip; it is not designed
+  yet.
+- **Gate 2 is only as independent as its digest.**
+  - `expected_hash` = `""` skips the comparison (the digest is still recorded).
+  - A digest supplied by the same server as the bundle protects transport integrity, not
+    authenticity; authenticity is gate 1's job.
+- **The archive is parsed before the signature is checked.** The publisher's `key_id` is read from
+  `manifest.json` inside the bundle, so the gunzip and the tar walk run on unauthenticated bytes.
+  The controls are a strict, fuzzed parser and the 16 MiB / 100 MiB bounds. A detached,
+  signed manifest would remove the exposure.
+- **Large bundles hold the whole tar in memory.** That is bounded at 16 MiB today. Streaming, and
+  bundles over 16 MiB, wait on sankoch (filed upstream; the roadmap tracks it).
+- **agnos confinement is path-based.** agnos has no `openat` family, so its build checks each
+  component and then opens it, which leaves a window for a concurrent swap. agnos runtime
+  correctness is unvalidated in general (roadmap: targets beyond x86_64 Linux).
+- **The keyring is the operator's.** mela does not check that a key file's `key_id` derives from
+  its public key, and validity windows trust the caller's `now`. The provenance guide covers both:
+  [`../guides/keyring-provenance.md`](../guides/keyring-provenance.md).
+- **`ed25519_verify` costs about 5 ms.** That is fine per install, but a DoS factor for any bulk,
+  server-side verify. It is a `sigil` optimisation.

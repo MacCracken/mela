@@ -27,6 +27,9 @@ cyrius test                              # run tests/*.tcyr
 SHA-256 digest) before recording into the registry. See the `pipeline` test group for a worked
 example and [`../api/`](../api/) for signatures.
 
+Before installing on a real device, read [`keyring-provenance.md`](keyring-provenance.md): the
+keyring decides what installs, and mela leaves its contents to the operator.
+
 ## Extending mela
 
 1. Add or edit a `src/*.cyr` module and `include` it from `src/main.cyr` (after its deps).

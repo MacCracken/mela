@@ -59,6 +59,15 @@ fn pipeline_publish(tlog, bundle, sk, sig_out, now): i64 {
     return tlog_append(tlog, pkg, ver, kid, content_hash, sig_hash, now);
 }
 
+# Remove a fresh install's partly written directory: only a real directory,
+# which mela created. A symlink found there was not, and is left as it is for
+# whoever planted it to be found (ADR-0015).
+fn _pipeline_undo_dir(dir: Str): i64 {
+    if (is_symlink(dir) == 1) { return 0; }
+    if (is_dir(dir) == 1) { _rmtree(dir); }
+    return 0;
+}
+
 # install — verify a downloaded bundle and record it, enforcing BOTH gates.
 # Returns the install result, or 0 on any of: a bundle over
 # AGPKG_MAX_PACKAGE_SIZE, malformed bundle, unknown/invalid publisher key, bad
@@ -101,14 +110,14 @@ fn pipeline_install(reg, keyring, bundle, sig, sig_len, expected_hash: Str, now)
     var dir = path_join(registry_packages_dir(reg), man_name(manifest));
     if (_registry_on_disk(reg) == 1) {
         if (_agpkg_extract(arc, dir) < 0) {
-            if (fresh == 1) { if (is_dir(dir) == 1) { _rmtree(dir); } }
+            if (fresh == 1) { _pipeline_undo_dir(dir); }
             return 0;
         }
     }
     var res = registry_install(reg, manifest, package_hash, extracted, now);
     if (res == 0) {
         if (_registry_on_disk(reg) == 1) {
-            if (fresh == 1) { if (is_dir(dir) == 1) { _rmtree(dir); } }
+            if (fresh == 1) { _pipeline_undo_dir(dir); }
         }
     }
     return res;

@@ -74,13 +74,13 @@ Rust behavior so it survives the deletion of `rust-old/`.
 | No `MAX_PACKAGE_SIZE` (100 MB) check at install | **matched** v1.3.0: checked first | ADR-0014 §1 |
 | Quota checked on the bundle size only | **kept** (stricter): the extracted size too, both before any write since v1.3.0 | ADR-0014 §2 |
 | Files extracted 0644 (Rust kept `mode & 0o777`) | **decided** v1.3.0: 0755 if the owner-execute bit is set, else 0644 | ADR-0014 |
-| No resolved-path containment check | **kept**: link/dir/`..`/absolute entries never written; destination symlinks v1.3.0 | ADR-0013 §5 |
+| No resolved-path containment check | **kept**, and since v1.4.0 stronger: extraction never follows a symlink at or below the destination | ADR-0013 §5, ADR-0015 |
 | Archive metadata normalized; compact JSON | **kept** (reproducible bundles) | ADR-0013 §6 |
 | Long names truncated; unreadable files skipped | **matched**: pack fails; names to 256 bytes pack, and long names read, since v1.3.0 | ADR-0012, ADR-0014 |
 | Keyring per-element validation | **matched**: whole file | ADR-0011 |
 | A file named `.json` loaded as a key file | **matched**: skipped | ADR-0013 §7 |
 | 1 MiB key-file / ratings-file read cap | **kept**, failing closed | ADR-0013 §1, §7 |
-| Transparency hash preimage ambiguity | recorded; versioned hash in v1.3.0 | ADR-0013 §8 |
+| Transparency hash preimage ambiguity | **fixed** v1.4.0: hash v2 for new entries; v1 (the Rust-shaped preimage) still verifies | ADR-0013 §8, ADR-0015 |
 | `RatingFilter` / `DisplayBackend` codecs | not ported (no consumer) | Coverage, below |
 
 ## Where Cyrius is stricter than Rust (keep)

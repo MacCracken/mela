@@ -1,9 +1,9 @@
 # mela — Roadmap
 
-> **Last Updated**: 2026-10-28 (v1.3.0) · Live status: [`state.md`](state.md) · History:
+> **Last Updated**: 2026-10-28 (v1.4.0) · Live status: [`state.md`](state.md) · History:
 > [`../../CHANGELOG.md`](../../CHANGELOG.md) · Parity record: [`rust-parity.md`](rust-parity.md)
 >
-> Open work only. Shipped milestones (v0.1.0 port scaffold → v1.0.0 release → v1.3.0) are
+> Open work only. Shipped milestones (v0.1.0 port scaffold → v1.0.0 release → v1.4.0) are
 > recorded in the CHANGELOG, not here. **v1.1.x** — the 2026-10-14 parity audit's fixes, the
 > coverage catch-up, the divergence ADRs and the retirement of `rust-old/` — is complete
 > (CHANGELOG 1.1.1–1.1.6). **v1.x** maps the backlog. Each item is self-contained, so an agent
@@ -19,7 +19,7 @@
   listed function accepts or returns needs an ADR, including a bug fix that starts rejecting
   input that used to be accepted.
 - **The parity record is the oracle** since `rust-old/` was retired (v1.1.6): `tests/mela.tcyr`,
-  the GNU tar and transport checks, [`rust-parity.md`](rust-parity.md) and ADR-0011–0014. A
+  the GNU tar and transport checks, [`rust-parity.md`](rust-parity.md) and ADR-0011–0015. A
   behavior change needs an ADR; a parity assertion is never weakened without one.
 - **Toolchain bumps** follow cyrius's *Moving a pin* procedure (`ecosystem-migration.md`):
   `cyrius lib sync --full --relock`, `cyrius deps`, `cyrius distlib`, then
@@ -54,18 +54,21 @@ asks are filed in sankoch's `docs/development/issues/2026-10-28-gzip-has-no-outp
   it.
 - **A streaming packer**, so packing a large engine does not hold every input file in memory.
 
-### v1.4.0 — Hardening residuals
+### Proposed — trust follow-ups from v1.4.0 (each needs a maintainer decision and an ADR)
 
-- **Extraction confinement:** create every output with `O_NOFOLLOW`, or check the resolved path
-  stays under the destination. Pre-existing symlinks in an install dir must not redirect writes.
-  This closes the audit's finding-A follow-up properly. The `fchmod` added at v1.3.0 acts on the
-  opened file, so `O_NOFOLLOW` covers it too.
-- **Refresh `threat-model.md` and the audit residuals.** Their "Known gaps" still list on-disk
-  extraction and live transport as deferred; both shipped in v0.9.2. Restate what is open.
-- **Keyring provenance:** document how trusted publisher keys are distributed and rotated, with
-  key-pinning guidance for consumers (ark). Open since v0.9.0, meant for before v1.0.
-- **Transparency hash v2:** an unambiguous preimage with length prefixes or separators. It must
-  be versioned, so v1 logs still verify on import.
+v1.4.0 shipped the hardening residuals (ADR-0015, the refreshed threat model, the keyring
+provenance guide). Writing them down surfaced these, now in the threat model's *Known gaps*:
+
+- **Key continuity on upgrade.** Any trusted key can upgrade any installed package today. Refuse
+  an upgrade whose publisher `key_id` differs from the installed one, unless the operator allows
+  the change (an explicit rotation map, say). A `keyring-provenance` test pins today's behavior,
+  and the guide gives consumers the check meanwhile.
+- **Check a key file's `key_id` against its public key on load.** A mismatched file lets one
+  publisher's key sign under another's `key_id`. This is cheap, but it makes `keyring_load_dir`
+  stricter.
+- **Log equivocation.** Signed tree heads and a consistency proof between two views of the log,
+  so a registry cannot show clients different logs, and dropping entries from the end is
+  detectable. A design item, not a patch.
 
 ### v1.5.0 — API and build hygiene
 

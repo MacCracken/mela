@@ -10,6 +10,12 @@
 # (ADR-0003). The Rust entry_hash preimage used timestamp.to_rfc3339(); the port
 # uses the epoch's decimal form. The chain is self-consistent (mela computes and
 # verifies both sides); there is no cross-language entry-hash vector to match.
+#
+# Two hash versions (ADR-0015). v1 is the Rust-shaped concatenation above, which
+# is ambiguous: a decimal timestamp runs into the package name, and the package
+# into the version (ADR-0013 §8). v2 tags the preimage and length-prefixes every
+# field. New entries are v2; v1 entries still verify, so logs written before
+# v1.4.0 import unchanged.
 
 # ---------------------------------------------------------------------------
 # LogEntry
@@ -25,11 +31,17 @@
 #   48 signature_hash    (Str; SHA-256 hex of the signature)
 #   56 previous_hash     (Str; "" for entry 0)
 #   64 entry_hash        (Str; SHA-256 hex over fields 0..56)
+#   72 hash_version      (i64; LOG_HASH_V1 or LOG_HASH_V2)
 
+var LOG_HASH_V1 = 1;
+var LOG_HASH_V2 = 2;
+var LOG_HASH_V2_TAG = "mela.transparency.entry.v2";
+
+# A new entry hashes as v2; tlog_from_json sets v1 for entries that say so.
 fn log_entry_new(sequence, timestamp, package: Str, version: Str, key_id: Str,
   content_hash: Str, signature_hash: Str, previous_hash: Str,
   entry_hash: Str): i64 {
-    var e = alloc(72);
+    var e = alloc(80);
     store64(e,      sequence);
     store64(e + 8,  timestamp);
     store64(e + 16, package);
@@ -39,6 +51,7 @@ fn log_entry_new(sequence, timestamp, package: Str, version: Str, key_id: Str,
     store64(e + 48, signature_hash);
     store64(e + 56, previous_hash);
     store64(e + 64, entry_hash);
+    store64(e + 72, LOG_HASH_V2);
     return e;
 }
 
@@ -52,6 +65,21 @@ fn log_signature_hash(e): Str    { return load64(e + 48); }
 fn log_previous_hash(e): Str     { return load64(e + 56); }
 fn log_entry_hash(e): Str        { return load64(e + 64); }
 fn log_set_entry_hash(e, h: Str) { store64(e + 64, h); return 0; }
+fn log_hash_version(e): i64      { return load64(e + 72); }
+
+# 1 if `v` is a hash version this build computes.
+fn _log_version_known(v): i64 {
+    if (v == LOG_HASH_V1) { return 1; }
+    if (v == LOG_HASH_V2) { return 1; }
+    return 0;
+}
+
+# Set the hash version: 0, or -1 (unchanged) for one this build does not know.
+fn log_set_hash_version(e, v): i64 {
+    if (_log_version_known(v) == 0) { return 0 - 1; }
+    store64(e + 72, v);
+    return 0;
+}
 
 # Write i64 `n` as 8 big-endian bytes to `out` (Rust: sequence.to_be_bytes()).
 fn _be64(n, out): i64 {
@@ -69,11 +97,12 @@ fn _append_str(buf, off, s: Str): i64 {
     return off + str_len(s);
 }
 
-# compute_hash() — SHA-256 hex over sequence(BE8) || timestamp(decimal) ||
-# package || version || publisher_key_id || content_hash || signature_hash ||
+# Hash v1 — SHA-256 hex over sequence(BE8) || timestamp(decimal) || package ||
+# version || publisher_key_id || content_hash || signature_hash ||
 # previous_hash. Excludes entry_hash itself. Mirrors Rust `compute_hash` (with
-# the ADR-0004 timestamp representation).
-fn log_entry_compute_hash(e): Str {
+# the ADR-0004 timestamp representation). Ambiguous (ADR-0013 §8): kept so logs
+# written before v1.4.0 verify.
+fn _log_hash_v1(e): Str {
     var ts = str_from_int(log_timestamp(e));
     var pkg = log_package(e);
     var ver = log_version(e);
@@ -97,8 +126,54 @@ fn log_entry_compute_hash(e): Str {
     return trust_hash_data(buf, total);
 }
 
-# verify_self() — entry_hash matches the recomputed hash. Mirrors Rust.
+# Append `s` as an 8-byte big-endian length then its bytes; return the new offset.
+fn _append_lp(buf, off, s: Str): i64 {
+    _be64(str_len(s), buf + off);
+    return _append_str(buf, off + 8, s);
+}
+
+# Hash v2 (ADR-0015) — SHA-256 hex over
+#   len(tag) BE8 || tag || sequence BE8 || timestamp BE8 (two's complement) ||
+#   then len BE8 || bytes for package, version, publisher_key_id, content_hash,
+#   signature_hash and previous_hash.
+# Every field has a fixed width or a length, so two different entries cannot
+# share a preimage; the tag keeps a v2 preimage from reading as a v1 one.
+fn _log_hash_v2(e): Str {
+    var tag = str_from(LOG_HASH_V2_TAG);
+    var pkg = log_package(e);
+    var ver = log_version(e);
+    var kid = log_key_id(e);
+    var ch  = log_content_hash(e);
+    var sh  = log_signature_hash(e);
+    var ph  = log_previous_hash(e);
+
+    var total = 8 + str_len(tag) + 8 + 8 + 48 + str_len(pkg) + str_len(ver) + str_len(kid)
+    + str_len(ch) + str_len(sh) + str_len(ph);
+    var buf = alloc(total);
+    var off = _append_lp(buf, 0, tag);
+    _be64(log_seq(e), buf + off);
+    _be64(log_timestamp(e), buf + off + 8);
+    off = off + 16;
+    off = _append_lp(buf, off, pkg);
+    off = _append_lp(buf, off, ver);
+    off = _append_lp(buf, off, kid);
+    off = _append_lp(buf, off, ch);
+    off = _append_lp(buf, off, sh);
+    off = _append_lp(buf, off, ph);
+    return trust_hash_data(buf, total);
+}
+
+# compute_hash() — the entry's hash under its own hash version (v2 unless the
+# entry is v1). Excludes entry_hash itself.
+fn log_entry_compute_hash(e): Str {
+    if (log_hash_version(e) == LOG_HASH_V1) { return _log_hash_v1(e); }
+    return _log_hash_v2(e);
+}
+
+# verify_self() — entry_hash matches the recomputed hash, under a hash version
+# this build knows. Mirrors Rust.
 fn log_entry_verify_self(e): i64 {
+    if (_log_version_known(log_hash_version(e)) == 0) { return 0; }
     return str_eq(log_entry_hash(e), log_entry_compute_hash(e));
 }
 
@@ -109,8 +184,9 @@ fn log_entry_verify_self(e): i64 {
 fn tlog_new(): i64 { return vec_new(); }
 
 # append() — add an entry: sequence = current len, previous_hash = last entry's
-# entry_hash (or ""), entry_hash = compute_hash. Returns the new entry. Takes an
-# explicit `timestamp` (Rust used Utc::now()) — ADR-0004. Mirrors Rust `append`.
+# entry_hash (or ""), entry_hash = compute_hash under hash v2 (ADR-0015), also
+# after v1 entries. Returns the new entry. Takes an explicit `timestamp` (Rust
+# used Utc::now()) — ADR-0004. Mirrors Rust `append`.
 fn tlog_append(log, package: Str, version: Str, key_id: Str,
   content_hash: Str, signature_hash: Str, timestamp): i64 {
     var seq = vec_len(log);
@@ -124,8 +200,9 @@ fn tlog_append(log, package: Str, version: Str, key_id: Str,
 }
 
 # verify_chain() — 1 if every entry self-verifies, links to its predecessor, and
-# carries the right sequence; 0 otherwise. Mirrors Rust `verify_chain` (Ok->1,
-# Err->0).
+# carries the right sequence, and no entry's hash version is older than the one
+# before it (a log moves to v2 once, ADR-0015); 0 otherwise. Mirrors Rust
+# `verify_chain` (Ok->1, Err->0).
 fn tlog_verify_chain(log): i64 {
     var n = vec_len(log);
     var i = 0;
@@ -140,6 +217,7 @@ fn tlog_verify_chain(log): i64 {
                 } else {
                     var prev = vec_get(log, i - 1);
                     if (str_eq(log_previous_hash(e), log_entry_hash(prev)) == 0) { ok = 0; }
+                    if (log_hash_version(e) < log_hash_version(prev)) { ok = 0; }
                 }
                 if (log_seq(e) != i) { ok = 0; }
             }
@@ -220,6 +298,10 @@ fn _log_entry_to_jv(e): i64 {
     json_v_obj_set(o, str_from("signature_hash"),   json_v_str_new(log_signature_hash(e)));
     json_v_obj_set(o, str_from("previous_hash"),    json_v_str_new(log_previous_hash(e)));
     json_v_obj_set(o, str_from("entry_hash"),       json_v_str_new(log_entry_hash(e)));
+    # v1 entries keep their pre-v1.4.0 shape (no field), so they re-export byte for byte
+    if (log_hash_version(e) != LOG_HASH_V1) {
+        json_v_obj_set(o, str_from("hash_version"), json_v_int_new(log_hash_version(e)));
+    }
     return o;
 }
 
@@ -235,8 +317,21 @@ fn tlog_to_json(log): Str {
     return json_v_build(arr);
 }
 
+# The hash version an entry object declares: 1 if it has no `hash_version`
+# (every log before v1.4.0), the value if it is an integer this build knows, or
+# -1 (ADR-0015).
+fn _log_jversion(o): i64 {
+    var v = bayan_json_v_obj_get_by_cstr(o, "hash_version");
+    if (v == 0) { return LOG_HASH_V1; }
+    if (json_v_is_int(v) == 0) { return 0 - 1; }
+    var n = json_v_int(v);
+    if (_log_version_known(n) == 0) { return 0 - 1; }
+    return n;
+}
+
 # 1 if `o` carries every LogEntry field with its type (Rust's serde required all
-# nine; ADR-0013). The timestamp is an i64 epoch (ADR-0004).
+# nine; ADR-0013), and a known hash version if it names one. The timestamp is an
+# i64 epoch (ADR-0004).
 fn _log_entry_complete(o): i64 {
     if (json_v_is_obj(o) == 0) { return 0; }
     if (_jreq_uint(o, "sequence") == 0) { return 0; }
@@ -248,13 +343,14 @@ fn _log_entry_complete(o): i64 {
     if (_jreq_str(o, "signature_hash") == 0) { return 0; }
     if (_jreq_str(o, "previous_hash") == 0) { return 0; }
     if (_jreq_str(o, "entry_hash") == 0) { return 0; }
+    if (_log_jversion(o) < 0) { return 0; }
     return 1;
 }
 
 # from_json() — rebuild a log from JSON, then verify the chain. Returns 0 on a
 # JSON parse error, a non-array root, OR a chain that fails verification (a
 # tampered entry, like the Rust `from_json` which calls verify_chain). Mirrors
-# Rust `from_json`.
+# Rust `from_json`. An entry without `hash_version` is v1 (ADR-0015).
 fn tlog_from_json(json: Str): i64 {
     var root = json_v_parse_buf(str_data(json), str_len(json));   # explicit buf+len (see trust.cyr)
     if (root == 0) { return 0; }
@@ -275,6 +371,7 @@ fn tlog_from_json(json: Str): i64 {
           _log_jstr(o, "signature_hash"),
           _log_jstr(o, "previous_hash"),
           _log_jstr(o, "entry_hash"));
+        log_set_hash_version(e, _log_jversion(o));
         vec_push(log, e);
         i = i + 1;
     }

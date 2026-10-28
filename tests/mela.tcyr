@@ -957,6 +957,114 @@ fn test_transparency_json() {
     return 0;
 }
 
+# v1.4.0 (ADR-0015): transparency hash v2. A log written by mela 1.3.0 (hash v1),
+# captured before the change; its three hashes were recomputed with Python's
+# hashlib from the v1 rule.
+var T_V1_LOG = "[{\"sequence\":0,\"timestamp\":1700000000,\"package\":\"acme/scanner\",\"version\":\"1.0.0\",\"publisher_key_id\":\"k1\",\"content_hash\":\"h1\",\"signature_hash\":\"s1\",\"previous_hash\":\"\",\"entry_hash\":\"5e474e9d5d542f481e35b39fa9f3cf80d28f1e4426498956e4621c2ad281f395\"},{\"sequence\":1,\"timestamp\":1700000100,\"package\":\"acme/scanner\",\"version\":\"1.1.0\",\"publisher_key_id\":\"k1\",\"content_hash\":\"h2\",\"signature_hash\":\"s2\",\"previous_hash\":\"5e474e9d5d542f481e35b39fa9f3cf80d28f1e4426498956e4621c2ad281f395\",\"entry_hash\":\"40398dd82270b88c781173ee55fcf7f72c48c0aba121f68fad9f6843f6293ca6\"},{\"sequence\":2,\"timestamp\":1000,\"package\":\"1/x\",\"version\":\"2.0.0\",\"publisher_key_id\":\"k2\",\"content_hash\":\"h3\",\"signature_hash\":\"s3\",\"previous_hash\":\"40398dd82270b88c781173ee55fcf7f72c48c0aba121f68fad9f6843f6293ca6\",\"entry_hash\":\"0c560dc3b6d3af81a7337fb4bc5bba5d1090b26db078c6353d694535a21c7af1\"}]";
+
+fn _t_entry(seq, ts, pkg, ver, prev, ver_hash) {
+    var e = log_entry_new(seq, ts, str_from(pkg), str_from(ver), str_from("k"), str_from("c"), str_from("s"),
+      str_from(prev), str_from(""));
+    log_set_hash_version(e, ver_hash);
+    return e;
+}
+
+fn test_transparency_v2() {
+    test_group("transparency-v2");
+
+    # known answers, computed independently (Python hashlib over the v2 rule)
+    var k1 = log_entry_new(0, 1700000000, str_from("acme/scanner"), str_from("1.0.0"), str_from("k1"),
+      str_from("h1"), str_from("s1"), str_from(""), str_from(""));
+    assert_eq(log_hash_version(k1), LOG_HASH_V2, "new entries are v2");
+    assert_eq(str_eq_cstr(log_entry_compute_hash(k1),
+      "e17990f5ad8b1b51144970aed6ba2bdeaddb9bf2e08f4b867d9cc8b59dce8f02"), 1, "v2 KAT 1");
+    var k2 = log_entry_new(7, 0 - 1, str_from("a/b"), str_from("2.0.0"), str_from("k"), str_from("c"), str_from("s"),
+      str_from("5e474e9d5d542f481e35b39fa9f3cf80d28f1e4426498956e4621c2ad281f395"), str_from(""));
+    assert_eq(str_eq_cstr(log_entry_compute_hash(k2),
+      "16eaf7e21df998ec56d8a92362e20da42a7f1bc2d3ae080f633060d753a2b272"), 1, "v2 KAT 2 (negative timestamp)");
+
+    # the v1 ambiguities, and v2 telling the entries apart
+    var a1 = _t_entry(0, 1000, "1/x", "1", "", LOG_HASH_V1);
+    var b1 = _t_entry(0, 10001, "/x", "1", "", LOG_HASH_V1);
+    assert_eq(str_eq(log_entry_compute_hash(a1), log_entry_compute_hash(b1)), 1, "v1: timestamp/package collide");
+    var a2 = _t_entry(0, 1000, "1/x", "1", "", LOG_HASH_V2);
+    var b2 = _t_entry(0, 10001, "/x", "1", "", LOG_HASH_V2);
+    assert_eq(str_eq(log_entry_compute_hash(a2), log_entry_compute_hash(b2)), 0, "v2: timestamp/package differ");
+    var c1 = _t_entry(0, 5, "a/b", "11.0.0", "", LOG_HASH_V1);
+    var d1 = _t_entry(0, 5, "a/b1", "1.0.0", "", LOG_HASH_V1);
+    assert_eq(str_eq(log_entry_compute_hash(c1), log_entry_compute_hash(d1)), 1, "v1: package/version collide");
+    var c2 = _t_entry(0, 5, "a/b", "11.0.0", "", LOG_HASH_V2);
+    var d2 = _t_entry(0, 5, "a/b1", "1.0.0", "", LOG_HASH_V2);
+    assert_eq(str_eq(log_entry_compute_hash(c2), log_entry_compute_hash(d2)), 0, "v2: package/version differ");
+
+    # a v1 log written by 1.3.0 imports, verifies and re-exports byte for byte
+    var v1 = tlog_from_json(str_from(T_V1_LOG));
+    assert_neq(v1, 0, "v1 log: imports");
+    assert_eq(tlog_len(v1), 3, "v1 log: three entries");
+    assert_eq(log_hash_version(vec_get(v1, 0)), LOG_HASH_V1, "v1 log: entries are v1");
+    assert_eq(tlog_verify_chain(v1), 1, "v1 log: chain verifies");
+    assert_eq(str_eq_cstr(tlog_to_json(v1), T_V1_LOG), 1, "v1 log: re-exports byte for byte");
+
+    # appending to it continues the chain in v2
+    var app = tlog_append(v1, str_from("acme/scanner"), str_from("1.2.0"), str_from("k1"), str_from("h4"),
+      str_from("s4"), 1700000200);
+    assert_eq(log_hash_version(app), LOG_HASH_V2, "append after v1: v2");
+    assert_eq(str_eq(log_previous_hash(app), log_entry_hash(vec_get(v1, 2))), 1, "append after v1: linked");
+    assert_eq(tlog_verify_chain(v1), 1, "mixed log: verifies");
+    var mixed = tlog_to_json(v1);
+    assert_eq(str_contains(mixed, str_from("\"hash_version\":2")), 1, "mixed log: v2 entry says so");
+    var back = tlog_from_json(mixed);
+    assert_neq(back, 0, "mixed log: round-trips");
+    if (back != 0) {
+        assert_eq(log_hash_version(vec_get(back, 3)), LOG_HASH_V2, "mixed log: v2 survives import");
+        assert_eq(log_hash_version(vec_get(back, 2)), LOG_HASH_V1, "mixed log: v1 survives import");
+    }
+
+    # relabelling an entry's version breaks its hash
+    var rl = tlog_new();
+    tlog_add(rl, "a/b", "1.0.0", "k1", "h1", "s1");
+    store64(vec_get(rl, 0) + 72, LOG_HASH_V1);
+    assert_eq(tlog_verify_chain(rl), 0, "v2 relabelled v1: detected");
+
+    # versions never go back: a self-consistent v1 entry after a v2 one is refused
+    var dn = tlog_new();
+    tlog_add(dn, "a/b", "1.0.0", "k1", "h1", "s1");
+    var e1 = _t_entry(1, 1000, "a/b", "1.1.0", "", LOG_HASH_V1);
+    store64(e1 + 56, log_entry_hash(vec_get(dn, 0)));
+    log_set_entry_hash(e1, log_entry_compute_hash(e1));
+    vec_push(dn, e1);
+    assert_eq(log_entry_verify_self(e1), 1, "downgrade: the v1 entry is self-consistent");
+    assert_eq(tlog_verify_chain(dn), 0, "downgrade: v1 after v2 refused");
+    assert_eq(tlog_from_json(tlog_to_json(dn)), 0, "downgrade: refused on import too");
+
+    # the version field: unknown values and types are refused
+    assert_eq(log_set_hash_version(k1, 3), 0 - 1, "set version 3: refused");
+    assert_eq(log_hash_version(k1), LOG_HASH_V2, "set version 3: unchanged");
+    store64(k1 + 72, 9);
+    log_set_entry_hash(k1, log_entry_compute_hash(k1));
+    assert_eq(log_entry_verify_self(k1), 0, "unknown version: never self-verifies");
+    var one = tlog_new();
+    tlog_add(one, "a/b", "1.0.0", "k1", "h1", "s1");
+    var j = tlog_to_json(one);
+    assert_neq(tlog_from_json(j), 0, "json: v2 entry imports");
+    var j3 = str_clone(j);
+    var vpos = str_index_of_cstr(j3, "\"hash_version\":2");
+    assert_neq(vpos, 0 - 1, "json: version field present");
+    if (vpos >= 0) {
+        store8(str_data(j3) + vpos + 15, 51);    # 2 -> 3
+        assert_eq(tlog_from_json(j3), 0, "json: hash_version 3 refused");
+        store8(str_data(j3) + vpos + 15, 49);    # -> 1: now the hash does not match
+        assert_eq(tlog_from_json(j3), 0, "json: v2 entry claiming v1 refused");
+        var js = str_clone(j);
+        var jsb = str_cat(str_cat(str_sub(js, 0, vpos), str_from("\"hash_version\":\"2\"")),
+          str_sub(js, vpos + 16, str_len(js) - vpos - 16));
+        assert_eq(tlog_from_json(jsb), 0, "json: string hash_version refused");
+    }
+    var jv1 = str_cat(str_sub(str_from(T_V1_LOG), 0, str_len(str_from(T_V1_LOG)) - 2), str_from(",\"hash_version\":1}]"));
+    assert_neq(tlog_from_json(jv1), 0, "json: an explicit hash_version 1 is accepted");
+    return 0;
+}
+
 # --- registry test helpers ---
 
 # Remove any stale index so on-disk reopen tests start clean.
@@ -1925,8 +2033,12 @@ fn test_strict_decode() {
     assert_neq(tlog_from_json(tlog_to_json(tl)), 0, "tlog: complete entry -> ok");
     var teh = log_entry_hash(vec_get(tl, 0));
     var tstr = str_cat(str_cat(_sd("[{\"sequence\":0,\"timestamp\":\"1970-01-01T00:00:00Z\",\"package\":\"a/b\",\"version\":\"1.0.0\",\"publisher_key_id\":\"k1\",\"content_hash\":\"h1\",\"signature_hash\":\"s1\",\"previous_hash\":\"\",\"entry_hash\":\""),
-        teh), _sd("\"}]"));
+        teh), _sd("\",\"hash_version\":2}]"));
     assert_eq(tlog_from_json(tstr), 0, "tlog: RFC 3339 timestamp (Rust shape) -> 0");
+    # v1.4.0: the same text with an integer 0 imports, so only the type check refused it
+    var tint = str_cat(str_cat(_sd("[{\"sequence\":0,\"timestamp\":0,\"package\":\"a/b\",\"version\":\"1.0.0\",\"publisher_key_id\":\"k1\",\"content_hash\":\"h1\",\"signature_hash\":\"s1\",\"previous_hash\":\"\",\"entry_hash\":\""),
+        teh), _sd("\",\"hash_version\":2}]"));
+    assert_neq(tlog_from_json(tint), 0, "tlog: the control (integer timestamp) imports");
 
     # registry index records
     var RD = "/tmp/mela-strict-reg";
@@ -2679,6 +2791,214 @@ fn test_install_limits() {
     return 0;
 }
 
+# A fresh empty directory at cstring `p` (removed first if present).
+fn _t_fresh_dir(p) {
+    if (is_symlink(str_from(p)) == 1) { xunlink(p); }
+    if (is_dir(str_from(p)) == 1) { _rmtree(str_from(p)); }
+    _rc_mkdir_p(str_from(p));
+    return 0;
+}
+
+# The bytes of the file at cstring `p` as a Str ("" if unreadable).
+fn _t_slurp(p) {
+    var b = alloc(4096);
+    var n = file_read_all(p, b, 4096);
+    if (n < 0) { return str_from(""); }
+    return str_new(b, n);
+}
+
+# v1.4.0 (ADR-0015): extraction never writes through a symlink at or below the
+# destination, and never into an existing inode (a hard link).
+fn test_confinement() {
+    test_group("confinement");
+    var OUT = "/tmp/mela-conf-outside";
+    _t_fresh_dir(OUT);
+    file_write_all("/tmp/mela-conf-outside/target.txt", "original", 8);
+    var pay = str_from("from the bundle");
+
+    # a symlinked directory below the destination
+    var D1 = "/tmp/mela-conf-d1";
+    _t_fresh_dir(D1);
+    xsymlink(OUT, "/tmp/mela-conf-d1/bin");
+    var g1 = _gzip_str(_tar_build(_t_es1(str_from("bin/target.txt"), pay)));
+    assert_eq(agpkg_extract_to_dir(str_data(g1), str_len(g1), str_from(D1)), 0 - 1,
+      "symlinked dir below dest: refused");
+    assert_eq(str_eq_cstr(_t_slurp("/tmp/mela-conf-outside/target.txt"), "original"), 1,
+      "symlinked dir below dest: nothing written outside");
+    var g1b = _gzip_str(_tar_build(_t_es1(str_from("bin/new.txt"), pay)));
+    agpkg_extract_to_dir(str_data(g1b), str_len(g1b), str_from(D1));
+    assert_eq(file_exists("/tmp/mela-conf-outside/new.txt"), 0, "symlinked dir below dest: no new file outside");
+
+    # a symlink at the file's own path
+    var D2 = "/tmp/mela-conf-d2";
+    _t_fresh_dir(D2);
+    xsymlink("/tmp/mela-conf-outside/target.txt", "/tmp/mela-conf-d2/manifest.json");
+    var g2 = _gzip_str(_tar_build(_t_es1(str_from("manifest.json"), pay)));
+    assert_eq(agpkg_extract_to_dir(str_data(g2), str_len(g2), str_from(D2)), 0 - 1, "symlink at the file: refused");
+    assert_eq(str_eq_cstr(_t_slurp("/tmp/mela-conf-outside/target.txt"), "original"), 1,
+      "symlink at the file: target untouched");
+    assert_eq(is_symlink(str_from("/tmp/mela-conf-d2/manifest.json")), 1, "symlink at the file: link left as found");
+
+    # a symlink deeper down, after real directories
+    var D3 = "/tmp/mela-conf-d3";
+    _t_fresh_dir(D3);
+    _rc_mkdir_p(str_from("/tmp/mela-conf-d3/a/b"));
+    xsymlink(OUT, "/tmp/mela-conf-d3/a/b/c");
+    var g3 = _gzip_str(_tar_build(_t_es1(str_from("a/b/c/target.txt"), pay)));
+    assert_eq(agpkg_extract_to_dir(str_data(g3), str_len(g3), str_from(D3)), 0 - 1, "deep symlink: refused");
+    assert_eq(str_eq_cstr(_t_slurp("/tmp/mela-conf-outside/target.txt"), "original"), 1, "deep symlink: target untouched");
+
+    # the destination itself a symlink
+    var D4 = "/tmp/mela-conf-d4";
+    if (is_dir(str_from(D4)) == 1) { _rmtree(str_from(D4)); }
+    xunlink(D4);
+    xsymlink(OUT, D4);
+    var g4 = _gzip_str(_tar_build(_t_es1(str_from("target.txt"), pay)));
+    assert_eq(agpkg_extract_to_dir(str_data(g4), str_len(g4), str_from(D4)), 0 - 1, "symlinked dest: refused");
+    assert_eq(str_eq_cstr(_t_slurp("/tmp/mela-conf-outside/target.txt"), "original"), 1, "symlinked dest: target untouched");
+    xunlink(D4);
+
+    # a hard link: the old name is replaced, the other link keeps its bytes
+    var D5 = "/tmp/mela-conf-d5";
+    _t_fresh_dir(D5);
+    file_write_all("/tmp/mela-conf-outside/hard.txt", "outside!", 8);
+    var linked = xlink("/tmp/mela-conf-outside/hard.txt", "/tmp/mela-conf-d5/data.bin");
+    assert_eq(linked, 0, "hard link: fixture created");
+    var g5 = _gzip_str(_tar_build(_t_es1(str_from("data.bin"), pay)));
+    assert_eq(agpkg_extract_to_dir(str_data(g5), str_len(g5), str_from(D5)), 1, "hard link: extraction ok");
+    assert_eq(str_eq(_t_slurp("/tmp/mela-conf-d5/data.bin"), pay), 1, "hard link: new content at the name");
+    assert_eq(str_eq_cstr(_t_slurp("/tmp/mela-conf-outside/hard.txt"), "outside!"), 1,
+      "hard link: the other name keeps its bytes");
+
+    # a directory where a file goes, and a file where a directory goes
+    var D6 = "/tmp/mela-conf-d6";
+    _t_fresh_dir(D6);
+    _rc_mkdir_p(str_from("/tmp/mela-conf-d6/sub.txt"));
+    file_write_all("/tmp/mela-conf-d6/plain", "x", 1);
+    var g6 = _gzip_str(_tar_build(_t_es1(str_from("sub.txt"), pay)));
+    assert_eq(agpkg_extract_to_dir(str_data(g6), str_len(g6), str_from(D6)), 0 - 1, "dir at the file's path: refused");
+    var g7 = _gzip_str(_tar_build(_t_es1(str_from("plain/inner.txt"), pay)));
+    assert_eq(agpkg_extract_to_dir(str_data(g7), str_len(g7), str_from(D6)), 0 - 1, "file on the dir path: refused");
+
+    # ordinary nesting still works; directories are created without group/world write
+    var D8 = "/tmp/mela-conf-d8";
+    _t_fresh_dir(D8);
+    var es8 = _t_es1(str_from("x/y/z.txt"), pay);
+    _t_push(es8, str_from("./x/w.txt"), pay);
+    _t_push(es8, str_from("x//v.txt"), pay);
+    var g8 = _gzip_str(_tar_build(es8));
+    assert_eq(agpkg_extract_to_dir(str_data(g8), str_len(g8), str_from(D8)), 3, "nesting: three files");
+    assert_eq(str_eq(_t_slurp("/tmp/mela-conf-d8/x/y/z.txt"), pay), 1, "nesting: deep file written");
+    assert_eq(str_eq(_t_slurp("/tmp/mela-conf-d8/x/w.txt"), pay), 1, "nesting: './' component");
+    assert_eq(str_eq(_t_slurp("/tmp/mela-conf-d8/x/v.txt"), pay), 1, "nesting: empty component");
+    assert_eq(_t_mode("/tmp/mela-conf-d8/x/y") & 0x12, 0, "nesting: dir not group/world-writable");
+
+    # through the pipeline: a symlinked install dir, and a symlink planted inside one
+    var NOW = 1000;
+    var sk[64];
+    var pk[32];
+    var key_id = trust_keypair_from_seed(hex_decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", 64), &sk, &pk);
+    var keyring = mela_keyring_new();
+    mela_keyring_add_key(keyring, kv_new(key_id, NOW - 100, 0, 0, trust_hex_encode(&pk, 32)));
+    var publisher = publisher_new(str_from("P"), key_id, str_from(""));
+    var mj = mela_manifest_to_json(mela_manifest_new(mk_agent(str_from("conf-pkg"), str_from("d")), publisher,
+      CAT_UTILITY, str_from("1.0.0")));
+    var es = _t_es1(str_from("manifest.json"), mj);
+    _t_push(es, str_from("bin/target.txt"), pay);
+    var sig[64];
+    var bundle = _t_signed(es, &sk, &sig);
+
+    var PR = "/tmp/mela-conf-reg";
+    rclean(PR);
+    _rc_mkdir_p(str_from("/tmp/mela-conf-reg/packages"));
+    var ppk = "/tmp/mela-conf-reg/packages/conf-pkg";
+    if (is_dir(str_from(ppk)) == 1) { _rmtree(str_from(ppk)); }
+    xunlink(ppk);
+    xsymlink(OUT, ppk);
+    var preg = mela_registry_new(str_from(PR));
+    assert_eq(pipeline_install(preg, keyring, bundle, &sig, 64, str_from(""), NOW), 0,
+      "pipeline: symlinked install dir refused");
+    assert_eq(registry_is_empty(preg), 1, "pipeline: nothing recorded");
+    assert_eq(file_exists("/tmp/mela-conf-outside/manifest.json"), 0, "pipeline: nothing written outside");
+    assert_eq(is_symlink(str_from(ppk)), 1, "pipeline: the planted link is not removed");
+    xunlink(ppk);
+
+    assert_neq(pipeline_install(preg, keyring, bundle, &sig, 64, str_from(""), NOW), 0, "pipeline: v1 installs");
+    _rmtree(str_from("/tmp/mela-conf-reg/packages/conf-pkg/bin"));
+    xsymlink(OUT, "/tmp/mela-conf-reg/packages/conf-pkg/bin");   # what a running app could plant
+    var mj2 = mela_manifest_to_json(mela_manifest_new(mk_agent(str_from("conf-pkg"), str_from("d")), publisher,
+      CAT_UTILITY, str_from("2.0.0")));
+    var es2 = _t_es1(str_from("manifest.json"), mj2);
+    _t_push(es2, str_from("bin/target.txt"), pay);
+    var sig2[64];
+    var b2 = _t_signed(es2, &sk, &sig2);
+    assert_eq(pipeline_install(preg, keyring, b2, &sig2, 64, str_from(""), NOW), 0, "pipeline: upgrade through a planted link refused");
+    assert_eq(str_eq_cstr(_t_slurp("/tmp/mela-conf-outside/target.txt"), "original"), 1, "pipeline: target untouched");
+    assert_eq(str_eq_cstr(imp_version(registry_get_package(preg, str_from("conf-pkg"))), "1.0.0"), 1,
+      "pipeline: v1 still recorded");
+    xunlink("/tmp/mela-conf-reg/packages/conf-pkg/bin");
+    return 0;
+}
+
+# v1.4.0: the keyring provenance guide (docs/guides/keyring-provenance.md) — its
+# example key file, its key_id check, and the upgrade-continuity gap it documents.
+fn test_keyring_provenance() {
+    test_group("keyring-provenance");
+    var sk[64];
+    var pk[32];
+    var kid = trust_keypair_from_seed(hex_decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", 64), &sk, &pk);
+    assert_eq(str_eq_cstr(kid, "d75a980182b10ab7"), 1, "guide: the example key's key_id");
+
+    # the guide's example file, verbatim
+    var KD = "/tmp/mela-guide-keys";
+    _t_fresh_dir(KD);
+    var ex = "[\n  {\"key_id\": \"d75a980182b10ab7\", \"valid_from\": 1700000000, \"has_until\": 0, \"valid_until\": 0,\n   \"public_key_hex\": \"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a\"}\n]\n";
+    file_write_all("/tmp/mela-guide-keys/acme.json", ex, strlen(ex));
+    var kr = mela_keyring_new();
+    assert_eq(keyring_load_dir(kr, str_from(KD)), 1, "guide: the example file loads");
+    assert_neq(keyring_get_current_key(kr, kid, 1700000001), 0, "guide: valid after valid_from");
+    assert_eq(keyring_get_current_key(kr, kid, 1699999999), 0, "guide: not before valid_from");
+
+    # the guide's key_id check
+    var good = keyring_get_current_key(kr, kid, 1700000001);
+    assert_eq(str_eq(trust_key_id_from_pk(kv_verifying_key(good)), mela_kv_key_id(good)), 1,
+      "guide check: a key_id derived from the key passes");
+    var bad = kv_new(str_from("0000000000000000"), 0, 0, 0, mela_kv_public_key_hex(good));
+    assert_eq(str_eq(trust_key_id_from_pk(kv_verifying_key(bad)), mela_kv_key_id(bad)), 0,
+      "guide check: a mismatched key_id is caught");
+
+    # the documented gap: a second trusted key can upgrade the first one's package,
+    # and the guide's continuity check sees it
+    var skb[64];
+    var pkb[32];
+    var kidb = trust_keypair_from_seed(hex_decode("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb", 64), &skb, &pkb);
+    var both = mela_keyring_new();
+    mela_keyring_add_key(both, kv_new(kid, 0, 0, 0, trust_hex_encode(&pk, 32)));
+    mela_keyring_add_key(both, kv_new(kidb, 0, 0, 0, trust_hex_encode(&pkb, 32)));
+    var sbj = sbprofile_to_json(generate_sandbox_profile(mk_pfconfig()));
+    var ma = mela_manifest_new(mk_agent(str_from("shared"), str_from("d")), publisher_new(str_from("A"), kid, str_from("")),
+      CAT_UTILITY, str_from("1.0.0"));
+    var ea = _t_es1(str_from("manifest.json"), mela_manifest_to_json(ma));
+    _t_push(ea, str_from("sandbox.json"), sbj);
+    var siga[64];
+    var ba = _t_signed(ea, &sk, &siga);
+    var mb = mela_manifest_new(mk_agent(str_from("shared"), str_from("d")), publisher_new(str_from("B"), kidb, str_from("")),
+      CAT_UTILITY, str_from("2.0.0"));
+    var eb = _t_es1(str_from("manifest.json"), mela_manifest_to_json(mb));
+    _t_push(eb, str_from("sandbox.json"), sbj);
+    var sigb[64];
+    var bb = _t_signed(eb, &skb, &sigb);
+    var reg = registry_in_memory();
+    assert_neq(pipeline_install(reg, both, ba, &siga, 64, str_from(""), 1000), 0, "continuity: A installs");
+    var incoming = pipeline_extract_manifest(bb);
+    var installed = registry_get_package(reg, man_name(incoming));
+    var was = pub_key_id(man_publisher(imp_manifest(installed)));
+    assert_eq(str_eq(was, pub_key_id(man_publisher(incoming))), 0, "guide check: the key change is visible");
+    assert_neq(pipeline_install(reg, both, bb, &sigb, 64, str_from(""), 1000), 0,
+      "today: a second trusted key can upgrade it (threat model, Known gaps)");
+    return 0;
+}
+
 # End-to-end pipeline: package -> sign+log -> verify (both gates) -> install.
 fn test_pipeline() {
     test_group("pipeline");
@@ -3412,6 +3732,7 @@ fn main() {
     test_keyring_load();
     test_transparency();
     test_transparency_json();
+    test_transparency_v2();
     test_registry();
     test_registry_persistence();
     test_registry_uninstall_fs();
@@ -3432,6 +3753,8 @@ fn main() {
     test_long_names();
     test_file_modes();
     test_install_limits();
+    test_confinement();
+    test_keyring_provenance();
     test_pipeline();
     test_install_txn();
     test_strict_decode();

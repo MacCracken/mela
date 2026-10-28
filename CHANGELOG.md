@@ -4,6 +4,120 @@ All notable changes to Mela are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Performance claims must
 include benchmark numbers; breaking changes get a **Breaking** section with a migration note.
 
+## [1.4.0] - 2026-10-28
+
+**Hardening residuals** ([ADR-0015](docs/adr/0015-confined-extraction-and-transparency-hash-v2.md)):
+- extraction is confined below the install directory;
+- the transparency hash has an unambiguous v2 that v1 logs coexist with;
+- the threat model, the audit's status and SECURITY.md are refreshed;
+- a keyring provenance guide is new.
+
+**Gates:** 1146 passed / 0 failed (was 1075); fuzz 1 / 0; bench 1 / 0; coverage 89% (299/334).
+The GNU tar cross-check and the live transport check pass, and `--agnos` / `--aarch64` build.
+`cyrius build` OK (3,629,152 B).
+
+### Breaking — what extraction refuses, and log compatibility
+
+- **Symlinks fail the extraction.** `agpkg_extract_to_dir` returns `-1`, and `pipeline_install`
+  0, when the destination is a symlink, or a symlink sits anywhere below it on a written path.
+  It also fails for a non-directory on a directory's path, and for a directory, device or
+  symlink where a file goes. These used to be followed or overwritten.
+- **Existing files are replaced, not written into.** A regular file already at an entry's path
+  is unlinked and recreated, so a hard link elsewhere keeps its bytes.
+- **Directories created below the destination are 0755** (umask applied); they were 0777.
+- **New transparency entries hash differently (v2)**, and a log containing one does not import
+  into mela 1.3.0 or earlier. Logs written by earlier releases import and verify unchanged.
+
+**Migration:**
+- An install directory holding a symlink must be cleaned up by hand. mela reports it and does not
+  remove it.
+- Keep every reader of a shared transparency log on 1.4.0+ before it gains a v2 entry.
+
+### Added — confined extraction (ADR-0015 §1)
+
+- **The walk (Linux, x86_64 and aarch64):**
+  - the destination is opened with `O_DIRECTORY | O_NOFOLLOW`;
+  - each directory component goes through `mkdirat` + `openat(O_DIRECTORY | O_NOFOLLOW)`;
+  - `fstatat(AT_SYMLINK_NOFOLLOW)` must find nothing or a regular file, which is then unlinked;
+  - the file is created with `openat(O_CREAT | O_EXCL | O_NOFOLLOW)`, written and `fchmod`ed.
+- **agnos** has no `*at` calls, so its build checks each component by path (`is_symlink`) and
+  creates with `O_EXCL | O_NOFOLLOW`, with a race window. Built, not run.
+- **Rollback:** a fresh install's rollback removes only a real directory. A symlink at
+  `packages/<name>` is left as found.
+
+### Added — transparency hash v2 (ADR-0015 §2)
+
+- **The preimage:** `BE8(len(tag)) ‖ "mela.transparency.entry.v2" ‖ BE8(sequence) ‖ BE8(timestamp)`,
+  then `BE8(len) ‖ bytes` for package, version, key_id, content_hash, signature_hash and
+  previous_hash. v1 was the Rust-shaped concatenation:
+  - timestamp `1000` + `1/x` collided with `10001` + `/x`;
+  - `a/b` + `11.0.0` collided with `a/b1` + `1.0.0`.
+
+  Both collisions are now asserted for v1 and absent in v2.
+- **New API:** `log_hash_version(e)`, `log_set_hash_version(e, v)` (refuses unknown versions),
+  and `LOG_HASH_V1` / `LOG_HASH_V2`. `tlog_append` and `log_entry_new` make v2 entries.
+- **JSON:** v2 entries carry `"hash_version": 2`; v1 entries carry nothing, so a v1 log
+  re-exports byte for byte. A missing field reads as 1; any value other than the integers 1 and 2
+  refuses the log.
+- **Verification:**
+  - `tlog_verify_chain` refuses an entry whose version is lower than the one before it;
+  - `log_entry_verify_self` never accepts an unknown version.
+
+### Docs
+
+- **[`docs/guides/keyring-provenance.md`](docs/guides/keyring-provenance.md)** (new) covers:
+  - what a key file is, and how install uses it;
+  - distributing the keyring, never from the bundle registry;
+  - admitting a publisher, including checking the `key_id` derives from the public key;
+  - rotation, and why expiry also stops installs of everything the old key signed;
+  - revocation, and finding what a key signed;
+  - pinning for consumers (ark). Today any trusted key can upgrade any package, and the guide
+    gives the check to add.
+
+  A `keyring-provenance` test runs its example key file and both of its checks.
+- **Threat model:** current as of v1.4.0.
+  - It adds B4 (installed apps writing inside their install directory) and the
+    installation-confinement controls.
+  - *Known gaps* are restated: key continuity, log equivocation (including dropped tail
+    entries), gate 2's independence and empty-digest skip, pre-signature parsing, the 16 MiB
+    in-memory tar, agnos's path-based confinement, the operator-owned keyring, and verify cost.
+- **Audit:** a *Status at v1.4.0* section maps findings A–J and the v0.9.0 follow-ups to where
+  they stand. The dated findings are unchanged.
+- **SECURITY.md:**
+  - TLS is the stdlib's native TLS with system roots (it said rustls);
+  - the digest claim states the empty-digest skip;
+  - the transparency claim states it does not prevent equivocation;
+  - confinement is listed;
+  - security fixes land on the latest 1.x.
+- **Roadmap:** v1.4.0 is removed. Three trust follow-ups are proposed, each needing a decision
+  and an ADR: key continuity on upgrade, a `key_id` check on key-file load, and log
+  equivocation.
+- **Also updated:** ADR-0004 and ADR-0013 carry amendment notes; the parity table (containment
+  stronger; preimage fixed), the API reference, state.md, the README and the getting-started
+  guide link the new guide.
+
+### Verified
+
+- **Tests (71 new):**
+  - `confinement`: symlinks below, deep and at the destination; a symlink at the file; hard
+    links; a directory or file in the way; nesting with `./` and empty components; directory
+    modes; a symlinked install dir and a symlink planted for an upgrade, through the pipeline.
+  - `transparency-v2`: two known-answer hashes computed independently with Python `hashlib`
+    (one with a negative timestamp); both v1 collisions; a v1 log captured from mela 1.3.0
+    (hashes also recomputed in Python) importing, verifying and re-exporting byte for byte;
+    appending v2 to it; relabelling; downgrade; unknown and string versions.
+  - `keyring-provenance`: the guide's example and checks.
+- **A sharpened test:** the strict-decode RFC 3339 test now carries `hash_version: 2` and a
+  control, so only its type check can refuse it.
+- **Mutations:** ten applied to the new code; nine turn tests red.
+  - One of the nine crashes the older `transparency-json` group (it dereferences a refused
+    import), which still fails the run.
+  - The tenth, making the final create `O_TRUNC`, stays green: the `fstatat` check catches
+    those cases first, and `O_EXCL | O_NOFOLLOW` only matters in a race window a
+    single-threaded test cannot open.
+- **Bench:** no change: `agpkg_inspect` 112.7 µs, `ed25519_verify` 5.08 ms, `sha256_hash` 764 ns,
+  `manifest_validate` 152 ns, `registry_get` 65 ns.
+
 ## [1.3.0] - 2026-10-28
 
 **Large bundles, part one**

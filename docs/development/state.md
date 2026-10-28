@@ -5,6 +5,16 @@
 
 ## Version
 
+**1.4.0** — Hardening residuals (2026-10-28, ADR-0015).
+- Extraction is confined: on Linux it walks the install dir with `openat` + `O_NOFOLLOW`, fails
+  on any symlink, and never writes into an existing inode (agnos: path checks).
+- New transparency entries hash with a tagged, length-prefixed v2 preimage; v1 logs still import
+  and verify.
+- The threat model, audit status and SECURITY.md are refreshed, and
+  `docs/guides/keyring-provenance.md` is new.
+
+1146/1146; coverage 89% (299/334).
+
 **1.3.0** — Large bundles, part one (2026-10-28, ADR-0014). Long names: the reader takes the
 ustar prefix, GNU `L` and PAX `path`, and the writer uses the prefix to 256 bytes. Files extract
 0755 or 0644 by the owner-execute bit, and the packer keeps a source's execute bit. A 100 MiB
@@ -95,6 +105,8 @@ remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once 
   - `src/transparency.cyr` — `LogEntry` + `TransparencyLog`: SHA-256 hash-chained append-only
     log (`compute_hash` / `verify_self` / `append` / `verify_chain` / `find` /
     `entries_for_package` / `latest`), JSON codec re-verifying the chain on import (ADR-0004).
+    Since v1.4.0, entries carry a hash version: new ones are v2 (ADR-0015), and v1 entries still
+    verify.
   - `src/local_registry.cyr` — `InstalledMarketplacePackage` + `LocalRegistry`: install/record/
     query/search/remove (**uninstall recursively removes the extracted files via `_rmtree`**),
     `index.json` persisted via `fs` (ADR-0005), signature-verify gate.
@@ -112,7 +124,8 @@ remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once 
     `generate_sandbox_profile`, and the `.agnos-agent` packer/inspector (`sankoch` gzip +
     hand-rolled ustar, ADR-0008). The reader is a cursor (`_tar_cur_next`) that reads the ustar
     prefix, GNU `L` and PAX records; extraction validates the whole archive, then writes each file
-    0755 or 0644 (ADR-0014).
+    0755 or 0644 (ADR-0014), confined below the destination with `openat` + `O_NOFOLLOW`
+    (ADR-0015).
   - `src/pipeline.cyr` — **end-to-end flow**: `pipeline_package` / `pipeline_publish` (sign +
     transparency log) / `pipeline_install` enforcing **both trust gates** (signature + digest),
     then **extracting the bundle to disk** under the install dir (ADR-0009, ADR-0005).
@@ -128,8 +141,9 @@ remain.** 6208 lines of Rust preserved at `rust-old/` (retired after v1.0, once 
 **1075/1075** tests green (`tests/mela.tcyr` — groups across the 9 modules, plus `pipeline`
 (end-to-end), `hardening` (zip-slip), `tar-reader` (v1.1.1: checksum, strict octal, bounds,
 duplicate names, the D1 crash input), `install-txn` (v1.1.3: fail-closed index, save rollback), `strict-decode` (v1.1.5: serde rules,
-Unicode), `long-names` / `file-modes` / `install-limits` (v1.3.0, ADR-0014), `transport` (HTTP
-logic), `extraction` (on-disk unpack),
+Unicode), `long-names` / `file-modes` / `install-limits` (v1.3.0, ADR-0014), `confinement` /
+`transparency-v2` / `keyring-provenance` (v1.4.0, ADR-0015), `transport` (HTTP logic),
+`extraction` (on-disk unpack),
 `keyring-load` (disk `load()` + `KeyVersion` JSON round-trip), and `registry-uninstall-fs` (files
 gone after uninstall)). `trust` has SHA-256 + RFC 8032 Ed25519 KAT vectors; `registry-persist`
 / `ratings-persist` do real on-disk round-trips; `agpkg-archive` packs + inspects a gzipped-ustar
@@ -178,8 +192,14 @@ Direct (declared in `cyrius.cyml`):
 See [`roadmap.md`](roadmap.md). **v1.1.x is complete**: the 2026-10-14 parity audit's twelve
 defects are fixed, 202 of the Rust original's 204 tests are covered (2 N/A), every divergence is
 decided (ADR-0013) and `rust-old/` is retired. CI runs test, fuzz, bench, an 88% coverage floor
-(296/332 at v1.3.0), the GNU tar cross-check and a live transport check.
+(299/334 at v1.4.0), the GNU tar cross-check and a live transport check.
 
-**v1.3.0** shipped Large bundles, part one. Part two (streaming, and bundles over 16 MiB) is
-blocked on sankoch. The **v1.x** backlog after it maps hardening residuals (v1.4.0), API and build
-hygiene, aarch64 and agnos runtime, and the unscheduled features (discovery, paid distribution).
+**v1.3.0** shipped Large bundles, part one; part two (streaming, and bundles over 16 MiB) is
+blocked on sankoch. **v1.4.0** shipped the hardening residuals. Three trust follow-ups are
+proposed, each needing a maintainer decision:
+- key continuity on upgrade;
+- checking a key file's `key_id` on load;
+- log equivocation.
+
+After them the **v1.x** backlog maps API and build hygiene (v1.5.0), aarch64 and agnos runtime
+(v1.6.0), and the unscheduled features (discovery, paid distribution).

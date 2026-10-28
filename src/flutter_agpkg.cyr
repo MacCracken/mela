@@ -997,12 +997,41 @@ fn _agpkg_out_mode(hmode): i64 {
     return AGPKG_MODE_FILE;
 }
 
-# Write len bytes at `data` to `path` with permissions `mode`, set with fchmod
-# so an existing file (an upgrade) gets them too, whatever the umask. 0, or -1
-# if the file cannot be opened, written in full, or chmod'ed.
-fn _agpkg_write_file(path: Str, data, len, mode): i64 {
-    var fd = file_open(str_cstr(path), O_WRONLY | O_CREAT | O_TRUNC, mode);
-    if (fd < 0) { return 0 - 1; }
+# --- confined writes (ADR-0015) ---
+#
+# Extraction writes only through directories it opened itself, walking down
+# from the destination one component at a time with O_NOFOLLOW. A symlink
+# anywhere below the destination, or the destination itself being one, fails
+# the extraction instead of redirecting a write; mela never writes symlinks, so
+# one there was put there by something else. A file already at an entry's path
+# must be a regular file: it is unlinked and a new one created with O_EXCL, so a
+# hard link to a file elsewhere is never written into. Directories are created
+# 0755 (umask still applies).
+
+var AGPKG_MODE_DIR = 0x1ED;       # 0o755
+
+# The last path component of an entry name (after its last '/'), NUL-terminated.
+fn _agpkg_base(name: Str): Str {
+    var d = str_data(name);
+    var n = str_len(name);
+    var i = n;
+    while (i > 0) {
+        if (load8(d + i - 1) == 47) { return _tar_str(d + i, n - i); }
+        i = i - 1;
+    }
+    return _tar_str(d, n);
+}
+
+# 1 if the component is "." (a no-op step; names never contain "..").
+fn _agpkg_is_dot(comp: Str): i64 {
+    if (str_len(comp) != 1) { return 0; }
+    if (load8(str_data(comp)) == 46) { return 1; }
+    return 0;
+}
+
+# Write len bytes at `data` to the open, freshly created `fd`, then set `mode`
+# with fchmod (O_CREAT's mode is narrowed by the umask). Closes `fd`. 0, or -1.
+fn _agpkg_write_fd(fd, data, len, mode): i64 {
     var off = 0;
     while (off < len) {
         var w = file_write(fd, data + off, len - off);
@@ -1014,24 +1043,139 @@ fn _agpkg_write_file(path: Str, data, len, mode): i64 {
     return 0;
 }
 
-# Write every safe regular file of the opened bundle under `dest`, creating
-# parent dirs: the second pass over the archive, which _agpkg_open has already
-# validated whole. Returns the number of files written, or -1 if any fails.
+#ifndef CYRIUS_TARGET_AGNOS
+# Linux: race-free, through directory fds (openat / mkdirat / fstatat / unlinkat).
+
+fn _agpkg_dir_at(dirfd, name): i64 {
+    return sys_openat(dirfd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC, 0);
+}
+
+# The destination opened as a directory, or -1 if it is a symlink or not a dir.
+fn _agpkg_root_open(dest: Str): i64 {
+    return _agpkg_dir_at(AT_FDCWD, str_cstr(dest));
+}
+fn _agpkg_root_close(root): i64 { file_close(root); return 0; }
+
+# An fd for the directory that holds entry `name`, under the directory fd
+# `root`: each component is created if missing (0755) and opened with
+# O_NOFOLLOW, so a symlink or a non-directory on the way returns -1. The caller
+# closes the fd unless it is `root`.
+fn _agpkg_parent_at(root, name: Str): i64 {
+    var d = str_data(name);
+    var n = str_len(name);
+    var cur = root;
+    var start = 0;
+    var i = 0;
+    while (i < n) {
+        if (load8(d + i) == 47) {
+            if (i > start) {
+                var comp = _tar_str(d + start, i - start);
+                if (_agpkg_is_dot(comp) == 0) {
+                    sys_mkdirat(cur, str_data(comp), AGPKG_MODE_DIR);   # EEXIST is fine: the open decides
+                    var next = _agpkg_dir_at(cur, str_data(comp));
+                    if (cur != root) { file_close(cur); }
+                    if (next < 0) { return 0 - 1; }
+                    cur = next;
+                }
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return cur;
+}
+
+# Create `base` in the directory fd `dirfd` for writing, with `mode`. Anything
+# already there must be a regular file, which is unlinked first (a hard link
+# elsewhere keeps its content); a symlink, directory or device there returns
+# -1. O_EXCL | O_NOFOLLOW: if something reappears in between, the create fails.
+fn _agpkg_create_at(dirfd, base: Str, mode): i64 {
+    var st[256];
+    if (sys_fstatat(dirfd, str_data(base), &st, AT_SYMLINK_NOFOLLOW) == 0) {
+        if ((load32(&st + STAT_MODE) & 0xF000) != 0x8000) { return 0 - 1; }   # S_IFREG only
+        if (sys_unlinkat(dirfd, str_data(base), 0) < 0) { return 0 - 1; }
+    }
+    return sys_openat(dirfd, str_data(base), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode);
+}
+
+# Write one entry under the destination. 0, or -1.
+fn _agpkg_put(root, dest: Str, name: Str, data, size, mode): i64 {
+    var pfd = _agpkg_parent_at(root, name);
+    if (pfd < 0) { return 0 - 1; }
+    var fd = _agpkg_create_at(pfd, _agpkg_base(name), mode);
+    if (pfd != root) { file_close(pfd); }
+    if (fd < 0) { return 0 - 1; }
+    return _agpkg_write_fd(fd, data, size, mode);
+}
+#endif
+
+#ifdef CYRIUS_TARGET_AGNOS
+# agnos has no *at calls: the same rules by path. Each component is checked
+# with is_symlink before use and the file is created O_EXCL | O_NOFOLLOW, but a
+# concurrent swap between the check and the use is not excluded (ADR-0015).
+
+fn _agpkg_root_open(dest: Str): i64 {
+    if (is_symlink(dest) == 1) { return 0 - 1; }
+    if (is_dir(dest) == 0) { return 0 - 1; }
+    return 1;
+}
+fn _agpkg_root_close(root): i64 { return 0; }
+
+fn _agpkg_put(root, dest: Str, name: Str, data, size, mode): i64 {
+    var d = str_data(name);
+    var n = str_len(name);
+    var cur = dest;
+    var start = 0;
+    var i = 0;
+    while (i < n) {
+        if (load8(d + i) == 47) {
+            if (i > start) {
+                var comp = _tar_str(d + start, i - start);
+                if (_agpkg_is_dot(comp) == 0) {
+                    cur = path_join(cur, comp);
+                    if (is_symlink(cur) == 1) { return 0 - 1; }
+                    if (is_dir(cur) == 0) { xmkdir(str_cstr(cur), AGPKG_MODE_DIR); }
+                    if (is_symlink(cur) == 1) { return 0 - 1; }
+                    if (is_dir(cur) == 0) { return 0 - 1; }
+                }
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    var out = path_join(cur, _agpkg_base(name));
+    if (is_symlink(out) == 1) { return 0 - 1; }
+    if (is_dir(out) == 1) { return 0 - 1; }
+    if (file_exists(str_cstr(out)) == 1) { xunlink(str_cstr(out)); }
+    var fd = file_open(str_cstr(out), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode);
+    if (fd < 0) { return 0 - 1; }
+    return _agpkg_write_fd(fd, data, size, mode);
+}
+#endif
+
+# Write every safe regular file of the opened bundle under `dest` (created if
+# missing; a symlink there is refused), confined as above: the second pass over
+# the archive, which _agpkg_open has already validated whole. Returns the
+# number of files written, or -1 if any fails.
 fn _agpkg_extract(a, dest: Str): i64 {
     _rc_mkdir_p(dest);
+    var root = _agpkg_root_open(dest);
+    if (root < 0) { return 0 - 1; }
     var c = _tar_cur_new(load64(a), load64(a + 8));
     var count = 0;
     var r = _tar_cur_next(c);
     while (r == 1) {
         if (_tar_cur_safe(c) == 1) {
-            var outpath = path_join(dest, _tar_cur_name(c));
-            _rc_mkdir_p(path_dirname(outpath));   # ensure parent dirs
-            if (_agpkg_write_file(outpath, _tar_cur_data(c), _tar_cur_size(c),
-                _agpkg_out_mode(_tar_cur_mode(c))) < 0) { return 0 - 1; }
+            if (_agpkg_put(root, dest, _tar_cur_name(c), _tar_cur_data(c), _tar_cur_size(c),
+                _agpkg_out_mode(_tar_cur_mode(c))) < 0) {
+                _agpkg_root_close(root);
+                return 0 - 1;
+            }
             count = count + 1;
         }
         r = _tar_cur_next(c);
     }
+    _agpkg_root_close(root);
     if (r < 0) { return 0 - 1; }
     return count;
 }
@@ -1060,7 +1204,8 @@ fn agpkg_read_entry(data, len, name: Str): i64 {
 # agpkg_extract_to_dir — gunzip + extract every safe regular-file entry of the
 # bundle to disk under `dest` (creating parent dirs), each 0755 or 0644 by its
 # header's owner-execute bit (ADR-0014). The whole archive is validated before
-# anything is written. Returns the number of files written, or -1 on a
+# anything is written, and no write follows a symlink at or below `dest`
+# (ADR-0015). Returns the number of files written, or -1 on a
 # decompress error, a malformed archive, or any file that fails to write (closes
 # ADR-0005; a failed write used to be skipped, D9).
 fn agpkg_extract_to_dir(data, len, dest: Str): i64 {

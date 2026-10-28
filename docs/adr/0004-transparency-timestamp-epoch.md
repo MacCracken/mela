@@ -1,6 +1,9 @@
 # 0004 — Transparency log timestamp is an i64 epoch
 
-**Status**: Accepted
+**Status**: Accepted · the hash preimage is amended by
+[ADR-0015](0015-confined-extraction-and-transparency-hash-v2.md) (v1.4.0): new entries hash the
+timestamp as 8 big-endian bytes inside a length-prefixed v2 preimage; this ADR's decimal form is
+hash v1, which still verifies.
 **Date**: 2026-06-17
 
 ## Context

@@ -110,6 +110,17 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   `log_timestamp` / `log_package` / `log_version` / `log_key_id` / `log_content_hash` /
   `log_signature_hash` / `log_previous_hash` / `log_entry_hash`.
 - Codec: `tlog_to_json(log): Str` / `tlog_from_json(Str): log|0` (re-verifies the chain on import).
+- *v1.4.0 (ADR-0015):* each entry has a hash version. `log_hash_version(e)` and
+  `log_set_hash_version(e, v): 0|-1` (unknown versions refused) are added, with the constants
+  `LOG_HASH_V1` / `LOG_HASH_V2`.
+  - `tlog_append` and `log_entry_new` make v2 entries: a tagged, length-prefixed preimage.
+  - `log_entry_compute_hash` uses the entry's own version.
+  - `tlog_to_json` writes `"hash_version": 2` on v2 entries and nothing on v1 ones.
+  - `tlog_from_json` reads a missing field as 1, and refuses any value other than the integers 1
+    and 2.
+  - `tlog_verify_chain` also refuses a version lower than the entry before it.
+  - Logs written before v1.4.0 import and verify unchanged. A log with v2 entries does not import
+    into earlier releases.
 
 ## local_registry — `src/local_registry.cyr`
 
@@ -248,6 +259,11 @@ Public modules (all under `src/`, wired by `src/main.cyr`):
   with its header, a global `path` / `size`, a long name over `AGPKG_NAME_MAX` or with no entry
   after it, or an extension entry over `AGPKG_EXT_MAX`. Extracted files are 0755 if the header's
   owner-execute bit is set, else 0644, set with `fchmod`.
+  *v1.4.0 (ADR-0015):* `agpkg_extract_to_dir` writes only through directories it opened with
+  `O_NOFOLLOW`, below a destination that must not itself be a symlink. It returns `-1` for a
+  symlink at or below the destination, a non-directory on a directory's path, or a directory /
+  device / symlink where a file goes. An existing regular file is unlinked and recreated
+  (`O_EXCL`), never written into. Directories it creates are 0755.
 - Constants *(v1.3.0)*: `AGPKG_BUF_MAXLEN` (16 MiB, sankoch's gzip ceiling; 8 MiB before),
   `AGPKG_MAX_PACKAGE_SIZE` (100 MiB, `== RC_DOWNLOAD_MAX_BYTES`), `AGPKG_NAME_MAX` (1,024),
   `AGPKG_EXT_MAX` (64 KiB). `tentry_mode` / `tentry_set_mode` *(added v1.3.0)* beside
@@ -269,6 +285,8 @@ The end-to-end flow (ADR-0009); both trust gates are enforced at install.
   *v1.3.0 (ADR-0014):* a bundle over `AGPKG_MAX_PACKAGE_SIZE` returns `0` before anything is read;
   the quota is checked against the bundle size and the extracted size, both before any file is
   written; the bundle is inflated once.
+  *v1.4.0 (ADR-0015):* extraction is confined (see `agpkg_extract_to_dir`). A fresh install's
+  rollback removes only a real directory; a symlink at `packages/<name>` is left as found.
 
 ---
 

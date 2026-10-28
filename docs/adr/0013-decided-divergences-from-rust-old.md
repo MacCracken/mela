@@ -1,7 +1,8 @@
 # 0013 — Every remaining divergence from rust-old, decided
 
 **Status**: Accepted · §5 (file modes) and §6 (header modes, long names) amended by
-[ADR-0014](0014-large-bundles-names-modes-limits.md) (v1.3.0)
+[ADR-0014](0014-large-bundles-names-modes-limits.md) (v1.3.0); §5 (path containment) and §8 (hash
+preimage) amended by [ADR-0015](0015-confined-extraction-and-transparency-hash-v2.md) (v1.4.0)
 **Date**: 2026-10-15 (v1.1.5)
 
 ## Context
@@ -107,7 +108,8 @@ such files turn up, a converter is a separate tool, not a load-time path.
   under the destination. mela never writes a symlink, hardlink or directory entry, an absolute
   name, or any name containing `..` ([ADR-0011](0011-fail-closed-decoding-at-the-trust-boundary.md)),
   so archive content cannot point outside the destination. One residual case is a symlink
-  already present inside the destination. That is roadmap v1.3.0 (`O_NOFOLLOW`).
+  already present inside the destination. That is roadmap v1.3.0 (`O_NOFOLLOW`). *Closed at
+  v1.4.0 (ADR-0015): extraction walks the destination with `openat` + `O_NOFOLLOW`.*
 
 ### 6. The archive writer
 
@@ -138,7 +140,8 @@ this. The package/version boundary is ambiguous in both (`a/b` + `11.0.0` = `a/b
 Changing the preimage changes every entry hash, so it needs a versioned hash, where v1 logs still
 verify on import. Until then, two entries can share a hash only when digits move between the end
 of the timestamp and the start of the package name, which a package whose qualified name begins
-with a digit makes possible. It is recorded now and fixed as a format change in v1.3.0.
+with a digit makes possible. It is recorded now and fixed as a format change in v1.3.0. *Fixed at
+v1.4.0 (ADR-0015): new entries use hash v2; v1 entries still verify.*
 
 ## Consequences
 
